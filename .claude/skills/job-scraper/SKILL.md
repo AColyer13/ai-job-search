@@ -27,6 +27,27 @@ The user triggers this skill by saying things like:
 - "Any new positions?"
 - "/scrape"
 
+## Fast Path: Deterministic Pipeline
+
+This fork has a consolidated pipeline script that runs the whole search
+deterministically (LinkedIn + freehire CLIs, plus keyless HTTP aggregators -
+see `job_scraper/SOURCES.md`):
+
+```bash
+python job_scraper/pipeline.py all        # search + process + update-seen
+python job_scraper/pipeline.py present    # list everything still actionable
+python job_scraper/pipeline.py expire     # age out stale 'new' entries
+```
+
+Prefer it over hand-writing per-run scripts: queries live in
+`job_scraper/queries.json` (edit there, never hardcode), paths resolve
+relative to the repo, and output lands in `job_scraper/_run_<date>/`
+(gitignored). After it runs, do Step 3's fit review on the presented
+candidates, generate the Step 4.5 contact links for high/medium fits, and
+present the Step 5 table as usual. The agent-driven flow below remains the
+fallback for focus-area searches (`/scrape data science`), portal health
+checks (`/scrape health`), and portals the pipeline doesn't cover.
+
 Optional arguments:
 - A focus area, e.g. "/scrape data science" or "/scrape geophysics"
 - "broad" to run all search categories, e.g. "/scrape broad"

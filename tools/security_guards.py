@@ -72,6 +72,9 @@ ALLOWED_IGNORE_NEGATIONS = {
     "!cv/main_example.tex",
     "!cover_letters/cover_example.tex",
     "!documents/**/.gitkeep",
+    # job_scraper/*.md is ignored to keep run notes out of the repo; SOURCES.md
+    # is curated documentation (no personal data) and is meant to be committed.
+    "!job_scraper/SOURCES.md",
 }
 
 FORBIDDEN_SCRIPTS = {"preinstall", "install", "postinstall", "prepare", "prepack"}
