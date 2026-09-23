@@ -58,6 +58,36 @@ EXCLUDE_EAST = {
     "st. paul", "st paul", "saint paul", "woodbury", "maplewood", "oakdale", "eagan",
     "inver grove", "south st paul", "roseville", "white bear", "stillwater", "hastings",
 }
+
+# Full US state names, mapped to their 2-letter code. Postings routinely spell
+# the state out ("Crystal City, Virginia") instead of abbreviating it, and the
+# abbreviation-only regexes below would silently miss those.
+US_STATE_NAMES = {
+    "alabama": "al", "alaska": "ak", "arizona": "az", "arkansas": "ar",
+    "california": "ca", "colorado": "co", "connecticut": "ct", "delaware": "de",
+    "florida": "fl", "georgia": "ga", "hawaii": "hi", "idaho": "id",
+    "illinois": "il", "indiana": "in", "iowa": "ia", "kansas": "ks",
+    "kentucky": "ky", "louisiana": "la", "maine": "me", "maryland": "md",
+    "massachusetts": "ma", "michigan": "mi", "minnesota": "mn",
+    "mississippi": "ms", "missouri": "mo", "montana": "mt", "nebraska": "ne",
+    "nevada": "nv", "new hampshire": "nh", "new jersey": "nj",
+    "new mexico": "nm", "new york": "ny", "north carolina": "nc",
+    "north dakota": "nd", "ohio": "oh", "oklahoma": "ok", "oregon": "or",
+    "pennsylvania": "pa", "rhode island": "ri", "south carolina": "sc",
+    "south dakota": "sd", "tennessee": "tn", "texas": "tx", "utah": "ut",
+    "vermont": "vt", "virginia": "va", "washington": "wa",
+    "west virginia": "wv", "wisconsin": "wi", "wyoming": "wy",
+}
+US_STATE_ABBR_RE = re.compile(
+    r",\s*(al|ak|az|ar|ca|co|ct|dc|de|fl|ga|hi|id|il|ia|ks|ky|la|ma|md|me|mi|mn|"
+    r"mo|ms|mt|nc|nd|ne|nh|nj|nm|nv|ny|oh|ok|or|pa|ri|sc|sd|tn|tx|ut|va|vt|wa|"
+    r"wi|wv|wy)\b"
+)
+CA_PROVINCE_RE = re.compile(
+    r"\b(bc|ab|on|qc|mb|sk|ns|nb|pe|nl|yt|nt|nu|british columbia|ontario|quebec|"
+    r"alberta|manitoba|saskatchewan|nova scotia|new brunswick)\b",
+    re.I,
+)
 NON_US = [
     "canada", "ontario", "quebec", "british columbia", "alberta", "brazil", "brasil",
     "spain", "united kingdom", "scotland", "finland", "germany", "france", "india",
@@ -78,11 +108,14 @@ SENIOR_RE = re.compile(
 INTERN_RE = re.compile(r"\b(intern|internship|co-op|coop)\b", re.I)
 AI_RE = re.compile(r"\b(ai|ml|llm|genai|machine learning|prompt|rag|langchain|agent)\b", re.I)
 FS_RE = re.compile(
-    r"\b(full[- ]?stack|software engineer|software developer|frontend|front-end|backend|react|typescript|python)\b",
+    r"\b(full[- ]?stack|software engineer|software developer|web developer|"
+    r"frontend|front-end|backend|react|typescript|python)\b",
     re.I,
 )
 BRIDGE_RE = re.compile(
-    r"\b(solutions engineer|sales engineer|technical account|customer engineer|forward deployed)\b",
+    r"\b(solutions engineer|sales engineer|technical account|customer engineer|"
+    r"forward deployed|implementation engineer|implementation consultant|"
+    r"implementation specialist)\b",
     re.I,
 )
 ENTRY_RE = re.compile(
@@ -95,6 +128,21 @@ TECH_TITLE_RE = re.compile(
     r"ai\b|ml\b|llm|machine learning|data scien|devops|solutions|technical account)\b",
     re.I,
 )
+
+
+def _region_code(l):
+    """Return the 2-letter US state code found in `l` (via abbreviation after a
+    comma, or a spelled-out state name anywhere), or None if none is found.
+    Used to tell apart same-named cities in different states/provinces, e.g.
+    "Crystal City, Virginia" vs. Crystal, MN, or "Victoria, BC" vs. Victoria, MN.
+    """
+    m = US_STATE_ABBR_RE.search(l)
+    if m:
+        return m.group(1)
+    for name, code in US_STATE_NAMES.items():
+        if re.search(r"\b" + re.escape(name) + r"\b", l):
+            return code
+    return None
 
 
 def loc_tier(loc, work_mode=None):
@@ -111,17 +159,23 @@ def loc_tier(loc, work_mode=None):
         x in l for x in ["united states", "usa", "minnesota", ", mn", ", ms"]
     ):
         return "exclude-intl"
-    us_state = re.search(
-        r",\s*(al|ak|az|ar|ca|co|ct|dc|fl|ga|hi|id|il|ia|ks|ky|la|ma|md|me|mi|mo|mt|nc|nd|ne|nh|nj|nm|nv|ny|oh|ok|or|pa|ri|sc|sd|tn|tx|ut|va|vt|wa|wi|wv|wy)\b", l)
+    if CA_PROVINCE_RE.search(l) and not any(
+        x in l for x in ["united states", "usa", ", us"]
+    ):
+        return "exclude-intl"
     for c in MN_OK:
-        if c in l:
+        if re.search(r"\b" + re.escape(c) + r"\b", l):
             if re.search(r"\boh\b|ohio", l):
                 return "unknown"
-            if us_state and us_state.group(1) != "mn":
-                break  # same-named city in another state (e.g. "Plymouth, MA")
+            region = _region_code(l)
+            if region and region != "mn":
+                continue  # same-named place in another state (e.g. "Plymouth, MA")
             return "mn"
     for c in MS_OK:
-        if c in l:
+        if re.search(r"\b" + re.escape(c) + r"\b", l):
+            region = _region_code(l)
+            if region and region != "ms":
+                continue  # same-named place in another state (e.g. "Long Beach, CA")
             return "ms"
     if "mississippi" in l or re.search(r",\s*ms\b", l):
         return "ms-inland"
@@ -142,14 +196,26 @@ def loc_tier(loc, work_mode=None):
         return "mn-other"
     if "united states" in l or l.endswith(", us") or ", usa" in l:
         return "us-reloc"
-    if re.search(r",\s*(al|ak|az|ar|ca|co|ct|dc|fl|ga|hi|id|il|ia|ks|ky|la|ma|md|me|mi|mo|mt|nc|nd|ne|nh|nj|nm|nv|ny|oh|ok|or|pa|ri|sc|sd|tn|tx|ut|va|vt|wa|wi|wv|wy)\b", l):
+    if _region_code(l):
         return "us-reloc"
     if not loc:
         return "unknown"
     return "unknown"
 
 
-def fit(title, skills=None):
+# Description-level demotion signals. These only ever move a title-based
+# verdict down a tier (high->medium->low) - they never promote, since a title
+# match is a stronger, more deliberate signal than free text in a description.
+YEARS_EXPERIENCE_RE = re.compile(
+    r"(\d{1,2})\+?\s*years?(?:\s+of)?\s+(?:[\w/,&-]+\s+){0,4}experience", re.I
+)
+CLEARANCE_RE = re.compile(
+    r"\b(security clearance|active clearance|top secret|ts/sci|polygraph)\b", re.I
+)
+_DEMOTE = {"high": "medium", "medium": "low", "low": "low"}
+
+
+def _fit_from_title(title, skills=None):
     t = title or ""
     if INTERN_RE.search(t) or "2027" in t:
         return "low"
@@ -192,6 +258,38 @@ def fit(title, skills=None):
     if core and not is_senior:
         return "medium"
     return "low"
+
+
+def fit(title, skills=None, description=None):
+    """Title/skills-based verdict, demoted using the posting description when
+    available. A title like "Software Engineer" can't tell "3 years, React"
+    apart from "8 years, Java + clearance required" - the description can.
+    """
+    f = _fit_from_title(title, skills)
+    if description and f != "low":
+        years = [int(n) for n in YEARS_EXPERIENCE_RE.findall(description)]
+        if any(y >= 5 for y in years):
+            f = _DEMOTE[f]
+        if CLEARANCE_RE.search(description):
+            f = _DEMOTE[f]
+    return f
+
+
+SALARY_RE = re.compile(
+    r"\$\s?\d{2,3}(?:,\d{3})?(?:\s?[kK])?"
+    r"(?:\s*(?:-|–|to)\s*\$?\s?\d{2,3}(?:,\d{3})?(?:\s?[kK])?)?"
+)
+
+
+def extract_salary(description):
+    """Best-effort salary figure pulled from a posting description, so
+    candidates.json can surface pay without a second fetch. Returns None if
+    no dollar figure is found - this is a convenience hint, not a parsed,
+    validated compensation field."""
+    if not description:
+        return None
+    m = SALARY_RE.search(description)
+    return m.group(0) if m else None
 
 
 # ---------------------------------------------------------------------------
@@ -474,6 +572,99 @@ def src_usajobs():
     return out
 
 
+# --- Target-company board APIs (Tier 5 in SOURCES.md) -----------------------
+# Greenhouse/Lever/Ashby all expose keyless public JSON per company. Slugs are
+# guessed easily but wrong just as easily (a wrong slug 404s and is silently
+# skipped, per-company, by the try/except below) - verify a slug with
+# `tools/probe_company_board.py <platform> <slug>` before adding it to
+# queries.json's "company_boards" list.
+
+def _gh_board_jobs(slug):
+    data = _get_json(f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true")
+    out = []
+    for j in data.get("jobs") or []:
+        loc = (j.get("location") or {}).get("name") or ""
+        out.append({
+            "title": j.get("title"),
+            "location": loc,
+            "date": (j.get("updated_at") or "")[:10],
+            "url": j.get("absolute_url"),
+            "id": str(j.get("id") or ""),
+            "work_mode": "remote" if "remote" in loc.lower() else None,
+            "skills": [],
+            "description": _strip_html(j.get("content"))[:2000],
+        })
+    return out
+
+
+def _lever_board_jobs(slug):
+    data = _get_json(f"https://api.lever.co/v0/postings/{slug}?mode=json")
+    out = []
+    for j in data or []:
+        cats = j.get("categories") or {}
+        loc = cats.get("location") or ""
+        out.append({
+            "title": j.get("text"),
+            "location": loc,
+            "date": (str(j.get("createdAt") or "")[:10]),
+            "url": j.get("hostedUrl"),
+            "id": str(j.get("id") or ""),
+            "work_mode": "remote" if "remote" in loc.lower() else None,
+            "skills": [],
+            "description": _strip_html(j.get("descriptionPlain") or j.get("description"))[:2000],
+        })
+    return out
+
+
+def _ashby_board_jobs(slug):
+    data = _get_json(f"https://api.ashbyhq.com/posting-api/job-board/{slug}")
+    out = []
+    for j in data.get("jobs") or []:
+        loc = j.get("location") or ""
+        out.append({
+            "title": j.get("title"),
+            "location": loc,
+            "date": (j.get("publishedAt") or "")[:10],
+            "url": j.get("jobUrl"),
+            "id": str(j.get("id") or ""),
+            "work_mode": "remote" if j.get("isRemote") else None,
+            "skills": [],
+            "description": _strip_html(j.get("descriptionPlain") or "")[:2000],
+        })
+    return out
+
+
+_BOARD_PLATFORMS = {
+    "greenhouse": _gh_board_jobs,
+    "lever": _lever_board_jobs,
+    "ashby": _ashby_board_jobs,
+}
+
+
+def src_boards():
+    """Poll every company in queries.json's "company_boards" list. One
+    company's failure (bad slug, board closed) never aborts the others."""
+    cfg = json.loads(QUERIES_PATH.read_text(encoding="utf-8"))
+    companies = cfg.get("company_boards") or []
+    if not companies:
+        raise SkipSource("no entries in queries.json 'company_boards' - see SOURCES.md Tier 5")
+    out = []
+    for c in companies:
+        name, platform, slug = c.get("name"), c.get("platform"), c.get("slug")
+        fn = _BOARD_PLATFORMS.get(platform)
+        if not fn:
+            print(f"    SKIP company_boards.{name}: unknown platform {platform!r}", flush=True)
+            continue
+        try:
+            for j in fn(slug):
+                if not _keep_title(j.get("title")):
+                    continue
+                out.append({**j, "company": name, "portal": f"boards-{platform}"})
+        except Exception as e:
+            print(f"    SKIP company_boards.{name} ({platform}/{slug}): {type(e).__name__}: {e}", flush=True)
+    return out
+
+
 HTTP_SOURCES = {
     "remoteok": src_remoteok,
     "remotive": src_remotive,
@@ -484,6 +675,7 @@ HTTP_SOURCES = {
     "hn_hiring": src_hn_hiring,
     "adzuna": src_adzuna,
     "usajobs": src_usajobs,
+    "boards": src_boards,
 }
 
 
@@ -581,8 +773,31 @@ def cmd_search(args):
 # process
 # ---------------------------------------------------------------------------
 
+# Query params that are just tracking/wrapper noise (utm_*, ref codes) and can
+# be stripped when comparing two URLs for "is this the same posting". Anything
+# else in the query string is assumed to be meaningful (e.g. HN comment links
+# use ?id=<n> as the *only* thing distinguishing one posting from another -
+# stripping the whole query string there made every HN link after the first
+# look like a duplicate of it).
+_TRACKING_PARAMS = {
+    "utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term",
+    "se", "v", "ref", "referrer", "source", "gh_src",
+}
+
+
+def _url_key(url):
+    """Dedup key for a URL: strip known tracking-wrapper query params, keep
+    everything else (including params that identify the specific posting)."""
+    if not url or "?" not in url:
+        return url
+    base, qs = url.split("?", 1)
+    kept = [p for p in qs.split("&") if p.split("=", 1)[0] not in _TRACKING_PARAMS]
+    return base + ("?" + "&".join(kept) if kept else "")
+
+
 def _seen_indexes(seen):
     seen_urls = set(seen.keys()) | {v.get("url", "") for v in seen.values()}
+    seen_url_keys = {_url_key(u) for u in seen_urls if u}
     seen_ids = set()
     seen_ct = set()
     for k, v in seen.items():
@@ -595,18 +810,13 @@ def _seen_indexes(seen):
             seen_ids.add(m2.group(1))
         seen_ct.add(((v.get("company") or "").strip().lower(),
                      (v.get("title") or "").strip().lower()))
-    return seen_urls, seen_ids, seen_ct
+    return seen_urls, seen_url_keys, seen_ids, seen_ct
 
 
-def _already(j, seen_urls, seen_ids, seen_ct):
+def _already(j, seen_urls, seen_url_keys, seen_ids, seen_ct):
     url = j.get("url") or ""
-    if url in seen_urls:
+    if url and (url in seen_urls or _url_key(url) in seen_url_keys):
         return True
-    if "?" in url:
-        base = url.split("?")[0]
-        for s in seen_urls:
-            if s and s.split("?")[0] == base:
-                return True
     m = re.search(r"(\d{8,})", url) or re.search(r"(\d{8,})", str(j.get("id") or ""))
     if m and m.group(1) in seen_ids:
         return True
@@ -659,7 +869,7 @@ def _load_run_jobs(rd):
 def cmd_process(args):
     rd = run_dir(args)
     seen = load_seen()["seen"]
-    seen_urls, seen_ids, seen_ct = _seen_indexes(seen)
+    seen_urls, seen_url_keys, seen_ids, seen_ct = _seen_indexes(seen)
     jobs, health = _load_run_jobs(rd)
 
     new, all_rows = [], []
@@ -668,11 +878,11 @@ def cmd_process(args):
         if NON_ENGLISH_TITLE_RE.search(j.get("title") or ""):
             skipped_lang += 1
             continue
-        if _already(j, seen_urls, seen_ids, seen_ct):
+        if _already(j, seen_urls, seen_url_keys, seen_ids, seen_ct):
             skipped_seen += 1
             continue
         tier = loc_tier(j.get("location"), j.get("work_mode"))
-        f = fit(j.get("title"), j.get("skills"))
+        f = fit(j.get("title"), j.get("skills"), j.get("description"))
         j["tier"] = tier
         j["fit"] = f
         all_rows.append({"url": j.get("url"), "fit": f, "tier": tier})
@@ -699,6 +909,8 @@ def cmd_process(args):
         "date": j.get("date"), "url": j.get("url"), "id": j.get("id"),
         "portal": j["portal"], "work_mode": j.get("work_mode"),
         "src": j["src"], "skills": j.get("skills") or [],
+        "salary": extract_salary(j.get("description")),
+        "description": (j.get("description") or "")[:400],
     } for j in new]
 
     with open(rd / "candidates.json", "w", encoding="utf-8") as f:
@@ -710,7 +922,8 @@ def cmd_process(args):
     print(f"\n=== PRESENTABLE ({len(presentable)}) ===")
     for i, j in enumerate(presentable, 1):
         print(f"{i:2}. [{j['fit']}/{j['tier']}] {j.get('title')}")
-        print(f"    {j.get('company')} | {j.get('location')} | {j.get('date')}")
+        salary_suffix = f" | {j['salary']}" if j.get("salary") else ""
+        print(f"    {j.get('company')} | {j.get('location')} | {j.get('date')}{salary_suffix}")
         print(f"    {j.get('url')}")
     return 0
 
@@ -741,7 +954,7 @@ def cmd_update_seen(args):
         base = url.split("?")[0]
         if any(k.split("?")[0] == base for k in seen):
             continue
-        f = fit_by_url.get(url) or fit(j.get("title"), j.get("skills"))
+        f = fit_by_url.get(url) or fit(j.get("title"), j.get("skills"), j.get("description"))
         status = "new" if url in new_urls and f in ("high", "medium") else "skipped"
         seen[url] = {
             "title": j.get("title"),
@@ -826,7 +1039,10 @@ def main():
     rc = cmd_process(args)
     if rc != 0:
         return rc
-    return cmd_update_seen(args)
+    rc = cmd_update_seen(args)
+    if rc != 0:
+        return rc
+    return cmd_expire(args)
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ Primary:
 - **linkedin.com/jobs** - filter: United States / Minneapolis-St. Paul metro / Remote; also covered by `linkedin-search` CLI
 - **freehire.me** - also covered by `freehire-search` CLI
 - **Remote aggregators** - RemoteOK, Remotive, Arbeitnow, Jobicy, WeWorkRemotely, Working Nomads, and the HN "Who is hiring" thread are all covered by `job_scraper/pipeline.py` (keyless HTTP sources; see `job_scraper/SOURCES.md`). Adzuna and USAJobs activate once their free API keys are set as env vars. No WebSearch fallback needed for these.
+- **Target-company boards** - the `boards` source polls Greenhouse/Lever/Ashby directly for companies listed in `job_scraper/queries.json`'s `company_boards` (verify a slug with `tools/probe_company_board.py` before adding it - see `job_scraper/SOURCES.md` Tier 5).
 
 Secondary (company career pages via Google):
 - Direct Google searches with `site:` filters for known target companies (none specified yet - open to suggestions)
@@ -48,6 +49,7 @@ Roles that value both his technical sales background and coding skills.
 site:linkedin.com/jobs "solutions engineer" React OR Python
 site:linkedin.com/jobs "sales engineer" technical demo software
 site:linkedin.com/jobs "technical account manager" full stack
+site:linkedin.com/jobs "implementation engineer" OR "implementation consultant" software
 ```
 
 ### Priority 4: Broader Technical
@@ -58,6 +60,7 @@ Wider net for general junior technical roles.
 site:linkedin.com/jobs "junior developer" React OR Next.js
 site:linkedin.com/jobs "associate software engineer"
 site:linkedin.com/jobs "software engineer I" full stack
+site:linkedin.com/jobs "frontend developer" OR "web developer" junior React
 ```
 
 ## Location Filter

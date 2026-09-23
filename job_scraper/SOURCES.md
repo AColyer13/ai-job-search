@@ -47,12 +47,28 @@ Worth adding if coverage gaps appear (follow the `src_adzuna` pattern in
 - **Careerjet** — https://www.careerjet.com/partners/api/ (free affiliate key)
 - **CareerOneStop** — https://www.careeronestop.org/Developers/WebAPI/ (US Dept. of Labor, free key)
 
-## Tier 5 — Target-company board APIs
+## Tier 5 — Target-company board APIs (implemented as the `boards` source)
 
 Greenhouse (`boards-api.greenhouse.io/v1/boards/<company>/jobs`), Lever
 (`api.lever.co/v0/postings/<company>`), and Ashby (`api.ashbyhq.com/posting-api/job-board/<company>`)
-all expose keyless public JSON per company. If a target-company list emerges
-(`search-queries.md` currently has none), a `boards` source can poll them directly.
+all expose keyless public JSON per company. `pipeline.py`'s `src_boards()`
+polls every entry in `queries.json`'s `company_boards` list; one company
+failing (bad slug, board closed) never aborts the others.
+
+**Verify a slug before adding it** — guessed slugs 404 far more often than
+they hit:
+
+```bash
+python tools/probe_company_board.py greenhouse <slug>
+python tools/probe_company_board.py lever <slug>
+python tools/probe_company_board.py ashby <slug>
+```
+
+Currently seeded (both confirmed live): Jamf and Sezzle, both on Greenhouse.
+Several other Twin Cities employers were tried (SPS Commerce, Arctic Wolf,
+Calabrio, Workiva, Seeq, Garmin under various slug guesses) and all 404'd —
+their real slugs, if they use one of these three platforms at all, aren't
+guessable from the company name.
 
 ## Rejected
 

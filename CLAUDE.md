@@ -1,10 +1,7 @@
-# Job Application Assistant for [YOUR_NAME]
-
-<!-- SETUP: This file is populated by running /setup -->
-<!-- After running /setup, all [PLACEHOLDER] tokens will be replaced with your actual information -->
+# Job Application Assistant for Adam Colyer
 
 ## Role
-This repo is a job application workspace. Claude acts as a career advisor and application assistant for [YOUR_NAME], helping with:
+This repo is a job application workspace. The AI agent running this session (Claude Code, Codex, Cursor, Gemini CLI, Antigravity, or similar - see [AGENTS.md](AGENTS.md)) acts as a career advisor and application assistant for Adam Colyer, helping with:
 1. **Job fit evaluation** - Assess job postings against your profile (skills, experience, behavioral traits)
 2. **CV tailoring** - Adapt existing CV templates (LaTeX/moderncv) to target specific roles
 3. **Cover letter writing** - Draft targeted cover letters using existing templates (LaTeX)
@@ -13,70 +10,75 @@ This repo is a job application workspace. Claude acts as a career advisor and ap
 
 ## Candidate Profile
 
-<!-- This section is auto-populated by /setup. You can also fill it in manually. -->
+<!-- Full structured profile lives in .claude/skills/job-application-assistant/01-candidate-profile.md - this section is a summary. -->
 
 ### Identity
-- **Name:** [YOUR_NAME]
-- **Location:** [YOUR_CITY], [YOUR_COUNTRY] ([YOUR_COMMUTE_CONSTRAINTS])
-- **Languages:** [YOUR_LANGUAGES]
-- **CV language:** [YOUR_CV_LANGUAGE] <!-- English unless your market expects otherwise; /setup asks -->
+- **Name:** Adam Colyer
+- **Location:** Edina, MN, USA (open to relocation; see location tiers under Deal-breakers below)
+- **Languages:** English (native)
+- **CV language:** English
 
-- **Status:** [YOUR_EMPLOYMENT_STATUS]
-- **LinkedIn headline:** "[YOUR_LINKEDIN_HEADLINE]"
+- **Status:** Actively job searching. Activus Connect contract ended June 2026. Do **not** list Mercor on applications until Adam re-enables it.
+- **LinkedIn headline:** "Message me to see my Portfolio! Over the past several years I closed deals across..." <!-- full headline truncated on public LinkedIn view -->
+- **Public proof:** https://acolyer13.github.io/WebPortfolio/ · https://missionctrl.org/ · https://valleyforgeautomotive.org/ · https://cursor.com/@colyer
 
 ### Education
-<!-- List your degrees, most recent first -->
-- **[DEGREE_LEVEL] in [FIELD]** ([YEAR_START]-[YEAR_END]) - [INSTITUTION]
-  - Thesis: "[THESIS_TITLE]"
-  - Topics: [KEY_TOPICS]
+- **B.A. in Marketing** (graduated 2019) - University of St. Thomas
+- Certifications: Microsoft Azure AI-901 Engineer Program (in progress), Coding Temple Full-Stack Software Engineering Certificate (Feb 2026), Harvard Business School Online Certificate in Business Analytics (Feb 2021)
 
 ### Professional Experience
-<!-- List your roles, most recent first -->
-- **[JOB_TITLE]** ([START_DATE] - [END_DATE]) - **[COMPANY]** ([LOCATION])
-  - [KEY_RESPONSIBILITY_1]
-  - [KEY_RESPONSIBILITY_2]
-  - [KEY_ACHIEVEMENT]
+<!-- Full detail with bullets in 01-candidate-profile.md -->
+- **AI Search Quality Evaluator** (Nov 2025 - June 2026) - **Activus Connect (Tech Mahindra)** (Remote)
+- **Account Executive** (Sep 2022 - Aug 2024) - **Citizen Observer** (St. Paul, MN)
+- **Sales Development Representative** (Jul 2021 - Jul 2022) - **Digital River** (Minnetonka, MN)
+- **Account Executive** (Oct 2020 - Jul 2021) - **INRY** (Eden Prairie, MN)
+- **Business Development Representative** (May 2019 - Jun 2020) - **Epicor Software** (St. Louis Park, MN)
+- <!-- OMIT FOR NOW: Mercor AI Generalist Expert (2026–Current). Internal note only in 01-candidate-profile.md. -->
+
+**Career transition note:** None of the paid roles above are software engineering titles. Activus is an AI-evaluation contract; the rest are sales/business-development. Adam is transitioning into software engineering via a full-stack bootcamp (Coding Temple, Feb 2026), that eval contract, and shipped independent full-stack/AI projects (MissionCtrl, Valley Forge Automotive, Legal Eagle, Stardust). When framing this history, present sales as **transferable skills** (complex B2B sales-cycle ownership, 100+ technical product demonstrations, cross-functional stakeholder coordination with IT/engineering teams). Never imply a software engineering, project-management, or staff-AI-lab title he did not hold. Canonical resume: `documents/cv/adam_colyer_resume.txt` (synced from OneDrive PDF; Mercor omitted).
 
 ### Technical Skills
-- **Primary:** [YOUR_PRIMARY_SKILLS]
-- **Secondary:** [YOUR_SECONDARY_SKILLS]
-- **Domain:** [YOUR_DOMAIN_EXPERTISE]
-- **Software:** [YOUR_TOOLS_AND_SOFTWARE]
+- **Primary:** React, Next.js, TypeScript, Python (FastAPI/Flask), Node.js/Express, AI/LLM integration (RAG, agents, prompt engineering, local/faster-whisper, Claude API and others), Auth (OAuth, JWT, RBAC, Presidio)
+- **Secondary:** Mobile (React Native, Flutter, native iOS/Android), data science tooling (PyTorch, PEFT, Pandas), cloud/DevOps (AWS, GCP, Azure, Docker, CI/CD), UI polish (DCI-P3, fluid animation, light/dark themes)
+- **Domain:** Privacy-first system design (sensitive info stripped or local inference before model calls), B2B technical sales and stakeholder management (transferable, not engineering experience)
+- **Software:** Claude Code, Cursor, Antigravity, GitHub Actions, Vercel, Render, Firebase, PostgreSQL, Playwright/Vitest/pytest
+
+Full skills breakdown: `.claude/skills/job-application-assistant/01-candidate-profile.md`
 
 ### Certifications
-<!-- List relevant certifications with dates -->
-- **[CERTIFICATION_NAME]** - [HOURS]h - completed [DATE]
+- **Coding Temple Full-Stack Software Engineering Certificate** - completed Feb 2026
+- **Harvard Business School Online, Certificate in Business Analytics** - completed Feb 2021
+- **Microsoft Azure AI-901 Engineer Program** - in progress
 
 ### Publications
-<!-- List peer-reviewed publications, if any -->
-- [AUTHOR_LIST] ([YEAR]). [TITLE]. [JOURNAL].
+None.
 
 ### Awards
-<!-- List relevant awards, hackathons, competitions -->
-- [AWARD_NAME] - [EVENT] ([YEAR])
+- Excellence Award - Epicor Software (2020)
 
 ### Behavioral Profile
-<!-- Your behavioral assessment results (PI, DISC, Myers-Briggs, or self-assessment) -->
-- **[TRAIT_1]** - [DESCRIPTION]
-- **[TRAIT_2]** - [DESCRIPTION]
-- **Strengths:** [YOUR_STRENGTHS]
-- **Growth areas:** [YOUR_GROWTH_AREAS]
-- **Thrives in:** [YOUR_IDEAL_ENVIRONMENT]
+<!-- No formal assessment (PI/DISC/Myers-Briggs) on file yet - ask Adam if he wants to add one via /setup --section behavioral -->
+- **Strengths:** Stakeholder communication, translating technical detail into business value (100+ product demos), persistence through complex multi-party sales cycles
+- **Growth areas:** Building a track record of shipped production engineering work to back up the sales-to-engineering transition narrative
+- **Thrives in:** Environments that value both technical depth and clear business/customer communication
 
 ### What Excites You
-<!-- What motivates you professionally -->
-- [PASSION_1]
-- [PASSION_2]
+- Building production AI/LLM systems (RAG, agents, local LLMs)
+- Building complete products end-to-end, not just isolated features
+- Growing toward technical leadership over time
 
 ### Target Sectors
-<!-- Industries and companies you're targeting -->
-- [SECTOR_1]: [EXAMPLE_COMPANIES]
-- [SECTOR_2]: [EXAMPLE_COMPANIES]
+- Full-stack / AI engineering roles (entry-level given the career change), companies open to sales-to-engineering career-changers
+- No specific target companies yet - open to suggestions
 
 ### Deal-breakers
-<!-- Hard constraints on job search -->
-- [DEALBREAKER_1]
-- [DEALBREAKER_2]
+- **Location tiers:**
+  1. Ideal: Fully remote
+  2. Acceptable: Twin Cities west/NW/SW suburbs from **Rogers, MN** (north) through **Chanhassen, MN** (south), including Edina, Eden Prairie, Minnetonka, Hopkins, St. Louis Park, Golden Valley, Plymouth, Maple Grove, Osseo, Brooklyn Park, Rogers, Dayton, Medina, Wayzata, Orono, Chaska, Victoria, Bloomington, and Richfield. Garmin in Chanhassen is in range. Still skip a required downtown Minneapolis 5-day commute when a west-suburb office exists; hybrid with 1–2 days in Minneapolis is acceptable.
+  3. Acceptable (relocation): Mississippi, preferably the Gulfport–Biloxi area (also nearby Gulf Coast: Long Beach, D'Iberville, Ocean Springs, Pass Christian)
+  4. Borderline: Other US locations requiring relocation
+  5. Too far: St. Paul or anywhere east of Minneapolis, unless the role is fully remote; Mississippi roles well inland from the Gulf Coast
+- Prefers remote/hybrid; open otherwise (no other hard deal-breakers specified yet)
 
 ## Repo Structure
 - `cv/` - LaTeX CV variants (moderncv template, banking style)
@@ -91,7 +93,7 @@ This repo is a job application workspace. Claude acts as a career advisor and ap
 4. **Verify both documents** (see Verification Checklist below)
 5. Prepare interview talking points based on the role requirements and your strengths
 
-**Important:** When mentioning agentic coding or AI tooling in CVs/cover letters, explicitly reference **Claude Code** by name.
+**Important:** When mentioning agentic coding or AI tooling in CVs/cover letters, explicitly name whichever tool was actually used for that referenced work (see Technical Skills above: Claude Code, Cursor, or Antigravity) - never hardcode one regardless of which tool actually did the work.
 
 ## Verification Checklist
 After creating or updating a CV or cover letter, re-read the generated file and verify **all** of the following before presenting to the user. Report the results as a pass/fail checklist.
@@ -117,7 +119,7 @@ After creating or updating a CV or cover letter, re-read the generated file and 
 ### Quality
 - [ ] No LaTeX syntax errors (balanced braces, correct commands)
 - [ ] No spelling or grammar errors
-- [ ] Agentic coding / AI tooling references mention **Claude Code** by name
+- [ ] Agentic coding / AI tooling references name the tool actually used for that work (Claude Code, Cursor, or Antigravity), not a hardcoded default
 - [ ] Cover letter is addressed to the correct person (or "Dear Hiring Manager" if unknown)
 - [ ] Cover letter fits approximately one page
 - [ ] CV section headings (`\section{...}`) and the References boilerplate line match the CV's language, not left as the English template defaults (see `05-cv-templates.md`)

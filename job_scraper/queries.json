@@ -28,7 +28,11 @@
     { "name": "fh_remote_fullstack_jr", "portal": "freehire-search", "args": ["search", "--category", "fullstack", "--seniority", "junior", "--remote", "remote", "--jobage", "14", "--limit", "20", "--format", "json"] },
     { "name": "fh_remote_ai_jr", "portal": "freehire-search", "args": ["search", "-q", "AI engineer", "--remote", "remote", "--seniority", "junior", "--jobage", "14", "--limit", "20", "--format", "json"] },
     { "name": "fh_tam", "portal": "freehire-search", "args": ["search", "-q", "technical account manager", "--country", "US", "--jobage", "14", "--limit", "20", "--format", "json"] },
-    { "name": "fh_gulf_swe", "portal": "freehire-search", "args": ["search", "-q", "software engineer", "--city", "Gulfport", "--jobage", "14", "--limit", "20", "--format", "json"] }
+    { "name": "fh_gulf_swe", "portal": "freehire-search", "args": ["search", "-q", "software engineer", "--city", "Gulfport", "--jobage", "14", "--limit", "20", "--format", "json"] },
+    { "name": "li_usremote_frontend", "portal": "linkedin-search", "args": ["search", "-l", "United States", "--remote", "remote", "-q", "frontend developer", "--jobage", "14", "--limit", "20", "--format", "json"] },
+    { "name": "li_usremote_forward_deployed", "portal": "linkedin-search", "args": ["search", "-l", "United States", "--remote", "remote", "-q", "forward deployed engineer", "--jobage", "14", "--limit", "20", "--format", "json"] },
+    { "name": "fh_frontend_junior", "portal": "freehire-search", "args": ["search", "-q", "frontend developer", "--country", "US", "--seniority", "junior", "--jobage", "14", "--limit", "20", "--format", "json"] },
+    { "name": "fh_implementation", "portal": "freehire-search", "args": ["search", "-q", "implementation engineer", "--country", "US", "--jobage", "14", "--limit", "20", "--format", "json"] }
   ],
   "http_sources": [
     "remoteok",
@@ -39,6 +43,12 @@
     "workingnomads",
     "hn_hiring",
     "adzuna",
-    "usajobs"
-  ]
+    "usajobs",
+    "boards"
+  ],
+  "company_boards": [
+    { "name": "Jamf", "platform": "greenhouse", "slug": "jamf" },
+    { "name": "Sezzle", "platform": "greenhouse", "slug": "sezzle" }
+  ],
+  "company_boards_comment": "Slugs verified live against the real API before being added here (see tools/probe_company_board.py). Guessed slugs for Twin Cities employers - SPS Commerce, Arctic Wolf, Calabrio, Workiva, Seeq, Garmin - all 404'd; add them once you find their real board slug, never before."
 }
