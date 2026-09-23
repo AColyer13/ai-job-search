@@ -1,4 +1,4 @@
-%% Example CV - [YOUR_NAME]
+%% Example CV - Adam Colyer
 %% Comprehensive overview of all competencies, experience, and achievements.
 %% Use as a master reference when tailoring role-specific CVs.
 %%
@@ -24,18 +24,19 @@
     linkcolor=blue,
     filecolor=magenta,
     urlcolor=blue,
-    pdftitle={[YOUR_NAME] - CV},
+    pdftitle={Adam Colyer - CV},
     pdfpagemode=FullScreen,
 }
 \usepackage[scale=0.80]{geometry}
 \usepackage{import}
+\usepackage{needspace}
 
 % personal data
-\name{[First]}{[Last]}
-\address{[Your Address, City, Country]}{}{}
-\phone[mobile]{[+XX XXXXXXXXXX]}
-\email{[your.email@example.com]}
-\extrainfo{\href{[https://linkedin.com/in/your-profile]}{LinkedIn}, \href{[https://github.com/your-username]}{GitHub}}
+\name{Adam}{Colyer}
+\address{Edina, MN (Open to Relocation)}{}{}
+\phone[mobile]{(612) 710-7700}
+\email{adamcolyer@gmail.com}
+\extrainfo{\href{https://linkedin.com/in/colyeradam}{LinkedIn}, \href{https://acolyer13.github.io/WebPortfolio/}{Portfolio}, \href{https://cursor.com/@colyer}{Cursor}}
 
 \begin{document}
 
@@ -46,7 +47,7 @@
 % ============================================================
 
 \vspace{6pt}
-\small{[Write a 3-5 line profile statement tailored to the role you're applying for. Focus on what makes you uniquely qualified. Example: "Data scientist with a PhD in [field] and X years of industry experience. Combines deep domain expertise in [domain] with strong applied machine learning and Python development skills. Experienced in developing end-to-end ML pipelines, from data ingestion to stakeholder-facing dashboards."]}
+\small{Full-stack engineer building TypeScript, React, and Python apps. Sold technical products to IT buyers and cities for five years. Builds secure authorization and structured data models so AI can answer from user data while keeping sensitive information off cloud AI providers. Styles products with DCI-P3 color, fluid animation, and light/dark themes across viewports. Uses Claude Code, Cursor, and Antigravity daily; gathers requirements from technical and non-technical teams.}
 
 % ============================================================
 %     CORE COMPETENCIES
@@ -56,17 +57,34 @@
 \vspace{1pt}
 \begin{itemize}
 
-\item \textbf{[Skill Category 1]}: [Specific skills, frameworks, tools. Be concrete.]
+\item \textbf{Frontend}: React, Next.js, TypeScript, JavaScript, Tailwind CSS, Vite, Radix UI, Framer Motion, Three.js
 
-\item \textbf{[Skill Category 2]}: [Specific skills, frameworks, tools.]
+\item \textbf{Backend \& APIs}: Python (FastAPI, Flask), Node.js, Express, REST/GraphQL, OpenAPI, Socket.IO, JWT/OAuth
 
-\item \textbf{[Skill Category 3]}: [Specific skills, frameworks, tools.]
+\item \textbf{AI \& LLM Integration}: RAG pipelines, local transcription (faster-whisper), prompt engineering, AI agents, Gemini API, Claude API
 
-\item \textbf{[Skill Category 4]}: [Domain expertise, methods, approaches.]
+\item \textbf{Databases \& Cloud}: PostgreSQL, Firebase/Firestore, Redis, Docker, GitHub Actions/CI/CD, AWS, Google Cloud, Azure
 
-\item \textbf{[Skill Category 5]}: [Tools, platforms, software.]
+\item \textbf{Security \& Testing}: Privacy-first design (Presidio / sensitive info stripped before model calls), JWT/OAuth, RBAC, Firestore rules, Playwright, Vitest, pytest
 
 \end{itemize}
+
+\vspace{3pt}
+
+% ============================================================
+%     SELECTED PROJECTS
+% ============================================================
+
+\section{Selected Projects}
+\vspace{1pt}
+\begin{itemize}
+\item \textbf{\href{https://missionctrl.org/}{MissionCtrl}} (Next.js, TypeScript, Python, Three.js, Gemini, Docker, Playwright): live TLE orbits on a 3D globe; Gemini flight assistant (NOVA); Playwright in GitHub Actions.
+\item \textbf{\href{https://valleyforgeautomotive.org/}{Valley Forge Automotive}} (React, TypeScript, Firebase Auth, Firestore): live service records, inventory, and scheduling; Firestore role checks separate customer and staff data.
+\item \textbf{Legal Eagle} (Next.js, TypeScript, PostgreSQL, FastAPI): estate-attorney practice tools; assistant answers from app data only after names and other sensitive info is stripped.
+\item \textbf{Stardust} (Next.js, Python, PostgreSQL, Docker, faster-whisper): interview recordings transcribed on the host so audio never goes to a hosted API; local RAG index.
+\end{itemize}
+
+\vspace{3pt}
 
 % ============================================================
 %     PROFESSIONAL EXPERIENCE
@@ -76,32 +94,47 @@
 \vspace{3pt}
 \begin{itemize}
 
-% --- Most Recent Role ---
-\item{\cventry{[YYYY--Present]}{[Job Title]}{[Company]}{[City, Country]}{}{\vspace{1pt}
+% --- Most recent AI eval (Mercor omitted from applications until Adam re-enables) ---
+\needspace{5\baselineskip}
+\item{\cventry{Nov 2025--Jun 2026}{AI Search Quality Evaluator}{Activus Connect (Tech Mahindra)}{Remote}{}{\vspace{1pt}
 \begin{itemize}
-    \item [Achievement or responsibility 1 - be specific, use numbers where possible]
-    \item [Achievement or responsibility 2]
-    \item [Achievement or responsibility 3]
-    \item [Achievement or responsibility 4]
+    \item Scored LLM search answers against Google quality rubrics; flagged hallucinations, unsupported claims, and weak sourcing
+    \item Wrote structured error notes and pointed models to better sources when answers were wrong
 \end{itemize}}}
 
 \vspace{3pt}
 
 % --- Previous Role ---
-\item{\cventry{[YYYY--YYYY]}{[Job Title]}{[Company]}{[City, Country]}{}{\vspace{1pt}
+\needspace{5\baselineskip}
+\item{\cventry{Sep 2022--Aug 2024}{Account Executive}{Citizen Observer}{St. Paul, MN}{}{\vspace{1pt}
 \begin{itemize}
-    \item [Achievement or responsibility 1]
-    \item [Achievement or responsibility 2]
-    \item [Achievement or responsibility 3]
+    \item Sold the tip411 public-safety platform to cities, counties, and law enforcement agencies
+    \item Ran 100+ live product demos with police chiefs, mayors, and city councils, including travel to San Diego and Dallas
 \end{itemize}}}
 
 \vspace{3pt}
 
 % --- Earlier Role ---
-\item{\cventry{[YYYY--YYYY]}{[Job Title]}{[Company]}{[City, Country]}{}{\vspace{1pt}
+\needspace{5\baselineskip}
+\item{\cventry{Jul 2021--Jul 2022}{Sales Development Representative}{Digital River}{Minnetonka, MN}{}{\vspace{1pt}
 \begin{itemize}
-    \item [Achievement or responsibility 1]
-    \item [Achievement or responsibility 2]
+    \item Built and qualified an e-commerce pipeline that helped source and close a \$500K+ Rec Room contract
+\end{itemize}}}
+
+\vspace{3pt}
+
+\needspace{5\baselineskip}
+\item{\cventry{Oct 2020--Jul 2021}{Account Executive}{INRY}{Eden Prairie, MN}{}{\vspace{1pt}
+\begin{itemize}
+    \item Owned a \$500K+ ServiceNow pipeline with VP and director-level IT and HR buyers; submitted RFPs and walked buyers through responses
+\end{itemize}}}
+
+\vspace{3pt}
+
+\needspace{5\baselineskip}
+\item{\cventry{May 2019--Jun 2020}{Business Development Representative}{Epicor Software}{St. Louis Park, MN}{}{\vspace{1pt}
+\begin{itemize}
+    \item Built an ERP pipeline with \$1.1M accepted by AEs as qualified; earned an Excellence Award from the CEO
 \end{itemize}}}
 
 \end{itemize}
@@ -114,37 +147,21 @@
 \vspace{1pt}
 \begin{itemize}
 
-\item{\cventry{[YYYY--YYYY]}{[Degree] in [Field]}{[Institution]}{[City, Country]}{}{\vspace{1pt}
-Thesis: ``[Thesis Title].'' [Brief description of research focus.]
-}}
+\item{\cventry{2019}{B.A. in Marketing}{University of St. Thomas}{}{}{}}
+
+\end{itemize}
 
 \vspace{3pt}
 
-\item{\cventry{[YYYY--YYYY]}{[Degree] in [Field]}{[Institution]}{[City, Country]}{}{\vspace{1pt}
-[Brief description or key topics.]
-}}
-
-\end{itemize}
-
-% ============================================================
-%     LANGUAGES
-% ============================================================
-
-\section{Languages}
+\section{Certifications}
 \vspace{1pt}
 \begin{itemize}
-\item [Language 1] (native), [Language 2] (fluent), [Language 3] (intermediate).
+\item Coding Temple -- Full-Stack Software Engineering Certificate (Feb 2026)
+\item Harvard Business School Online -- Certificate in Business Analytics (Feb 2021)
+\item Microsoft Azure AI-901 Engineer Program -- in progress
 \end{itemize}
 
-% ============================================================
-%     PUBLICATIONS (optional)
-% ============================================================
-
-\section{Publications}
-\vspace{1pt}
-\begin{itemize}
-\item [Author(s)] ([Year]). [Title]. [Journal/Conference]. \href{[DOI_URL]}{DOI link}
-\end{itemize}
+\vspace{3pt}
 
 % ============================================================
 %     HONORS AND AWARDS (optional)
@@ -153,7 +170,7 @@ Thesis: ``[Thesis Title].'' [Brief description of research focus.]
 \section{Honors and Awards}
 \vspace{1pt}
 \begin{itemize}
-\item{\textbf{[Award Name]} -- [Event/Organization] ([Year]).}
+\item{\textbf{Excellence Award} -- Epicor Software (2020).}
 \end{itemize}
 
 % ============================================================

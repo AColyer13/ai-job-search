@@ -44,9 +44,9 @@ How well do the required/preferred skills align with the candidate's capabilitie
 | 40-59 | Partial match, significant upskilling needed |
 | 0-39 | Fundamental mismatch |
 
-**Strong match areas:** [YOUR_PRIMARY_SKILLS]
-**Moderate match areas:** [YOUR_SECONDARY_SKILLS]
-**Weak match areas:** [SKILLS_YOU_LACK]
+**Strong match areas:** React/Next.js/TypeScript full-stack development, Python (FastAPI/Flask) backends, AI/LLM integration (RAG, LangChain/LangGraph, prompt engineering, AI agents), Docker/CI/CD, auth & security fundamentals (JWT, OAuth, OWASP practices)
+**Moderate match areas:** Cloud platforms at a generalist depth (AWS/GCP/Azure), mobile development (React Native/Flutter/native iOS-Android - real per Adam but not yet reflected in a shipped project), data science/ML tooling (PyTorch, PEFT, Pandas)
+**Weak match areas:** Formal CS fundamentals/algorithms (no CS degree - background is a marketing B.A. plus a full-stack bootcamp), large-scale distributed systems, any role requiring multiple years of production SWE experience
 
 ### 2. Experience Match (0-100)
 Does work history align with what they're looking for?
@@ -58,9 +58,9 @@ Does work history align with what they're looking for?
 | 40-59 | Adjacent experience, would need to make the case |
 | 0-39 | Unrelated experience |
 
-**Strong:** [YOUR_DIRECT_EXPERIENCE_DOMAINS]
-**Moderate:** [YOUR_ADJACENT_EXPERIENCE]
-**Entry-level:** [ROLES_WITH_LIMITED_EXPERIENCE]
+**Strong:** Shipped full-stack/AI projects with public domains (MissionCtrl, Valley Forge Automotive) plus Legal Eagle and Stardust; AI evaluation/quality contract (Activus Connect / Google quality rubrics). Do not count Mercor toward application materials until Adam re-enables it.
+**Moderate (transferable, not engineering):** 5 years of B2B technical sales (Citizen Observer, Digital River, INRY, Epicor) - complex sales-cycle ownership, 100+ technical product demonstrations, cross-functional stakeholder coordination with IT/engineering teams. Frame as transferable communication/coordination skills, never as engineering or PM experience he didn't hold.
+**Entry-level:** Essentially all traditional software engineering roles - Adam is a career-changer (bootcamp completed Feb 2026) and should be evaluated and positioned as an entry-level/junior engineer, not a mid-level one, regardless of his 5+ years of total work experience.
 
 ### 3. Behavioral/Culture Fit (0-100)
 Does the role and company culture match the behavioral profile?
@@ -75,9 +75,11 @@ Does the role and company culture match the behavioral profile?
 **Red flags to research:** Department disorganization, work dominated by maintenance over development, poor chemistry with leadership, culture mismatches. Check reviews, media coverage, LinkedIn connections, and network contacts for insider perspective.
 
 ### 4. Location & Logistics (Pass/Fail + Notes)
-- Within commute range: PASS
-- Remote with occasional office: PASS
-- Requires relocation: FAIL (deal-breaker)
+- Fully remote, or office/hybrid in the Rogers–Chanhassen west/NW/SW suburban band (Edina, Eden Prairie, Minnetonka, Hopkins, St. Louis Park, Golden Valley, Plymouth, Maple Grove, Osseo, Brooklyn Park, Rogers, Dayton, Medina, Wayzata, Orono, Chanhassen, Chaska, Victoria, Bloomington, Richfield): PASS
+- Hybrid with 1–2 days in Minneapolis plus a west-suburb home base: PASS
+- Mississippi relocation in the Gulfport–Biloxi / Mississippi Gulf Coast area: PASS
+- Required 5-day downtown Minneapolis-only office, or St. Paul / east-metro commute (Eagan, Woodbury, Arden Hills, Coon Rapids): FAIL
+- Other US relocation (including inland Mississippi well away from the Gulf Coast): FLAG (discuss with user)
 - Frequent international travel: FLAG (discuss with user)
 
 ### 5. Career Alignment & Motivation (0-100)
@@ -91,19 +93,19 @@ Does this role advance career goals and contain tasks that energize?
 | 0-39 | Dead end or backwards step |
 
 **Career goals:**
-- [YOUR_CAREER_GOAL_1]
-- [YOUR_CAREER_GOAL_2]
-- [YOUR_CAREER_GOAL_3]
+- Move into AI/LLM-focused engineering work (RAG, agents, prompt engineering, local LLMs)
+- Build complete products end-to-end, not just isolated features
+- Grow toward technical leadership over the long term
 
 **Motivation filter:** Evaluate not just whether you *can* do the tasks, but whether the tasks will *energize* you. Consider:
-- Tasks that energize: [YOUR_ENERGIZING_TASKS]
-- Tasks that drain: [YOUR_DRAINING_TASKS]
-- Non-task factors: leadership style, department culture, company values, degree of autonomy
+- Tasks that energize: AI/LLM feature integration, building a product end-to-end, work that blends technical depth with business/customer context
+- Tasks that drain: not yet specified - ask Adam before assuming
+- Non-task factors: not yet specified - ask Adam before assuming
 
 **Life situation alignment:** Consider personal constraints:
-- **Security**: [YOUR_FINANCIAL_SITUATION_CONTEXT]
-- **Flexibility**: [YOUR_SCHEDULE_CONSTRAINTS]
-- **Professional development**: [YOUR_GROWTH_PRIORITIES]
+- **Security**: Actively job searching. Activus Connect ended June 2026. Mercor exists but is omitted from applications for now. Do not assume financial urgency; ask Adam if this should factor into evaluation
+- **Flexibility**: Prefers remote/hybrid; see location tiers in `01-candidate-profile.md` / CLAUDE.md Deal-breakers section for the acceptable commute/relocation radius
+- **Professional development**: Actively building a production-engineering track record post-bootcamp to support the sales-to-engineering transition narrative
 
 ### 6. Salary Benchmark (Optional)
 

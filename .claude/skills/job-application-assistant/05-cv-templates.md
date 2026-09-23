@@ -115,12 +115,13 @@ When the role sits outside your home domain, **lead with the domain-transfer arg
 
 **Create 2-3 profile statement templates for your main role types:**
 
-<!-- SETUP: These are populated based on your background -->
-**For [YOUR_PRIMARY_ROLE_TYPE] roles:**
-> [YOUR_PROFILE_STATEMENT_TEMPLATE_1]
+**For entry-level / full-stack software engineering roles:**
+> Full-stack engineer building TypeScript, React, and Python apps. Sold technical products to IT buyers and cities for five years. Builds secure authorization and structured data models so AI can answer from user data while keeping sensitive information off cloud AI providers. Styles products with DCI-P3 color, fluid animation, and light/dark themes across viewports. Uses Claude Code, Cursor, and Antigravity daily; gathers requirements from technical and non-technical teams.
 
-**For [YOUR_SECONDARY_ROLE_TYPE] roles:**
-> [YOUR_PROFILE_STATEMENT_TEMPLATE_2]
+**For AI/ML-engineering-focused roles:**
+> Full-stack engineer focused on privacy-aware AI features: RAG over user data, local faster-whisper transcription, and Claude/Gemini-backed assistants, built with React/Next.js and Python. Scored LLM search answers against Google quality rubrics at Activus Connect (Tech Mahindra), then applied the same failure-mode eye to MissionCtrl (live globe + NOVA) and Legal Eagle (sensitive info stripped before the model sees app data).
+
+Both statements lean on the domain-transfer argument (sales background -> engineering) since Adam is a career-changer; keep that framing honest per `04-job-evaluation.md`'s Experience Match notes - transferable skills, never an implied engineering or PM title he didn't hold.
 
 Statements labeled *[Used for: <company>_<role>]* were extracted from archived application drafts by `/setup` Path A. They are **phrasing references, never fact sources**: when drafting from one, every factual claim still comes from `01-candidate-profile.md` - a past tailored draft does not vouch for its own accuracy.
 

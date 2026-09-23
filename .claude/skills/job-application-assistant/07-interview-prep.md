@@ -12,30 +12,54 @@ Structure answers as: **Situation** (context), **Task** (your responsibility), *
 
 Keep answers to 1-2 minutes. Be specific. End with what you learned or would do differently.
 
-## Ready-Made STAR Examples
+## STAR Candidates (Complete Manually)
 
-<!-- These are populated by /setup from your actual experience. Below are templates showing the format. -->
+<!-- Added by /setup Path A from resume/portfolio highlights. Fill in S/T/A/R details before relying on these in an interview. -->
 
-### 1. [PROJECT_NAME] ([SKILL_DEMONSTRATED])
-**S:** [CONTEXT - what was happening, what was the problem]
-**T:** [YOUR RESPONSIBILITY - what you specifically needed to do]
-**A:** [WHAT YOU DID - specific actions, tools, methods]
-**R:** [OUTCOME - measurable results, adoption, impact]
-**Use for:** "[QUESTION_TYPE_1]", "[QUESTION_TYPE_2]"
+### Epicor: $3.7M qualified + CEO Excellence Award
+**Source:** CV/portfolio - Business Development Representative, Epicor Software (May 2019 - Jun 2020)
+**What happened:** Qualified $3.7M in opportunities and added $1.1M to pipeline for ERP solutions in manufacturing, earning an Excellence Award from the CEO.
+**Why it matters:** Good for "tell me about a time you exceeded a target" or "how do you prioritize a pipeline of opportunities" questions.
+**S/T/A/R stub:**
+- Situation:
+- Task:
+- Action:
+- Result:
 
-### 2. [PROJECT_NAME] ([SKILL_DEMONSTRATED])
-**S:** [CONTEXT]
-**T:** [YOUR RESPONSIBILITY]
-**A:** [WHAT YOU DID]
-**R:** [OUTCOME]
-**Use for:** "[QUESTION_TYPE_1]", "[QUESTION_TYPE_2]"
+### Citizen Observer: six-municipality tip411 rollout
+**Source:** CV/portfolio - Account Executive, Citizen Observer (Sep 2022 - Aug 2024)
+**What happened:** Led adoption of the tip411 platform across six municipalities through 100+ live product demonstrations, including travel to Dallas, TX and San Diego, CA, speaking with Police Chiefs, Mayors, and other city officials.
+**Why it matters:** Good for "sell into a skeptical/public-sector stakeholder" or "manage a multi-account rollout" questions.
+**S/T/A/R stub:**
+- Situation:
+- Task:
+- Action:
+- Result:
 
-### 3. [PROJECT_NAME] ([SKILL_DEMONSTRATED])
-**S:** [CONTEXT]
-**T:** [YOUR RESPONSIBILITY]
-**A:** [WHAT YOU DID]
-**R:** [OUTCOME]
-**Use for:** "[QUESTION_TYPE_1]", "[QUESTION_TYPE_2]"
+### MissionCtrl: Nova AI mission assistant
+**Source:** Independent project - MissionCtrl (https://missionctrl.org/ ; Next.js 15, TypeScript, Python, Three.js, Gemini API, Docker, Playwright)
+**What happened:** Built a satellite mission simulator that renders live TLE-based orbits on a 3D globe and a Gemini flight assistant (NOVA) for questions about the current orbit and upcoming burns. Playwright and unit tests run in GitHub Actions.
+**Why it matters:** Good for "describe a project where you integrated an LLM into a product" or "how do you approach an ambiguous technical build" questions.
+**S/T/A/R stub:**
+- Situation:
+- Task:
+- Action:
+- Result:
+
+### LegalEagle: privacy-preserving AI assistant for attorneys
+**Source:** Independent project - Legal Eagle (Next.js, TypeScript, PostgreSQL, FastAPI)
+**What happened:** Built practice tools for estate attorneys (client files, filing deadlines, per-case change log) with an assistant that answers from app data only after names and IDs are stripped. Do not send interviewers to the Vercel demo until the production debug banner is gone.
+**Why it matters:** Good for "how do you balance AI capability with data privacy/compliance" or "design a system handling sensitive data" questions.
+
+### Mercor: contract model-eval work — OMIT FROM APPLICATIONS FOR NOW
+**Source:** Mercor, AI Generalist Expert (contractor marketplace, NDA) — kept for internal interview prep only; do not volunteer on applications until Adam re-enables.
+**What happened:** Evaluating and improving model outputs for a frontier AI lab under NDA.
+**Why it matters:** Good for "how do you evaluate LLM quality" questions if they ask about current work. Keep it as contract eval work, not a staff research job. Prefer Activus (Google rubrics, hallucinations, sourcing) as the public, specific example.
+**S/T/A/R stub:**
+- Situation:
+- Task:
+- Action:
+- Result:
 
 <!-- Add more STAR examples as needed. Aim for 4-6 covering different competencies. -->
 

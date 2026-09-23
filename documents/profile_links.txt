@@ -1,0 +1,10 @@
+LinkedIn Profile: https://linkedin.com/in/colyeradam
+Personal Portfolio: https://acolyer13.github.io/WebPortfolio/
+Cursor profile: https://cursor.com/@colyer
+GitHub: https://github.com/AColyer13
+MissionCtrl (live): https://missionctrl.org/
+Valley Forge Automotive / VF Tires (live): https://valleyforgeautomotive.org/
+
+Do not put GitHub on the resume header until featured project repos are public and pinned. The public GitHub landing page currently surfaces bootcamp homework, not MissionCtrl.
+
+Do not link Legal Eagle live (https://legaleagleproject-mu.vercel.app/) until the production debug banner is removed (ALLOW_DEV_MAGIC_IN_PROD / hardcoded Gmail sign-in).
