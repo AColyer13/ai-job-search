@@ -75,5 +75,38 @@ class HtmlReportLintIntegrationTests(unittest.TestCase):
         self.assertIn("OK", result.stdout)
 
 
+class HtmlReportRenderTests(unittest.TestCase):
+    """The generator escapes store text and names the tracker gap."""
+
+    def test_job_is_present_and_script_payload_is_escaped(self):
+        sys.path.insert(0, str(REPO_ROOT / "job_scraper"))
+        import html_report
+
+        title = "<script>alert(1)</script>"
+        page = html_report.render_page(
+            [{
+                "title": title,
+                "fit": "high",
+                "company": "Example",
+                "location": "Remote",
+                "work_mode": "remote",
+                "url": "https://example.com/job",
+                "found_on": "2026-10-20",
+                "body_status": "opened",
+                "description": "Sell the product to plant managers.",
+            }],
+            [],
+            [{"slug": "alignerr_aitraining"}],
+            ["SKIP adzuna (set ADZUNA_APP_ID and ADZUNA_APP_KEY to enable)"],
+            "2026-10-20",
+        )
+        self.assertIn("Sell the product to plant managers.", page)
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", page)
+        self.assertNotIn("<script>alert(1)</script>", page)
+        self.assertIn("alignerr_aitraining", page)
+        self.assertIn("SKIP adzuna", page)
+        self.assertIn("No jobs in this file.", html_report.render_page([], [], [], [], "2026-10-20"))
+
+
 if __name__ == "__main__":
     unittest.main()

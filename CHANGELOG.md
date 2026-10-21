@@ -13,6 +13,9 @@ per-file diff commands.
 
 ## [Unreleased]
 
+### Added
+- The morning list, the Word file, and `reports/application-dashboard.html` use one list. Unlabeled engineering titles are left out of the morning highlights, a board error page is not treated as a read posting, and the same Oracle requisition is one card.
+
 ### Fixed
 - **HN "Who is hiring" dedup collision** - comparing dedup keys by stripped
   "base URL" made every HN comment after the first look like a duplicate,
@@ -20,7 +23,9 @@ per-file diff commands.
   only by `?id=<n>`. Dedup now strips known tracking params (`utm_*`, `se`,
   `v`, `ref`, `source`, `gh_src`, ...) instead of the whole query string, so
   distinct postings on the same path stay distinct while tracking-param
-  variants of the same posting still collapse.
+  variants of the same posting still collapse. `update-seen` now uses that
+  same key. It was still dropping the whole query string, so a later run
+  could show the same Hacker News comment again.
 - **`loc_tier()` misclassified same-named cities in the wrong state/country**
   as local or relocatable Twin Cities/Gulf Coast postings - e.g. Long Beach,
   CA; Victoria, BC; Crystal City, Virginia; and "Kilnworks, TX" matching the
@@ -36,7 +41,18 @@ per-file diff commands.
   matching tracker row, without fabricating any data it can't safely infer
   from a filename.
 
+### Fixed
+- **The morning list leaves out engineering titles above entry level, and postings that require an engineering or computer-science degree.** Level II, senior, and unlabeled engineering titles such as a bare "Software Engineer" or "Full Stack Developer" are not listed. Entry, trainee, junior, associate, early career, new grad, and level I stay. A posting is also left out when its qualifications require a degree in engineering or computer science and do not accept another degree or equivalent experience. "Or business," "or related," and "or equivalent experience" stay listed. The fit score itself is unchanged.
+- **Technical Sales Trainee scored low.** The technical-sales title list matched representative, consultant, rep, and specialist. "Trainee" fell through to the default low. "Technical Sales Trainee" now scores high, and a senior wording of that title stays medium.
+
 ### Added
+- A high grade is only for the Twin Cities area, Gulfport–Biloxi, or a US remote role that does not name another city. A card tied to another city, or a posting that requires another city, drops from high to medium. Medium and low grades stay as they are.
+- Each Word card says why the grade is high, medium, or low, then one sentence from the posting when the page could be read. High and medium jobs stay grouped by position type. Low jobs are grouped by type at the bottom of the file.
+- A job in the Word list gets a star when the posting names a business or marketing degree, a bootcamp or coding certificate, or a business analytics certificate. The card quotes that sentence. A bare bachelor's degree, an MBA, and a business-development mention with no degree stay unstarred. The fit score is unchanged.
+- Daily Word files group jobs under a heading for each position type, in this order: technical sales, sales engineer and solutions engineer, engineering, customer engineer and implementation, pre-sales and solutions consultant, QA, solutions architect, and other. The list at the top of the file jumps to a type. The same headings show in Word's navigation pane. Fit scoring is unchanged.
+- A Windows task named "Adam daily job search" runs `job_scraper/run_daily.cmd` every day at 8:00 AM local time and writes `daily/YYYY-MM-DD.txt` plus `daily/latest.txt`. If the PC is asleep at 8:00, the task runs when it wakes. `latest.docx` keeps each job for 14 days from the day it was found, then removes it. The morning file and latest are Word documents. A job is written into one date file only.
+- Search also covers the developer wordings of the same jobs (software, application, Python, full stack, web, and backend developer), plus customer engineer and implementation consultant. Junior QA, junior quality assurance, and junior software tester are searched on purpose. A non-senior QA title scores medium. Senior QA and SDET score low.
+- Daily search now also covers Technical Sales Representative / Technical Sales Consultant, Pre-Sales Consultant / Solutions Consultant, and Solutions Architect (Minneapolis, US-remote, Gulfport, and US freehire), plus US-remote Sales Engineer. `BRIDGE_RE` scores those as bridge roles. A plain "Solutions Architect" stays medium because `architect` is already a seniority token. Bare software or cloud architect titles stay low.
 - `fit()` now also considers the job description (when available), demoting
   (never promoting) a title-based fit score when the description requires
   5+ years of experience or an active security clearance.

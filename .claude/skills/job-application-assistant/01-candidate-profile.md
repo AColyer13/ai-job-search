@@ -18,9 +18,8 @@ framework_version: 1.0.0
 - **Cursor:** https://cursor.com/@colyer
 - **Languages:** English (native)
 - **Status:** Actively job searching. Activus Connect contract ended June 2026. Building and shipping independent full-stack/AI projects while applying.
-- **Application omit (temporary):** Do **not** list Mercor (AI Generalist Expert, Current) on CVs, cover letters, or applications until Adam says otherwise. Keep the entry in this profile for internal context only.
 - **Constraints:** Open to relocation — Mississippi preferably Gulfport–Biloxi; Twin Cities office roles from Rogers, MN through Chanhassen, MN (west/NW/SW suburbs, including Garmin)
-- **Canonical resume source:** `documents/cv/Adam_Colyer_Resume.pdf` (OneDrive mirror) and `documents/cv/adam_colyer_resume.txt` (text extract; Mercor omitted for applications)
+- **Canonical resume source:** `documents/cv/adam_colyer_resume.txt`. Mercor is included. The OneDrive PDF may still be an older export.
 
 ## Education
 
@@ -35,11 +34,10 @@ framework_version: 1.0.0
 
 ## Professional Experience
 
-### AI Generalist Expert (Contract) - Mercor (2026 - Current) — OMIT FROM APPLICATIONS
-Remote. <!-- Internal only until Adam re-enables. -->
-- Contractor marketplace work evaluating and improving model outputs for a frontier AI lab under NDA.
-- Frame as contract evaluation work. Never as a staff engineering, research scientist, or "AI lab employee" title.
-- **Do not put on CVs/cover letters for now.**
+### AI Generalist Expert (Contract) - Mercor (2026 - Current)
+Remote. List this on CVs and cover letters.
+- Application bullet: Providing expertise in AI to improve models for a top AI lab.
+- Keep the title he holds. Do not upgrade it to staff engineer, research scientist, or AI-lab employee.
 
 ### AI Search Quality Evaluator - Activus Connect (Tech Mahindra) (Nov 2025 - June 2026)
 Remote. Tech Mahindra acquired Activus Connect in December 2021; listing the parent in parentheses is accurate. LinkedIn currently lists the employer as Tech Mahindra.
@@ -88,7 +86,7 @@ Additional portfolio projects (do not feature on a one-page resume unless a post
 
 ## Technical Skills
 
-Resume-facing subset lives in `documents/cv/adam_colyer_resume.txt` (synced from OneDrive PDF; Mercor omitted). Broader inventory below. Prefer the resume subset on applications unless a posting names a skill that is honestly in this inventory.
+Resume-facing subset lives in `documents/cv/adam_colyer_resume.txt` (Mercor included). Broader inventory below. Prefer the resume subset on applications unless a posting names a skill that is honestly in this inventory.
 
 **Resume positioning (from live PDF summary):** Full-stack engineer (TypeScript/React/Python); five years selling technical products to IT buyers and cities; secure authorization; structured data models so AI answers from user data while keeping sensitive info off cloud AI providers; DCI-P3 color, fluid animation, light/dark themes across viewports / system settings; daily Claude Code, Cursor, Antigravity; requirements gathering with technical and non-technical teams.
 

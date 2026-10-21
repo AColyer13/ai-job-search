@@ -13,6 +13,9 @@ Options:
     --skip a,b,c     skip these query/source names
     --workers N      parallel workers for CLI queries (default 4)
 
+`all` runs the engineering queries and the technical-sales queries. The printed
+list is jobs not already in seen_jobs.json.
+
 Stdlib only. Paths resolve relative to this file, so it works from any cwd.
 """
 import argparse
@@ -108,12 +111,22 @@ SENIOR_RE = re.compile(
 INTERN_RE = re.compile(r"\b(intern|internship|co-op|coop)\b", re.I)
 AI_RE = re.compile(r"\b(ai|ml|llm|genai|machine learning|prompt|rag|langchain|agent)\b", re.I)
 FS_RE = re.compile(
-    r"\b(full[- ]?stack|software engineer|software developer|web developer|"
-    r"frontend|front-end|backend|react|typescript|python)\b",
+    r"\b(full[- ]?stack|software engineer|software developer|application developer|"
+    r"web developer|frontend|front-end|backend|react|typescript|python)\b",
     re.I,
 )
+# Bridge titles cover the three technical-sales families the scrape keeps
+# searching: TSR / technical sales consultant (quota), SE / solutions engineer
+# (technical win), and pre-sales consultant / solutions architect (advisory).
+# "architect" is also in SENIOR_RE, so a plain "Solutions Architect" scores
+# medium. A bare "Software Architect" or "Cloud Architect" is not a bridge
+# title and stays low.
 BRIDGE_RE = re.compile(
-    r"\b(solutions engineer|sales engineer|technical account|customer engineer|"
+    r"\b(solutions engineer|sales engineer|"
+    r"technical sales (?:representative|consultant|rep|specialist|trainee)|"
+    r"pre[-\s]?sales (?:consultant|engineer)|"
+    r"solutions consultant|solutions architect|"
+    r"technical account|customer engineer|"
     r"forward deployed|implementation engineer|implementation consultant|"
     r"implementation specialist)\b",
     re.I,
@@ -122,10 +135,18 @@ ENTRY_RE = re.compile(
     r"\b(junior|jr\.?|entry[- ]level|associate software|software engineer i\b|software engineer 1\b|new grad|early career|graduate)\b",
     re.I,
 )
+# Junior QA only. He has Playwright in CI and no QA job title, so a plain
+# "QA Engineer" or "SDET" stays medium and a senior title stays low.
+QA_RE = re.compile(
+    r"\b(qa|sdet|quality assurance|software tester)\b",
+    re.I,
+)
 # Broad title pre-filter for fetch-all HTTP sources (fit() does the real triage later).
 TECH_TITLE_RE = re.compile(
     r"\b(engineer|developer|software|full[- ]?stack|frontend|front-end|backend|"
-    r"ai\b|ml\b|llm|machine learning|data scien|devops|solutions|technical account)\b",
+    r"ai\b|ml\b|llm|machine learning|data scien|devops|solutions|technical account|"
+    r"technical sales|pre[-\s]?sales|implementation|"
+    r"qa\b|quality assurance|software tester|sdet)\b",
     re.I,
 )
 
@@ -203,6 +224,96 @@ def loc_tier(loc, work_mode=None):
     return "unknown"
 
 
+_REMOTE_FILLER_RE = re.compile(
+    r"\b(remote|united states of america|united states|u\.s\.a\.|u\.s\.|usa|us)\b",
+    re.I,
+)
+_ELSEWHERE_RE = re.compile(
+    r"(?:based on our campus in|based in|located in|requires relocation to(?: the area in)?|"
+    r"must be located in|must reside in)\s+([^.]{0,160})",
+    re.I,
+)
+
+
+def _generic_us_remote(loc):
+    """True for a US-remote line that does not name another city or state."""
+    low = (loc or "").lower().strip()
+    if not low or not re.search(r"\b(remote|united states|usa|u\.s\.|us)\b", low):
+        return False
+    cleaned = _REMOTE_FILLER_RE.sub(" ", low)
+    cleaned = re.sub(r"[,()/.\-]", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned in ("", "canada")
+
+
+def _card_in_requested_location(loc, work_mode=None):
+    """Twin Cities list, Gulfport–Biloxi, or US remote with no other city."""
+    low = (loc or "").lower()
+    if re.search(r"\bdayton\b", low) and not re.search(r"\bminnesota\b|\bmn\b", low):
+        return False
+    tier = loc_tier(loc, work_mode)
+    if tier in ("mn", "ms"):
+        return True
+    if _generic_us_remote(low):
+        return True
+    if (work_mode or "").lower() == "remote" and not low:
+        return True
+    return False
+
+
+def _required_elsewhere(description):
+    """City the posting itself requires, when that city is outside the list."""
+    if not description:
+        return ""
+    for match in _ELSEWHERE_RE.finditer(description):
+        phrase = re.split(r"\s+and\s+", match.group(1), maxsplit=1)[0].strip(" ,;:-")
+        if not phrase:
+            continue
+        if re.search(r"\btime zones?\b", phrase, re.I):
+            continue
+        if _generic_us_remote(phrase) or _card_in_requested_location(phrase, "remote"):
+            continue
+        if not (_region_code(phrase.lower()) or re.search(r",\s*[A-Za-z]", phrase)):
+            continue
+        place = re.search(
+            r"([A-Za-z][A-Za-z .'-]{1,40},\s*(?:[A-Z]{2}|[A-Za-z][a-z]+))",
+            phrase,
+        )
+        return place.group(1).strip() if place else phrase[:80]
+    return ""
+
+
+def location_high_block(loc, work_mode=None, description=None):
+    """Why this job cannot be high, or None when the location is on the list."""
+    elsewhere = _required_elsewhere(description)
+    if elsewhere:
+        return f"the posting requires {elsewhere}"
+    if _card_in_requested_location(loc, work_mode):
+        return None
+    shown = (loc or "").strip() or "not listed"
+    return f"the card location is {shown}"
+
+
+def cap_high_for_location(job):
+    """Drop high to medium when the job is outside the requested locations."""
+    capped_before = job.get("fit_before_location") == "high"
+    if (job.get("fit") or "").lower() != "high" and not capped_before:
+        return job
+    block = location_high_block(
+        job.get("location"), job.get("work_mode"), job.get("description")
+    )
+    if not block:
+        if capped_before:
+            job["fit"] = "high"
+        job.pop("fit_before_location", None)
+        job.pop("location_block", None)
+        return job
+    job["fit_before_location"] = "high"
+    job["location_block"] = block
+    job["fit"] = "medium"
+    return job
+
+
 # Description-level demotion signals. These only ever move a title-based
 # verdict down a tier (high->medium->low) - they never promote, since a title
 # match is a stronger, more deliberate signal than free text in a description.
@@ -248,6 +359,8 @@ def _fit_from_title(title, skills=None):
     if re.search(r"\b(full[- ]?stack)\b", t, re.I) and not is_senior:
         return "high"
     if FS_RE.search(t) and not is_senior:
+        return "medium"
+    if QA_RE.search(t) and not is_senior:
         return "medium"
     skills = skills or []
     sl = " ".join(skills).lower()
@@ -885,6 +998,8 @@ def cmd_process(args):
         f = fit(j.get("title"), j.get("skills"), j.get("description"))
         j["tier"] = tier
         j["fit"] = f
+        cap_high_for_location(j)
+        f = j["fit"]
         all_rows.append({"url": j.get("url"), "fit": f, "tier": tier})
         if tier not in ("mn", "remote", "ms"):
             skipped_loc += 1
@@ -918,13 +1033,19 @@ def cmd_process(args):
                    "seen": skipped_seen, "loc_skip": skipped_loc,
                    "health": health}, f, indent=2, ensure_ascii=False)
 
-    presentable = [j for j in new if j["fit"] in ("high", "medium")]
+    import daily_digest
+
+    presentable, left_out = daily_digest.presentable_split(new)
     print(f"\n=== PRESENTABLE ({len(presentable)}) ===")
     for i, j in enumerate(presentable, 1):
         print(f"{i:2}. [{j['fit']}/{j['tier']}] {j.get('title')}")
         salary_suffix = f" | {j['salary']}" if j.get("salary") else ""
         print(f"    {j.get('company')} | {j.get('location')} | {j.get('date')}{salary_suffix}")
         print(f"    {j.get('url')}")
+    if left_out:
+        print(f"\n=== LEFT OUT ({len(left_out)}) ===")
+        for j, reason in left_out:
+            print(f"  {reason} | {j.get('title')} | {j.get('company')}")
     return 0
 
 
@@ -944,15 +1065,14 @@ def cmd_update_seen(args):
 
     doc = load_seen()
     seen = doc["seen"]
+    seen_keys = {_url_key(k) for k in seen}
     jobs, _ = _load_run_jobs(rd)
 
     added = 0
     for j in jobs:
         url = j.get("url") or ""
-        if not url or url in seen:
-            continue
-        base = url.split("?")[0]
-        if any(k.split("?")[0] == base for k in seen):
+        key = _url_key(url)
+        if not url or url in seen or key in seen_keys:
             continue
         f = fit_by_url.get(url) or fit(j.get("title"), j.get("skills"), j.get("description"))
         status = "new" if url in new_urls and f in ("high", "medium") else "skipped"
@@ -965,6 +1085,7 @@ def cmd_update_seen(args):
             "status": status,
             "portal": j.get("portal"),
         }
+        seen_keys.add(key)
         added += 1
 
     save_seen(doc)
@@ -997,14 +1118,23 @@ def cmd_expire(args):
 # ---------------------------------------------------------------------------
 
 def cmd_present(args):
-    seen = load_seen()["seen"]
-    rows = [v for v in seen.values() if v.get("status") == "new"]
+    """List the 14-day Word window, not every status=new row in seen_jobs.json."""
+    import daily_digest
+
+    store = daily_digest.load_store()
+    jobs = list(store.values())
+    daily_digest.apply_location_caps(jobs)
+    rows = daily_digest.listable(jobs)
     order = {"high": 0, "medium": 1, "low": 2}
-    rows.sort(key=lambda v: (order.get(v.get("fit"), 9), v.get("first_seen") or ""))
-    print(f"ACTIONABLE ({len(rows)}): ")
+    rows.sort(key=lambda v: (
+        order.get((v.get("fit") or "").lower(), 9),
+        v.get("found_on") or "",
+        v.get("title") or "",
+    ))
+    print(f"ACTIONABLE ({len(rows)} in the {daily_digest.WINDOW_DAYS}-day list):")
     for i, v in enumerate(rows, 1):
         print(f"{i:2}. [{v.get('fit')}] {v.get('title')} - {v.get('company')}")
-        print(f"    first_seen={v.get('first_seen')} portal={v.get('portal')}")
+        print(f"    found_on={v.get('found_on')} {v.get('location') or ''}")
         print(f"    {v.get('url')}")
     return 0
 
@@ -1013,7 +1143,11 @@ def cmd_present(args):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["search", "process", "update-seen", "expire", "present", "all"])
+    ap.add_argument(
+        "command",
+        nargs="?",
+        choices=["search", "process", "update-seen", "expire", "present", "all"],
+    )
     ap.add_argument("--run-dir")
     ap.add_argument("--only")
     ap.add_argument("--skip")
@@ -1021,6 +1155,13 @@ def main():
     ap.add_argument("--days", type=int, default=21, help="expire threshold in days")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
+
+    if not args.command:
+        print("Write today's list with:")
+        print("    python job_scraper/daily_digest.py")
+        print("The Word file is daily/latest.docx.")
+        print("The page is reports/application-dashboard.html.")
+        return 2
 
     if args.command == "search":
         return cmd_search(args)
