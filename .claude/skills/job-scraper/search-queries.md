@@ -41,13 +41,16 @@ site:linkedin.com/jobs "LLM engineer" OR "AI application engineer" junior
 site:linkedin.com/jobs "prompt engineer" OR "AI agent" developer entry level
 ```
 
-### Priority 3: Adjacent roles - sales-to-engineering bridge
+### Priority 3: Adjacent roles - technical sales and the sales-to-engineering bridge
 
-Roles that value both his technical sales background and coding skills.
+Keep searching these three families alongside the engineering queries. Titles blur by company. TSR owns the commercial cycle and the quota. SE owns the technical win and usually has no personal quota. Pre-sales consultant / solutions architect is the advisory side.
 
 ```
 site:linkedin.com/jobs "solutions engineer" React OR Python
 site:linkedin.com/jobs "sales engineer" technical demo software
+site:linkedin.com/jobs "technical sales representative" OR "technical sales consultant"
+site:linkedin.com/jobs "pre-sales consultant" OR "presales consultant" OR "solutions consultant"
+site:linkedin.com/jobs "solutions architect" pre-sales OR presales
 site:linkedin.com/jobs "technical account manager" full stack
 site:linkedin.com/jobs "implementation engineer" OR "implementation consultant" software
 ```
@@ -61,6 +64,10 @@ site:linkedin.com/jobs "junior developer" React OR Next.js
 site:linkedin.com/jobs "associate software engineer"
 site:linkedin.com/jobs "software engineer I" full stack
 site:linkedin.com/jobs "frontend developer" OR "web developer" junior React
+site:linkedin.com/jobs "software developer" OR "application developer" OR "python developer"
+site:linkedin.com/jobs "full stack developer" OR "backend developer"
+site:linkedin.com/jobs "customer engineer"
+site:linkedin.com/jobs "junior qa" OR "junior quality assurance" OR "junior software tester"
 ```
 
 ## Location Filter

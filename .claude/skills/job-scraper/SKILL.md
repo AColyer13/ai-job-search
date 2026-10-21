@@ -200,15 +200,19 @@ Scraper-based portal CLIs rot silently: when a portal changes its markup, the pa
 
 ### Step 5: Present Results
 
-Present new jobs in a table sorted by fit (high first). When Step 1b skipped
-portals (`enabled: false`), report them with the `skipped (disabled):` line below
-so opting one out stays visible rather than silent; omit the line when nothing
-was skipped. When Step 4.75 found a portal degraded, broken, or inconclusive,
-add one `health:` line per suspect portal (healthy portals get no line); after
-the report, offer to set that portal's `enabled: false` so `/scrape` stops
-running it (and covers it via the Step 1c fallback) until it is fixed - only
-edit the toggle with the user's confirmation, and never edit anything else in
-the skill.
+List **every** new job from the run. Do not drop lows, and do not replace the
+list with a short curated set. Sort high, then medium, then low. Each row must
+include the role, the company, where it is, a one-sentence why, the fit, and a
+link to the posting itself. The why comes from that record's title, skills, or
+description. If the posting body was not opened, say so in the why rather than
+inventing requirements. When Step 1b skipped portals (`enabled: false`), report
+them with the `skipped (disabled):` line below so opting one out stays visible
+rather than silent; omit the line when nothing was skipped. When Step 4.75
+found a portal degraded, broken, or inconclusive, add one `health:` line per
+suspect portal (healthy portals get no line); after the report, offer to set
+that portal's `enabled: false` so `/scrape` stops running it (and covers it via
+the Step 1c fallback) until it is fixed - only edit the toggle with the user's
+confirmation, and never edit anything else in the skill.
 
 ```
 ## New Job Matches - YYYY-MM-DD
@@ -220,9 +224,9 @@ skipped (disabled): <portal-name>, <portal-name>
 health: <portal-name> - degraded (company null on all 12 results); parsing anchors in .agents/skills/<portal-name>/url-reference.md
 health: <portal-name> - broken (0 results for the SKILL.md test query and a broader retry); parsing anchors in .agents/skills/<portal-name>/url-reference.md
 
-| # | Fit | Title | Company | Location | Deadline | URL |
-|---|-----|-------|---------|----------|----------|-----|
-| 1 | High | ... | ... | ... | ... | [Link](...) |
+| # | Fit | Role | Company | Where | Why | Posting |
+|---|-----|------|---------|-------|-----|---------|
+| 1 | High | ... | ... | ... | One sentence from the scrape record or the opened posting. | [Posting](https://...) |
 
 If Step 2.5 flagged a mass-posting pattern, note it in the Title cell (e.g. "Frontend Developer (posted in 6 cities)") rather than burying it - it's a signal the user should see at a glance, not just in the detail highlights below.
 

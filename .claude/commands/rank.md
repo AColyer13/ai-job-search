@@ -12,7 +12,7 @@ Follow these steps **in order**.
 
 `$ARGUMENTS` may contain:
 
-- Nothing → rank all jobs with status `new` in `job_scraper/seen_jobs.json`
+- Nothing → rank the jobs in the 14-day window `daily/latest.json` (the same list as `daily/latest.docx`), not every `status=new` row in `job_scraper/seen_jobs.json`
 - A focus area (e.g. `/rank data science`) → rank only jobs whose title or stored fit-notes match the focus
 - `--all` → re-rank every job that has not been applied to, including previously ranked ones (useful after the profile changes)
 - `--top <N>` → shortlist size (default 5)
@@ -21,10 +21,10 @@ Follow these steps **in order**.
 
 ## Step 1: Load State
 
-1. Read `job_scraper/seen_jobs.json`. If the file is missing or has no entries, tell the user to run `/scrape` first and stop.
+1. Read `daily/latest.json`. Rank `jobs` in that window after the same list rules as the Word file: entry-level engineering only, no exclusive engineering-degree requirement, one card per Oracle requisition, and a high grade only in a requested location. If the file is missing or has no jobs, tell the user to run the daily scrape first and stop. Do not rank the full `job_scraper/seen_jobs.json` ledger. That file is the dedup record.
 2. Read `job_search_tracker.csv`. Build the exclusion set: any company+role already in the tracker is out of scope regardless of flags - it has been applied to or consciously tracked.
-3. Select candidates: entries with status `new` (or all non-applied entries with `--all`), minus the exclusion set, filtered by the focus area if one was given.
-4. If no candidates remain, say so ("Nothing new to rank - run /scrape to find fresh postings") and stop.
+3. Select candidates from that window, minus the exclusion set, filtered by the focus area if one was given. `--all` re-ranks the window, including jobs already given a title grade. It does not pull in expired rows from `seen_jobs.json`.
+4. If no candidates remain, say so ("Nothing in the 14-day list to rank.") and stop.
 5. Read the scoring framework and profile **once**:
    - `.claude/skills/job-application-assistant/04-job-evaluation.md`
    - `.claude/skills/job-application-assistant/01-candidate-profile.md`

@@ -29,8 +29,35 @@ import pipeline  # noqa: E402
     ("Embedded Firmware Engineer", "low"),
     ("Senior Software Engineer 2027", "low"),
     ("Web Developer", "medium"),
+    ("Application Developer", "medium"),
+    ("Junior Web Developer", "high"),
+    ("Junior Application Developer", "high"),
+    ("Python Developer", "medium"),
+    ("Backend Developer", "medium"),
+    ("Customer Engineer", "high"),
+    ("Junior QA Engineer", "medium"),
+    ("Junior Quality Assurance Analyst", "medium"),
+    ("Software Tester", "medium"),
+    ("Senior QA Engineer", "low"),
+    ("Senior SDET", "low"),
     ("Implementation Engineer", "high"),
     ("Implementation Consultant", "high"),
+    ("Technical Sales Representative", "high"),
+    ("Technical Sales Consultant", "high"),
+    ("Technical Sales Rep", "high"),
+    ("Technical Sales Trainee (Minneapolis)", "high"),
+    ("Senior Technical Sales Consultant", "medium"),
+    ("Pre-Sales Consultant", "high"),
+    ("Presales Consultant", "high"),
+    ("Pre Sales Consultant", "high"),
+    ("Presales Engineer", "high"),
+    ("Solutions Consultant", "high"),
+    ("Solutions Architect", "medium"),
+    ("Senior Solutions Architect", "medium"),
+    ("Associate Solutions Architect", "high"),
+    ("Director, Solutions Architect", "low"),
+    ("Software Architect", "low"),
+    ("Cloud Architect", "low"),
 ])
 def test_fit(title, expected):
     assert pipeline.fit(title) == expected
@@ -117,6 +144,59 @@ def test_loc_tier(loc, wm, expected):
     assert pipeline.loc_tier(loc, wm) == expected
 
 
+def test_presentable_list_uses_the_word_filters():
+    import daily_digest
+
+    shown, left = daily_digest.presentable_split([
+        {"title": "Full Stack Developer", "fit": "high", "company": "Instient", "url": "https://example.com/instient"},
+        {"title": "Sales Engineer", "fit": "medium", "company": "Lightpath", "location": "Richmond, VA, USA", "url": "https://example.com/lightpath"},
+    ])
+    assert [job["title"] for job in shown] == ["Sales Engineer"]
+    assert left[0][1] == "engineering level"
+    assert left[0][0]["company"] == "Instient"
+
+
+def test_missing_command_points_at_the_daily_list(capsys, monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["pipeline.py"])
+    code = pipeline.main()
+    assert code == 2
+    out = capsys.readouterr().out
+    assert "daily_digest.py" in out
+    assert "latest.docx" in out
+
+
+def test_high_requires_a_requested_location():
+    assert pipeline.location_high_block("Minneapolis, MN", None) is None
+    assert pipeline.location_high_block("Eden Prairie, MN", None) is None
+    assert pipeline.location_high_block("Biloxi, MS", None) is None
+    assert pipeline.location_high_block("Remote", "remote") is None
+    assert pipeline.location_high_block("United States", "remote") is None
+    assert pipeline.location_high_block("Remote - Canada, USA", "remote") is None
+    assert pipeline.location_high_block("Richmond, VA, USA", "remote")
+    assert pipeline.location_high_block("Farmington, NM, United States", "remote")
+    assert pipeline.location_high_block("Austin, TX", "remote")
+    assert pipeline.location_high_block("Dayton, Marengo County", None)
+    madison = (
+        "Please note that this position is based on our campus in Madison, WI, "
+        "and requires relocation to the area."
+    )
+    assert "Madison, WI" in pipeline.location_high_block("Biloxi, MS", None, madison)
+    zones = "This role is based in Mountain, Central, or Eastern time zones."
+    assert pipeline.location_high_block("United States of America", "remote", zones) is None
+    job = {
+        "title": "Sales Engineer",
+        "fit": "high",
+        "location": "Richmond, VA, USA",
+        "work_mode": "remote",
+    }
+    pipeline.cap_high_for_location(job)
+    assert job["fit"] == "medium"
+    assert job["fit_before_location"] == "high"
+    local = {"title": "Technical Sales Trainee", "fit": "high", "location": "Minneapolis, MN"}
+    pipeline.cap_high_for_location(local)
+    assert local["fit"] == "high"
+
+
 # --- title filters ----------------------------------------------------------
 
 @pytest.mark.parametrize("title,keep", [
@@ -126,6 +206,15 @@ def test_loc_tier(loc, wm, expected):
     ("Desarrollador Full Stack", False),
     ("Ingeniero de Inteligencia Artificial", False),
     ("Barista", False),
+    ("Technical Sales Representative", True),
+    ("Technical Sales Consultant", True),
+    ("Pre-Sales Consultant", True),
+    ("Presales Consultant", True),
+    ("Solutions Architect", True),
+    ("Implementation Consultant", True),
+    ("Junior QA Engineer", True),
+    ("Quality Assurance Analyst", True),
+    ("Application Developer", True),
 ])
 def test_keep_title(title, keep):
     assert pipeline._keep_title(title) == keep
@@ -191,6 +280,35 @@ def test_already_does_not_collide_on_shared_path_distinct_query_id():
         {"url": "https://news.ycombinator.com/item?id=222", "company": "Beta", "title": "Frontend Engineer"},
         urls, url_keys, ids, ct,
     )
+
+
+def test_update_seen_keeps_distinct_ids_and_collapses_tracking(tmp_path, monkeypatch):
+    seen_path = tmp_path / "seen_jobs.json"
+    seen_path.write_text(json.dumps({"seen": {}}), encoding="utf-8")
+    monkeypatch.setattr(pipeline, "SEEN_PATH", seen_path)
+    rd = tmp_path / "run"
+    rd.mkdir()
+    hn1 = "https://news.ycombinator.com/item?id=111"
+    hn2 = "https://news.ycombinator.com/item?id=222"
+    ad1 = "https://www.adzuna.com/land/ad/555?utm_source=x"
+    ad2 = "https://www.adzuna.com/land/ad/555?utm_source=y"
+    urls = [hn1, hn2, ad1, ad2]
+    (rd / "sample.json").write_text(json.dumps({"results": [
+        {"url": hn1, "title": "Backend Engineer", "company": "Acme"},
+        {"url": hn2, "title": "Frontend Engineer", "company": "Beta"},
+        {"url": ad1, "title": "SWE", "company": "Acme"},
+        {"url": ad2, "title": "SWE", "company": "Acme"},
+    ]}), encoding="utf-8")
+    (rd / "candidates.json").write_text(json.dumps({
+        "new": [{"url": u} for u in urls],
+        "all": [{"url": u, "fit": "high"} for u in urls],
+    }), encoding="utf-8")
+
+    args = type("A", (), {"run_dir": str(rd)})()
+    assert pipeline.cmd_update_seen(args) == 0
+    stored = json.loads(seen_path.read_text(encoding="utf-8"))["seen"]
+    assert hn1 in stored and hn2 in stored
+    assert (ad1 in stored) ^ (ad2 in stored)
 
 
 def test_already_still_collapses_tracking_param_variants():

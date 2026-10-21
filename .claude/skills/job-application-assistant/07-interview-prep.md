@@ -51,10 +51,10 @@ Keep answers to 1-2 minutes. Be specific. End with what you learned or would do 
 **What happened:** Built practice tools for estate attorneys (client files, filing deadlines, per-case change log) with an assistant that answers from app data only after names and IDs are stripped. Do not send interviewers to the Vercel demo until the production debug banner is gone.
 **Why it matters:** Good for "how do you balance AI capability with data privacy/compliance" or "design a system handling sensitive data" questions.
 
-### Mercor: contract model-eval work — OMIT FROM APPLICATIONS FOR NOW
-**Source:** Mercor, AI Generalist Expert (contractor marketplace, NDA) — kept for internal interview prep only; do not volunteer on applications until Adam re-enables.
-**What happened:** Evaluating and improving model outputs for a frontier AI lab under NDA.
-**Why it matters:** Good for "how do you evaluate LLM quality" questions if they ask about current work. Keep it as contract eval work, not a staff research job. Prefer Activus (Google rubrics, hallucinations, sourcing) as the public, specific example.
+### Mercor: AI Generalist Expert
+**Source:** Mercor, AI Generalist Expert (2026–Current, remote). On applications.
+**What happened:** Providing expertise in AI to improve models for a top AI lab.
+**Why it matters:** Good for "what are you doing now" and "how do you evaluate LLM quality." Keep the title he holds. Do not upgrade it to a staff research job. Activus is the specific public example for rubrics, hallucinations, and sourcing.
 **S/T/A/R stub:**
 - Situation:
 - Task:

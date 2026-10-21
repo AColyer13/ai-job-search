@@ -58,7 +58,7 @@ Does work history align with what they're looking for?
 | 40-59 | Adjacent experience, would need to make the case |
 | 0-39 | Unrelated experience |
 
-**Strong:** Shipped full-stack/AI projects with public domains (MissionCtrl, Valley Forge Automotive) plus Legal Eagle and Stardust; AI evaluation/quality contract (Activus Connect / Google quality rubrics). Do not count Mercor toward application materials until Adam re-enables it.
+**Strong:** Shipped full-stack/AI projects with public domains (MissionCtrl, Valley Forge Automotive) plus Legal Eagle and Stardust; current Mercor contract (AI Generalist Expert); AI evaluation/quality contract (Activus Connect / Google quality rubrics). Use Mercor's application line as written. Do not upgrade that title.
 **Moderate (transferable, not engineering):** 5 years of B2B technical sales (Citizen Observer, Digital River, INRY, Epicor) - complex sales-cycle ownership, 100+ technical product demonstrations, cross-functional stakeholder coordination with IT/engineering teams. Frame as transferable communication/coordination skills, never as engineering or PM experience he didn't hold.
 **Entry-level:** Essentially all traditional software engineering roles - Adam is a career-changer (bootcamp completed Feb 2026) and should be evaluated and positioned as an entry-level/junior engineer, not a mid-level one, regardless of his 5+ years of total work experience.
 
@@ -103,7 +103,7 @@ Does this role advance career goals and contain tasks that energize?
 - Non-task factors: not yet specified - ask Adam before assuming
 
 **Life situation alignment:** Consider personal constraints:
-- **Security**: Actively job searching. Activus Connect ended June 2026. Mercor exists but is omitted from applications for now. Do not assume financial urgency; ask Adam if this should factor into evaluation
+- **Security**: Actively job searching. Activus Connect ended June 2026. Mercor is a current contract and is listed on applications. Do not assume financial urgency; ask Adam if this should factor into evaluation
 - **Flexibility**: Prefers remote/hybrid; see location tiers in `01-candidate-profile.md` / CLAUDE.md Deal-breakers section for the acceptable commute/relocation radius
 - **Professional development**: Actively building a production-engineering track record post-bootcamp to support the sales-to-engineering transition narrative
 

@@ -18,7 +18,7 @@ This repo is a job application workspace. The AI agent running this session (Cla
 - **Languages:** English (native)
 - **CV language:** English
 
-- **Status:** Actively job searching. Activus Connect contract ended June 2026. Do **not** list Mercor on applications until Adam re-enables it.
+- **Status:** Actively job searching. Activus Connect contract ended June 2026. Mercor (AI Generalist Expert) is current and belongs on applications.
 - **LinkedIn headline:** "Message me to see my Portfolio! Over the past several years I closed deals across..." <!-- full headline truncated on public LinkedIn view -->
 - **Public proof:** https://acolyer13.github.io/WebPortfolio/ · https://missionctrl.org/ · https://valleyforgeautomotive.org/ · https://cursor.com/@colyer
 
@@ -28,14 +28,14 @@ This repo is a job application workspace. The AI agent running this session (Cla
 
 ### Professional Experience
 <!-- Full detail with bullets in 01-candidate-profile.md -->
+- **AI Generalist Expert** (2026 - Current) - **Mercor** (Remote)
 - **AI Search Quality Evaluator** (Nov 2025 - June 2026) - **Activus Connect (Tech Mahindra)** (Remote)
 - **Account Executive** (Sep 2022 - Aug 2024) - **Citizen Observer** (St. Paul, MN)
 - **Sales Development Representative** (Jul 2021 - Jul 2022) - **Digital River** (Minnetonka, MN)
 - **Account Executive** (Oct 2020 - Jul 2021) - **INRY** (Eden Prairie, MN)
 - **Business Development Representative** (May 2019 - Jun 2020) - **Epicor Software** (St. Louis Park, MN)
-- <!-- OMIT FOR NOW: Mercor AI Generalist Expert (2026–Current). Internal note only in 01-candidate-profile.md. -->
 
-**Career transition note:** None of the paid roles above are software engineering titles. Activus is an AI-evaluation contract; the rest are sales/business-development. Adam is transitioning into software engineering via a full-stack bootcamp (Coding Temple, Feb 2026), that eval contract, and shipped independent full-stack/AI projects (MissionCtrl, Valley Forge Automotive, Legal Eagle, Stardust). When framing this history, present sales as **transferable skills** (complex B2B sales-cycle ownership, 100+ technical product demonstrations, cross-functional stakeholder coordination with IT/engineering teams). Never imply a software engineering, project-management, or staff-AI-lab title he did not hold. Canonical resume: `documents/cv/adam_colyer_resume.txt` (synced from OneDrive PDF; Mercor omitted).
+**Career transition note:** None of the paid roles above are software engineering titles. Mercor is a current contract as AI Generalist Expert. Activus is an AI-evaluation contract. The rest are sales/business-development. Adam is transitioning into software engineering via a full-stack bootcamp (Coding Temple, Feb 2026), those contracts, and shipped independent full-stack/AI projects (MissionCtrl, Valley Forge Automotive, Legal Eagle, Stardust). When framing this history, present sales as **transferable skills** (complex B2B sales-cycle ownership, 100+ technical product demonstrations, cross-functional stakeholder coordination with IT/engineering teams). Never imply a software engineering, project-management, or staff-AI-lab title he did not hold. Canonical resume: `documents/cv/adam_colyer_resume.txt`. The Mercor application line is: "Providing expertise in AI to improve models for a top AI lab."
 
 ### Technical Skills
 - **Primary:** React, Next.js, TypeScript, Python (FastAPI/Flask), Node.js/Express, AI/LLM integration (RAG, agents, prompt engineering, local/faster-whisper, Claude API and others), Auth (OAuth, JWT, RBAC, Presidio)
@@ -69,6 +69,7 @@ None.
 
 ### Target Sectors
 - Full-stack / AI engineering roles (entry-level given the career change), companies open to sales-to-engineering career-changers
+- Also search, going forward: Technical Sales Representative / Technical Sales Consultant (quota-carrying salesperson for complex products), Sales Engineer / Solutions Engineer (technical win on the deal, usually no personal quota), and Pre-Sales Consultant / Solutions Architect (solution design, scoping, proposals). Titles blur by company. These sit alongside the engineering search.
 - No specific target companies yet - open to suggestions
 
 ### Deal-breakers
