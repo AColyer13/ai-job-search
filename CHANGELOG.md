@@ -14,6 +14,7 @@ per-file diff commands.
 ## [Unreleased]
 
 ### Added
+- **Resume-aware scorer** (`job_scraper/scoring.py`). Grades now come from the posting text, not the title. `posting_text.py` opens each candidate's posting and the scorer checks required years (sales vs. technical), CS or engineering degree requirements with no alternative, clearance, and offshore or staffing firms against the resume. A job whose text was not read cannot be high. On the 230 jobs in `latest.json` this cut high from 38 to 15.
 - The morning list, the Word file, and `reports/application-dashboard.html` use one list. Unlabeled engineering titles are left out of the morning highlights, a board error page is not treated as a read posting, and the same Oracle requisition is one card.
 
 ### Fixed
