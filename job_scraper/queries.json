@@ -90,7 +90,7 @@
     "usajobs",
     "boards"
   ],
-  "jsearch": { "queries": ["solutions engineer", "sales engineer", "implementation consultant", "technical account manager", "junior software engineer", "associate software engineer"], "pages": 1, "date_posted": "3days" },
+  "jsearch": { "queries": ["solutions engineer", "sales engineer", "implementation consultant", "technical account manager", "junior software engineer"], "pages": 1, "date_posted": "3days", "runs_per_day": 1, "monthly_limit": 190 },
   "company_boards": [
     { "name": "Jamf", "platform": "greenhouse", "slug": "jamf" },
     { "name": "Sezzle", "platform": "greenhouse", "slug": "sezzle" }

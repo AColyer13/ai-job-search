@@ -661,12 +661,13 @@ def test_jsearch_is_skipped_without_a_key(monkeypatch):
         pipeline.src_jsearch()
 
 
-def test_jsearch_maps_a_result(monkeypatch):
+def test_jsearch_maps_a_result(monkeypatch, tmp_path):
     monkeypatch.setenv("RAPIDAPI_KEY", "k")
+    monkeypatch.setattr(pipeline, "SCRAPER_DIR", tmp_path)
     row = {"job_title": "Sales Engineer", "employer_name": "Acme", "job_city": "Edina", "job_state": "MN",
            "job_is_remote": False, "job_apply_link": "https://acme.com/j/1", "job_id": "abc",
            "job_posted_at_datetime_utc": "2026-10-21T10:00:00.000Z", "job_description": "Demo things."}
-    monkeypatch.setattr(pipeline, "_get_json", lambda url, headers=None: {"data": [row]})
+    monkeypatch.setattr(pipeline, "_get_json", lambda url, headers=None, timeout=None: {"data": [row]})
     out = pipeline.src_jsearch()
     assert out[0]["location"] == "Edina, MN" and out[0]["date"] == "2026-10-21" and out[0]["portal"] == "jsearch"
 
@@ -680,3 +681,24 @@ def test_collapse_store_prefers_the_employers_link():
     }
     assert daily_digest.collapse_store(store) == 1
     assert set(store) == {"gh", "other"}
+
+
+def test_jsearch_runs_once_a_day_by_default(monkeypatch, tmp_path):
+    monkeypatch.setenv("JSEARCH_API_KEY", "k")
+    monkeypatch.setattr(pipeline, "SCRAPER_DIR", tmp_path)
+    monkeypatch.setattr(pipeline, "_get_json", lambda url, headers=None, timeout=None: {"data": []})
+    assert pipeline.src_jsearch() == []
+    with pytest.raises(pipeline.SkipSource):
+        pipeline.src_jsearch()
+
+
+def test_jsearch_stops_at_the_monthly_limit(monkeypatch, tmp_path):
+    monkeypatch.setenv("JSEARCH_API_KEY", "k")
+    monkeypatch.setattr(pipeline, "SCRAPER_DIR", tmp_path)
+    monkeypatch.setattr(pipeline, "TODAY", "2026-10-22")
+    monkeypatch.setattr(pipeline, "_get_json", lambda url, headers=None, timeout=None: {"data": []})
+    (tmp_path / "jsearch_runs.json").write_text(json.dumps({"month": "2026-10", "requests": 188, "date": "2026-10-21", "count": 1}))
+    with pytest.raises(pipeline.SkipSource, match="monthly"):
+        pipeline.src_jsearch()
+    (tmp_path / "jsearch_runs.json").write_text(json.dumps({"month": "2026-09", "requests": 188}))
+    assert pipeline.src_jsearch() == []  # a new month starts a new budget

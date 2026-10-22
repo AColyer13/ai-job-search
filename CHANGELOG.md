@@ -14,7 +14,7 @@ per-file diff commands.
 ## [Unreleased]
 
 ### Added
-- Cross-site duplicate handling: one job on LinkedIn, an aggregator and the employer page is one row, with the employer link kept. JSearch source (needs `RAPIDAPI_KEY`) for Indeed, ZipRecruiter and Glassdoor results. FreeHire page cap is now 20.
+- Cross-site duplicate handling: one job on LinkedIn, an aggregator and the employer page is one row, with the employer link kept. JSearch source (needs `JSEARCH_API_KEY`) for Indeed, ZipRecruiter and Glassdoor results. FreeHire page cap is now 20.
 - `daily_digest.py --backfill N` searches the last N days and files each job under the day it was posted, rewriting those days' Word files. `pipeline.py search --window-days N` sets the window by hand. Search caps are now 5 pages for LinkedIn and 10 for FreeHire.
 - **Himalayas source** (`src_himalayas`), a remote US search API that returns full posting text. Workday postings are now read through their public JSON endpoint.
 - **Full-depth search, three runs a day.** `pipeline.py search` now reads every page of each LinkedIn and FreeHire query (up to `search_settings.max_pages` in `queries.json`), not just the first 10 or 20 results, and asks for postings since the last finished search (1 to 14 days, tracked in `job_scraper/last_run.json`) so a missed run widens the next one. The scheduled task runs at 8:00 AM, 1:00 PM and 6:00 PM; each run adds to the same `daily/YYYY-MM-DD.docx`, and cards show the time they were found.

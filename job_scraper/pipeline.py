@@ -429,8 +429,8 @@ def _get(url, headers=None, timeout=HTTP_TIMEOUT):
         return resp.read().decode("utf-8", errors="replace")
 
 
-def _get_json(url, headers=None):
-    return json.loads(_get(url, headers=headers))
+def _get_json(url, headers=None, timeout=HTTP_TIMEOUT):
+    return json.loads(_get(url, headers=headers, timeout=timeout))
 
 
 def _strip_html(text):
@@ -777,20 +777,48 @@ def src_jsearch():
     needs a RapidAPI key; the free plan allows about 200 requests a month, so
     `jsearch.queries` in queries.json is kept short.
     """
-    key = os.environ.get("RAPIDAPI_KEY")
-    if not key:
-        raise SkipSource("set RAPIDAPI_KEY to enable - JSearch on rapidapi.com (covers Indeed, ZipRecruiter, Glassdoor)")
+    key = os.environ.get("JSEARCH_API_KEY")
+    rapid_key = os.environ.get("RAPIDAPI_KEY")
+    if not (key or rapid_key):
+        raise SkipSource("set JSEARCH_API_KEY to enable - JSearch on openwebninja.com (covers Indeed, ZipRecruiter, Glassdoor)")
     cfg = json.loads(QUERIES_PATH.read_text(encoding="utf-8")).get("jsearch") or {}
     queries = cfg.get("queries") or ["solutions engineer", "sales engineer", "junior software engineer"]
-    headers = {"X-RapidAPI-Key": key, "X-RapidAPI-Host": "jsearch.p.rapidapi.com"}
+    # The free plan is 200 requests a month. Spend it on the first run of each day, and
+    # stop at `monthly_limit` (below 200, to leave room for manual tests).
+    budget_path = SCRAPER_DIR / "jsearch_runs.json"
+    try:
+        budget = json.loads(budget_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        budget = {}
+    month = TODAY[:7]
+    if budget.get("month") != month:
+        budget = {"month": month, "requests": 0}
+    if budget.get("date") == TODAY and budget.get("count", 0) >= int(cfg.get("runs_per_day", 1)):
+        raise SkipSource(f"already ran {budget['count']} time(s) today (jsearch.runs_per_day in queries.json)")
+    limit = int(cfg.get("monthly_limit", 190))
+    if budget["requests"] + len(queries) > limit:
+        raise SkipSource(f"monthly request budget used ({budget['requests']} of {limit})")
+    budget.update(date=TODAY, count=budget.get("count", 0) + 1 if budget.get("date") == TODAY else 1)
+    budget["requests"] += len(queries)
+    budget_path.write_text(json.dumps(budget), encoding="utf-8")
+    if key:  # OpenWebNinja, where JSearch is now hosted
+        base, headers = "https://api.openwebninja.com/jsearch/search", {"x-api-key": key}
+    else:
+        base = "https://jsearch.p.rapidapi.com/search"
+        headers = {"X-RapidAPI-Key": rapid_key, "X-RapidAPI-Host": "jsearch.p.rapidapi.com"}
     out = []
     for q in queries:
         url = (
-            "https://jsearch.p.rapidapi.com/search"
+            f"{base}"
             f"?query={urllib.parse.quote(q + ' in United States')}&page=1&num_pages={int(cfg.get('pages', 1))}"
             f"&date_posted={cfg.get('date_posted', 'week')}&country=us"
         )
-        for j in _get_json(url, headers=headers).get("data") or []:
+        try:
+            data = _get_json(url, headers=headers, timeout=90).get("data") or []  # a live search takes 20-30 s
+        except Exception as exc:
+            print(f"jsearch query {q!r} failed: {exc}", flush=True)
+            continue
+        for j in data:
             city = ", ".join(p for p in (j.get("job_city"), j.get("job_state")) if p)
             out.append({
                 "title": j.get("job_title"),

@@ -37,7 +37,7 @@ These are skipped silently until the env vars are set:
 |---|---|---|
 | Adzuna (US) | `ADZUNA_APP_ID`, `ADZUNA_APP_KEY` | https://developer.adzuna.com/ |
 | USAJobs (federal) | `USAJOBS_API_KEY`, `USAJOBS_EMAIL` | https://developer.usajobs.gov/ |
-| JSearch (RapidAPI) | `RAPIDAPI_KEY` | https://rapidapi.com/letscrape-6bRBa3QguO5/api/jsearch. Google for Jobs results: Indeed, ZipRecruiter, Glassdoor and others, through a licensed API. Free plan is about 200 requests a month; queries are in `queries.json` under `jsearch`. |
+| JSearch (OpenWebNinja) | `JSEARCH_API_KEY` (a RapidAPI key in `RAPIDAPI_KEY` also works) | https://www.openwebninja.com/api/jsearch. Google for Jobs results: Indeed, ZipRecruiter, Glassdoor and others, through a licensed API. Free plan is 200 requests a month. It runs once a day (first run), 5 queries, and stops at `monthly_limit` (190); the count is kept in `job_scraper/jsearch_runs.json`. Queries are in `queries.json` under `jsearch`. |
 
 ## Tier 4 — Free key, not yet implemented
 
