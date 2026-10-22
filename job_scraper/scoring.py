@@ -40,7 +40,7 @@ def _min_grade(a, b):
 
 # --- Title classification ---------------------------------------------------
 SENIOR_RE = re.compile(
-    r"\b(senior|sr\.?|staff|principal|lead|director|vice president|head of|vp\b|chief |"
+    r"\b(senior|sr\.?|experienced|staff|principal|lead|director|vice president|head of|vp\b|chief |"
     r"ii|iii|iv)\b|(?:engineer|developer|analyst)\s*[2-9]\b",
     re.I,
 )
@@ -60,7 +60,7 @@ ENGINEERING_RE = re.compile(
 )
 QA_RE = re.compile(r"\b(qa|sdet|quality assurance|software tester)\b", re.I)
 ENTRY_TITLE_RE = re.compile(
-    r"\b(junior|jr\.?|entry[- ]level|associate|trainee|new grad|early career|graduate|"
+    r"\b(junior|jr\.?|entry[- ]level|(?<!senior )(?<!sr )(?<!sr\. )(?<!experienced )associate|trainee|new grad|early career|graduate|"
     r"apprentice|(?:engineer|developer)\s+(?:i|1))\b",
     re.I,
 )
@@ -71,7 +71,13 @@ OFF_ROLE_RE = re.compile(
     r"data scien|network engineer|systems engineer|hardware|blockchain|"
     r"machine learning scientist|research scientist|\.net|java\b|c\+\+|golang|rust|"
     r"ios|android|salesforce developer|sap\b|mainframe|cobol|technician|inspector|"
-    r"(?:1st|2nd|3rd|first|second|third|night|weekend) shift|food|pharma\w*|laborator\w+)\b",
+    r"(?:1st|2nd|3rd|first|second|third|night|weekend) shift|food|pharma\w*|laborator\w+|retail|coordinator)\b",
+    re.I,
+)
+# Roles that need a clinical or licensed background, whatever the family.
+CLINICAL_RE = re.compile(
+    r"\b(clinical|nurse|nursing|radiolog\w+|patient care|medical (?:device|sales)|"
+    r"healthcare sales|ultrasound|pacs)\b",
     re.I,
 )
 
@@ -93,7 +99,7 @@ OFFSHORE_COMPANY_RE = re.compile(
 )
 STAFFING_COMPANY_RE = re.compile(
     r"\b(staffing|recruit(?:ing|ment|ers)?|talent|placement|pavago|programmers\.io|"
-    r"jobgether|lensa|dice|hays|robert half|insight global|teksystems|randstad|"
+    r"jobgether|lensa|snatch up|dice|hays|robert half|insight global|teksystems|randstad|"
     r"kforce|apex systems|cybercoders)\b",
     re.I,
 )
@@ -283,10 +289,17 @@ _CREDENTIAL_RE = re.compile(
 )
 
 
+_NOT_A_REQUIREMENT_RE = re.compile(
+    r"^\s*(professional development|learning|growth|benefits|perks)\b|"
+    r"\b(opportunit\w+ to|you(?:'ll| will) (?:learn|grow|get to))\b",
+    re.I,
+)
+
+
 def missing_skill(text):
     """First required line naming a language or tool you lack, or ''."""
     for line, preferred in sections(text):
-        if preferred or len(line) > 400:
+        if preferred or len(line) > 400 or _NOT_A_REQUIREMENT_RE.search(line):
             continue
         if (
             _LACKING_SKILL_RE.search(line)
@@ -386,6 +399,9 @@ def score(job):
     if family == "other":
         blockers.append("The title is not a sales-engineering, technical-sales, or entry engineering role.")
         return result(_LOW)
+    if CLINICAL_RE.search(title):
+        blockers.append("The title needs a clinical or licensed background.")
+        return result(_LOW)
     if OFFSHORE_COMPANY_RE.search(company):
         blockers.append(f"{company} looks like an offshore or outsourcing firm.")
         return result(_LOW)
@@ -417,7 +433,7 @@ def score(job):
         )
 
     technical_bridge = family == "bridge" and bool(
-        re.search(r"architect|forward deployed|technical consultant", title, re.I)
+        re.search(r"architect|forward deployed|technical consultant|implementation manager", title, re.I)
     )
     if technical_bridge:
         grade = _min_grade(grade, _MED)
@@ -512,6 +528,16 @@ def score(job):
     if grade == _HIGH and not reasons:
         reasons.append("Nothing in the posting conflicts with your background.")
     return result(grade, entry_evidence)
+
+
+def worth_reading(job):
+    """True when only the missing posting text keeps this title from a grade.
+
+    A title that is senior, off-role, an intern post or an offshore firm is low
+    no matter what the text says, so there is no reason to open it.
+    """
+    result = score({"title": job.get("title"), "company": job.get("company")})
+    return result["grade"] != _LOW or any("could not be read" in b for b in result["blockers"])
 
 
 def blockers_hold(blockers, ignore=("does not say junior or entry",)):

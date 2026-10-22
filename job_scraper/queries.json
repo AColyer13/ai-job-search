@@ -1,5 +1,13 @@
 {
   "comment": "Query matrix for job_scraper/pipeline.py. Each cli_query runs `bun run .agents/skills/<portal>/cli/src/cli.ts <args>`. Edit queries here, not in the pipeline. Portal must match a directory under .agents/skills/. Bridge families searched on purpose, alongside entry full-stack and AI: Sales Engineer / Solutions Engineer; Technical Sales Representative / Technical Sales Consultant; Pre-Sales Consultant / Solutions Consultant / Solutions Architect. LinkedIn stays capped at 20 results and 14 days per query.",
+  "search_settings": {
+    "min_days": 1,
+    "max_days": 14,
+    "max_pages": { "linkedin-search": 5, "freehire-search": 20 },
+    "page_size": { "linkedin-search": 10, "freehire-search": 50 },
+    "page_delay_seconds": 1.0
+  },
+  "search_settings_comment": "Each CLI query is read page by page. The posting window is the time since the last complete search rounded up to whole days (min_days to max_days), so runs a few hours apart ask for one day of postings. A query that hits max_pages prints CAPPED in the run log; raise max_pages for that portal if it does.",
   "cli_queries": [
     { "name": "li_msp_junior_swe", "portal": "linkedin-search", "args": ["search", "-l", "Minneapolis, Minnesota, United States", "-q", "junior software engineer", "--jobage", "14", "--limit", "20", "--format", "json"] },
     { "name": "li_msp_entry_swe", "portal": "linkedin-search", "args": ["search", "-l", "Minneapolis, Minnesota, United States", "-q", "entry level software engineer", "--jobage", "14", "--limit", "20", "--format", "json"] },
@@ -73,13 +81,16 @@
     "remotive",
     "arbeitnow",
     "jobicy",
+    "himalayas",
     "weworkremotely",
     "workingnomads",
     "hn_hiring",
     "adzuna",
+    "jsearch",
     "usajobs",
     "boards"
   ],
+  "jsearch": { "queries": ["solutions engineer", "sales engineer", "implementation consultant", "technical account manager", "junior software engineer", "associate software engineer"], "pages": 1, "date_posted": "3days" },
   "company_boards": [
     { "name": "Jamf", "platform": "greenhouse", "slug": "jamf" },
     { "name": "Sezzle", "platform": "greenhouse", "slug": "sezzle" }

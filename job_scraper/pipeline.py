@@ -20,10 +20,12 @@ Stdlib only. Paths resolve relative to this file, so it works from any cwd.
 """
 import argparse
 import json
+import math
 import os
 import re
 import subprocess
 import sys
+import time
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -442,6 +444,61 @@ NON_ENGLISH_TITLE_RE = re.compile(
 )
 
 
+# Sites that repost another employer's job. When the same job is also on the
+# employer's own page or ATS, the employer's link wins.
+AGGREGATOR_HOSTS = (
+    "linkedin.com", "himalayas.app", "adzuna.com", "whatjobs.com", "startup.jobs",
+    "echojobs.io", "wellfound.com", "builtin.com", "indeed.com", "ziprecruiter.com",
+    "glassdoor.com", "google.com/search", "governmentjobs.com", "arbeitnow.com",
+    "remoteok.com", "weworkremotely.com", "workingnomads.com", "jobicy.com", "remotive.com",
+)
+
+
+def _norm_words(text):
+    return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
+
+
+def dedupe_key(job):
+    """Same company, same title, same city (or both remote) is one job."""
+    company, title = _norm_words(job.get("company")), _norm_words(job.get("title"))
+    if not company or not title:
+        return None
+    loc = (job.get("location") or "").lower()
+    place = "remote" if "remote" in loc or job.get("work_mode") == "remote" else _norm_words(loc.split(",")[0])
+    return (company, title, place)
+
+
+def _is_aggregator(job):
+    url = (job.get("url") or "").lower()
+    return any(h in url for h in AGGREGATOR_HOSTS)
+
+
+def collapse_duplicates(jobs):
+    """One row per job across sites. Keeps the employer's own link over a repost.
+
+    Returns (kept, dropped_count). Each kept job lists the other portals that
+    carried it in `also_on`.
+    """
+    best, order = {}, []
+    for job in jobs:
+        key = dedupe_key(job)
+        if key is None:
+            order.append(job)
+            continue
+        cur = best.get(key)
+        if cur is None:
+            best[key] = job
+            order.append(job)
+            continue
+        if _is_aggregator(cur) and not _is_aggregator(job):
+            job.setdefault("also_on", []).extend(cur.get("also_on", []) + [cur.get("portal")])
+            order[order.index(cur)] = job
+            best[key] = job
+        else:
+            cur.setdefault("also_on", []).append(job.get("portal"))
+    return order, len(jobs) - len(order)
+
+
 class SkipSource(Exception):
     """Raised by a source that is not configured (e.g. missing API key)."""
 
@@ -544,6 +601,53 @@ def src_jobicy():
             "skills": j.get("jobIndustry") or [],
             "description": _strip_html(j.get("jobDescription"))[:2000],
         })
+    return out
+
+
+HIMALAYAS_QUERIES = (
+    "solutions engineer", "sales engineer", "solutions consultant", "implementation",
+    "technical account manager", "pre-sales", "forward deployed", "customer engineer",
+    "junior software engineer", "associate software engineer", "full stack", "junior developer",
+)
+
+
+def src_himalayas():
+    """Himalayas search API: remote-only, US, newest first, with the full posting text."""
+    out, seen = [], set()
+    for q in HIMALAYAS_QUERIES:
+        for page in (1, 2):
+            try:
+                data = _get_json(
+                    "https://himalayas.app/jobs/api/search?sort=recent&country=US"
+                    f"&page={page}&q={urllib.parse.quote(q)}"
+                )
+            except Exception:
+                break
+            jobs = data.get("jobs") or []
+            for j in jobs:
+                url = j.get("guid") or j.get("applicationLink")
+                if not url or url in seen or not _keep_title(j.get("title")):
+                    continue
+                seen.add(url)
+                try:
+                    date = datetime.fromtimestamp(int(j.get("pubDate") or 0)).date().isoformat()
+                except (TypeError, ValueError, OSError):
+                    date = ""
+                out.append({
+                    "title": j.get("title"),
+                    "company": j.get("companyName"),
+                    "location": "Remote (United States)",
+                    "date": date,
+                    "url": url,
+                    "id": url.rsplit("/", 1)[-1],
+                    "portal": "himalayas",
+                    "work_mode": "remote",
+                    "skills": [],
+                    "description": _strip_html(j.get("description"))[:8000],
+                })
+            if len(jobs) < 20:
+                break
+            time.sleep(0.5)
     return out
 
 
@@ -664,6 +768,44 @@ def src_adzuna():
                 "description": _strip_html(j.get("description"))[:2000],
             })
     return out
+
+
+def src_jsearch():
+    """Google-for-Jobs results (Indeed, ZipRecruiter, Glassdoor and others) through the JSearch API.
+
+    Those sites do not allow scraping, so this goes through a licensed aggregator. It
+    needs a RapidAPI key; the free plan allows about 200 requests a month, so
+    `jsearch.queries` in queries.json is kept short.
+    """
+    key = os.environ.get("RAPIDAPI_KEY")
+    if not key:
+        raise SkipSource("set RAPIDAPI_KEY to enable - JSearch on rapidapi.com (covers Indeed, ZipRecruiter, Glassdoor)")
+    cfg = json.loads(QUERIES_PATH.read_text(encoding="utf-8")).get("jsearch") or {}
+    queries = cfg.get("queries") or ["solutions engineer", "sales engineer", "junior software engineer"]
+    headers = {"X-RapidAPI-Key": key, "X-RapidAPI-Host": "jsearch.p.rapidapi.com"}
+    out = []
+    for q in queries:
+        url = (
+            "https://jsearch.p.rapidapi.com/search"
+            f"?query={urllib.parse.quote(q + ' in United States')}&page=1&num_pages={int(cfg.get('pages', 1))}"
+            f"&date_posted={cfg.get('date_posted', 'week')}&country=us"
+        )
+        for j in _get_json(url, headers=headers).get("data") or []:
+            city = ", ".join(p for p in (j.get("job_city"), j.get("job_state")) if p)
+            out.append({
+                "title": j.get("job_title"),
+                "company": j.get("employer_name"),
+                "location": "Remote (United States)" if j.get("job_is_remote") else (city or "United States"),
+                "date": (j.get("job_posted_at_datetime_utc") or "")[:10],
+                "url": j.get("job_apply_link") or j.get("job_google_link"),
+                "id": str(j.get("job_id") or ""),
+                "portal": "jsearch",
+                "work_mode": "remote" if j.get("job_is_remote") else None,
+                "skills": [],
+                "description": (j.get("job_description") or "")[:8000],
+            })
+    return out
+
 
 
 def src_usajobs():
@@ -794,10 +936,12 @@ HTTP_SOURCES = {
     "remotive": src_remotive,
     "arbeitnow": src_arbeitnow,
     "jobicy": src_jobicy,
+    "himalayas": src_himalayas,
     "weworkremotely": src_weworkremotely,
     "workingnomads": src_workingnomads,
     "hn_hiring": src_hn_hiring,
     "adzuna": src_adzuna,
+    "jsearch": src_jsearch,
     "usajobs": src_usajobs,
     "boards": src_boards,
 }
@@ -836,22 +980,134 @@ def selected(names, args):
 # search
 # ---------------------------------------------------------------------------
 
-def _run_cli_query(name, portal, args_list, out_dir):
+LAST_RUN_PATH = SCRAPER_DIR / "last_run.json"
+DEFAULT_SEARCH_SETTINGS = {
+    "min_days": 1,
+    "max_days": 14,
+    "max_pages": {"linkedin-search": 4, "freehire-search": 4},
+    "page_size": {"linkedin-search": 10, "freehire-search": 50},
+    "page_delay_seconds": 1.0,
+}
+
+
+def search_settings(cfg):
+    out = json.loads(json.dumps(DEFAULT_SEARCH_SETTINGS))
+    for key, value in (cfg.get("search_settings") or {}).items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key].update(value)
+        else:
+            out[key] = value
+    return out
+
+
+def search_window_days(settings, now=None):
+    """Days of postings to ask the portals for.
+
+    Based on how long ago the last complete search finished, rounded up to whole
+    days (the portals filter by day), with a day of overlap once a run has been
+    missed. Runs a few hours apart ask for one day. A computer that was off for
+    three days asks for five. Every page of those results is read. With no
+    record of a last run it uses the maximum.
+    """
+    now = now or datetime.now()
+    try:
+        last = datetime.fromisoformat(json.loads(LAST_RUN_PATH.read_text(encoding="utf-8"))["search_finished"])
+    except Exception:
+        return int(settings["max_days"])
+    elapsed_days = max((now - last).total_seconds(), 0) / 86400
+    days = math.ceil(elapsed_days) + (1 if elapsed_days >= 1 else 0)
+    return max(int(settings["min_days"]), min(int(settings["max_days"]), days))
+
+
+def record_search_finished(now=None):
+    stamp = (now or datetime.now()).isoformat(timespec="seconds")
+    LAST_RUN_PATH.write_text(json.dumps({"search_finished": stamp}), encoding="utf-8")
+
+
+def _set_flag(args_list, flag, value):
+    """args_list with `flag value` set, replacing any existing one."""
+    out, skip = [], False
+    for i, arg in enumerate(args_list):
+        if skip:
+            skip = False
+            continue
+        if arg == flag:
+            skip = True
+            continue
+        out.append(arg)
+    return out + [flag, str(value)]
+
+
+def _cli_page(portal, args_list):
     cli = ROOT / ".agents" / "skills" / portal / "cli" / "src" / "cli.ts"
     cmd = ["bun", "run", str(cli), *args_list]
-    print(f"START {name}", flush=True)
     p = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True,
                        encoding="utf-8", errors="replace")
-    (out_dir / f"{name}.json").write_text(p.stdout or "", encoding="utf-8")
-    if p.stderr:
-        (out_dir / f"{name}.err").write_text(p.stderr, encoding="utf-8")
-    try:
-        data = json.loads(p.stdout or "")
-        n = len(data.get("results") or [])
-        print(f"OK {name} n={n} exit={p.returncode}", flush=True)
-    except Exception as e:
-        print(f"FAIL {name} exit={p.returncode} parse={e} stderr={(p.stderr or '')[:300]}", flush=True)
-    return p.returncode
+    return p.returncode, p.stdout or "", p.stderr or ""
+
+
+def _result_key(r):
+    return r.get("url") or r.get("id") or json.dumps(r, sort_keys=True)[:200]
+
+
+def _run_cli_query(name, portal, args_list, out_dir, settings=None, jobage_days=None):
+    """Run one portal query, reading every page up to the portal's page cap.
+
+    A portal returns one page per call (10 LinkedIn cards, up to 50 FreeHire
+    rows). Reading only page 1 hid everything past the first page. Pages are
+    read until one comes back short, the portal's total is reached, or the cap.
+    """
+    import time
+
+    settings = settings or DEFAULT_SEARCH_SETTINGS
+    page_size = int(settings["page_size"].get(portal, 20))
+    max_pages = int(settings["max_pages"].get(portal, 1))
+    delay = float(settings.get("page_delay_seconds", 0))
+    base = _set_flag(args_list, "--limit", page_size)
+    if jobage_days:
+        base = _set_flag(base, "--jobage", jobage_days)
+    print(f"START {name}", flush=True)
+
+    results, seen_keys, meta, stderr_all, rc = [], set(), {}, [], 0
+    pages_read = 0
+    for page in range(1, max_pages + 1):
+        rc, out, err = _cli_page(portal, _set_flag(base, "--page", page))
+        if err:
+            stderr_all.append(err)
+        try:
+            data = json.loads(out)
+        except Exception as e:
+            if page == 1:
+                (out_dir / f"{name}.json").write_text(out, encoding="utf-8")
+                if stderr_all:
+                    (out_dir / f"{name}.err").write_text("\n".join(stderr_all), encoding="utf-8")
+                print(f"FAIL {name} exit={rc} parse={e} stderr={err[:300]}", flush=True)
+                return rc or 1
+            break  # later page failed: keep what was read
+        rows = data.get("results") or []
+        meta = data.get("meta") or meta
+        pages_read += 1
+        fresh = [r for r in rows if _result_key(r) not in seen_keys]
+        for r in fresh:
+            seen_keys.add(_result_key(r))
+        results.extend(fresh)
+        total = meta.get("total")
+        if len(rows) < page_size or not fresh:
+            break
+        if total is not None and len(results) >= int(total):
+            break
+        if page < max_pages and delay:
+            time.sleep(delay)
+
+    meta = {**meta, "pages_read": pages_read, "count": len(results)}
+    (out_dir / f"{name}.json").write_text(
+        json.dumps({"meta": meta, "results": results}, ensure_ascii=False), encoding="utf-8")
+    if stderr_all:
+        (out_dir / f"{name}.err").write_text("\n".join(stderr_all), encoding="utf-8")
+    capped = pages_read == max_pages and len(results) >= page_size * max_pages
+    note = " CAPPED" if capped else ""
+    print(f"OK {name} n={len(results)} pages={pages_read} exit={rc}{note}", flush=True)
+    return rc
 
 
 def cmd_search(args):
@@ -861,8 +1117,14 @@ def cmd_search(args):
 
     queries = [q for q in cfg["cli_queries"] if q["name"] in selected([q["name"] for q in cfg["cli_queries"]], args)]
     fails = 0
+    settings = search_settings(cfg)
+    jobage_days = getattr(args, "window_days", None) or search_window_days(settings)
+    print(f"search window: last {jobage_days} day(s)", flush=True)
     with ThreadPoolExecutor(max_workers=args.workers) as ex:
-        futs = {ex.submit(_run_cli_query, q["name"], q["portal"], q["args"], out_dir): q["name"] for q in queries}
+        futs = {
+            ex.submit(_run_cli_query, q["name"], q["portal"], q["args"], out_dir, settings, jobage_days): q["name"]
+            for q in queries
+        }
         for fut in as_completed(futs):
             try:
                 rc = fut.result()
@@ -889,6 +1151,8 @@ def cmd_search(args):
             print(f"FAIL {name} {type(e).__name__}: {e}", flush=True)
             fails += 1
 
+    if fails == 0 and not args.only and not getattr(args, "window_days", None):
+        record_search_finished()
     print(f"DONE fails={fails}")
     return 0
 
@@ -984,7 +1248,7 @@ def _load_run_jobs(rd):
             jobs.append({**r, "portal": r.get("portal") or portal, "src": name})
     uniq = {}
     for j in jobs:
-        key = j.get("url") or j.get("id")
+        key = _url_key(j.get("url") or "") or j.get("id")
         if key and key not in uniq:
             uniq[key] = j
     return list(uniq.values()), health
@@ -1010,13 +1274,15 @@ def cmd_process(args):
             continue
         j["tier"] = loc_tier(j.get("location"), j.get("work_mode"))
         survivors.append(j)
+    survivors, duplicates = collapse_duplicates(survivors)
+    print(f"duplicates across sites: {duplicates}")
 
     # Read the posting for every job that is in a wanted location and has a
     # role family he could do. The grade needs the requirements, not the title.
     def worth_reading(j):
         if j["tier"] not in ("mn", "remote", "ms"):
             return False
-        return scoring.score({"title": j.get("title"), "company": j.get("company")})["grade"] != "low"
+        return scoring.worth_reading(j)
 
     opened = posting_text.enrich(survivors, only=worth_reading)
     print(f"posting text: {opened}")
@@ -1091,6 +1357,12 @@ def cmd_update_seen(args):
         return 1
     cand = json.loads(cand_path.read_text(encoding="utf-8"))
     new_urls = {j["url"] for j in cand["new"]}
+    # A posting whose text failed to load is not settled: leave it unseen so the
+    # next run reads it again instead of locking in a low grade.
+    retry_urls = {
+        j["url"] for j in cand["new"]
+        if any("could not be read" in b for b in (j.get("fit_blockers") or []))
+    }
     fit_by_url = {r["url"]: r["fit"] for r in cand.get("all", [])}
 
     doc = load_seen()
@@ -1102,7 +1374,7 @@ def cmd_update_seen(args):
     for j in jobs:
         url = j.get("url") or ""
         key = _url_key(url)
-        if not url or url in seen or key in seen_keys:
+        if not url or url in seen or key in seen_keys or url in retry_urls:
             continue
         f = fit_by_url.get(url) or fit(j.get("title"), j.get("skills"), j.get("description"))
         status = "new" if url in new_urls and f in ("high", "medium") else "skipped"
@@ -1182,6 +1454,7 @@ def main():
     ap.add_argument("--only")
     ap.add_argument("--skip")
     ap.add_argument("--workers", type=int, default=4)
+    ap.add_argument("--window-days", type=int, help="search the last N days instead of the time since the last run")
     ap.add_argument("--days", type=int, default=21, help="expire threshold in days")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()

@@ -470,3 +470,213 @@ def test_alternatives_and_preferred_do_not_disqualify(title, extra):
 def test_bare_engineering_title_with_no_entry_signal_is_low():
     out = _dq("Software Engineer", "You will build features with the team.")
     assert out["grade"] == "low"
+
+
+# --- paged search and the posting window ------------------------------------
+
+def _fake_pages(monkeypatch, pages_by_number, total=None):
+    calls = []
+
+    def fake(portal, args_list):
+        page = int(args_list[args_list.index("--page") + 1])
+        calls.append((portal, list(args_list)))
+        rows = pages_by_number.get(page, [])
+        meta = {"count": len(rows), "page": page}
+        if total is not None:
+            meta["total"] = total
+        return 0, json.dumps({"meta": meta, "results": rows}), ""
+
+    monkeypatch.setattr(pipeline, "_cli_page", fake)
+    return calls
+
+
+def _rows(start, n):
+    return [{"id": str(i), "url": f"https://x/{i}", "title": "t"} for i in range(start, start + n)]
+
+
+def test_cli_query_reads_every_page_until_short(tmp_path, monkeypatch):
+    calls = _fake_pages(monkeypatch, {1: _rows(0, 10), 2: _rows(10, 10), 3: _rows(20, 4)})
+    monkeypatch.setitem(pipeline.DEFAULT_SEARCH_SETTINGS, "page_delay_seconds", 0)
+    rc = pipeline._run_cli_query("li_t", "linkedin-search", ["search", "--limit", "20", "--jobage", "14"], tmp_path)
+    data = json.loads((tmp_path / "li_t.json").read_text(encoding="utf-8"))
+    assert rc == 0 and len(data["results"]) == 24 and data["meta"]["pages_read"] == 3
+    assert len(calls) == 3
+
+
+def test_cli_query_overrides_limit_and_jobage(tmp_path, monkeypatch):
+    calls = _fake_pages(monkeypatch, {1: _rows(0, 3)})
+    pipeline._run_cli_query("fh_t", "freehire-search", ["search", "--limit", "20", "--jobage", "14"], tmp_path, jobage_days=2)
+    args = calls[0][1]
+    assert args[args.index("--limit") + 1] == "50"
+    assert args[args.index("--jobage") + 1] == "2"
+    assert args.count("--page") == 1
+
+
+def test_cli_query_stops_at_page_cap_and_at_total(tmp_path, monkeypatch):
+    settings = {"page_size": {"linkedin-search": 10}, "max_pages": {"linkedin-search": 2}, "page_delay_seconds": 0}
+    calls = _fake_pages(monkeypatch, {n: _rows(n * 10, 10) for n in range(1, 6)})
+    pipeline._run_cli_query("li_t", "linkedin-search", ["search"], tmp_path, settings)
+    assert len(calls) == 2
+    calls.clear()
+    _fake_pages(monkeypatch, {1: _rows(0, 10), 2: _rows(10, 10)}, total=10)
+    pipeline._run_cli_query("li_u", "linkedin-search", ["search"], tmp_path, {**settings, "max_pages": {"linkedin-search": 5}})
+    assert len(json.loads((tmp_path / "li_u.json").read_text(encoding="utf-8"))["results"]) == 10
+
+
+def test_cli_query_keeps_pages_read_when_a_later_page_fails(tmp_path, monkeypatch):
+    def fake(portal, args_list):
+        page = int(args_list[args_list.index("--page") + 1])
+        if page == 2:
+            return 1, "not json", "rate limited"
+        return 0, json.dumps({"meta": {}, "results": _rows(0, 10)}), ""
+
+    monkeypatch.setattr(pipeline, "_cli_page", fake)
+    rc = pipeline._run_cli_query("li_t", "linkedin-search", ["search"], tmp_path, {**pipeline.DEFAULT_SEARCH_SETTINGS, "page_delay_seconds": 0})
+    assert rc == 1 and len(json.loads((tmp_path / "li_t.json").read_text(encoding="utf-8"))["results"]) == 10
+
+
+def test_search_window_follows_last_run(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta
+    monkeypatch.setattr(pipeline, "LAST_RUN_PATH", tmp_path / "last_run.json")
+    st = pipeline.DEFAULT_SEARCH_SETTINGS
+    now = datetime(2026, 10, 22, 13, 0)
+    assert pipeline.search_window_days(st, now) == 14          # no record: widest
+    pipeline.LAST_RUN_PATH.write_text(json.dumps({"search_finished": (now - timedelta(hours=5)).isoformat()}))
+    assert pipeline.search_window_days(st, now) == 1           # 5 hours ago
+    pipeline.LAST_RUN_PATH.write_text(json.dumps({"search_finished": (now - timedelta(days=3, hours=1)).isoformat()}))
+    assert pipeline.search_window_days(st, now) == 5           # computer was off
+    pipeline.LAST_RUN_PATH.write_text(json.dumps({"search_finished": (now - timedelta(days=40)).isoformat()}))
+    assert pipeline.search_window_days(st, now) == 14          # capped
+
+
+@pytest.mark.parametrize("title", ["Sales Engineer", "Implementation Consultant", "Software Engineer"])
+def test_worth_reading_titles_only_the_text_can_decide(title):
+    import scoring
+    assert scoring.worth_reading({"title": title, "company": "Acme"})
+
+
+@pytest.mark.parametrize("title", ["Senior Solutions Engineer", "Supplier Quality Engineer", "Software Intern"])
+def test_worth_reading_skips_titles_that_are_low_regardless_of_text(title):
+    import scoring
+    assert not scoring.worth_reading({"title": title, "company": "Acme"})
+
+
+@pytest.mark.parametrize("title", [
+    "CTIO-AI Engineer-Sr Associate",
+    "Forward Deployed Software Engineer-Experienced Associate",
+    "Clinical Solutions Consultant - PACS",
+    "Retail Quality Assurance Coordinator",
+])
+def test_title_traps_are_not_graded_up(title):
+    import scoring
+    long_text = "You will work with customers. " * 40
+    out = scoring.score({"title": title, "company": "Acme", "description": long_text, "body_status": "opened"})
+    assert out["grade"] == "low"
+
+
+def test_url_variants_collapse_to_one_job(tmp_path):
+    base = "https://www.arbeitnow.com/jobs/companies/x/remote-solutions-consultant-1"
+    (tmp_path / "a.json").write_text(json.dumps({"results": [
+        {"title": "Solutions Consultant", "company": "X", "url": base},
+        {"title": "Solutions Consultant", "company": "X", "url": base + "?utm_source=freehire.me"},
+    ]}), encoding="utf-8")
+    jobs, _ = pipeline._load_run_jobs(tmp_path)
+    assert len(jobs) == 1
+
+
+def test_workday_posting_maps_to_its_json_endpoint():
+    import posting_text
+    url = "https://blackbaud.wd1.myworkdayjobs.com/ExternalCareers/job/Remote---USA/TAM_R001?utm_source=x"
+    assert posting_text._ats_api_url(url) == (
+        "https://blackbaud.wd1.myworkdayjobs.com/wday/cxs/blackbaud/ExternalCareers/job/Remote---USA/TAM_R001"
+    )
+    raw = json.dumps({"jobPostingInfo": {"jobDescription": "<p>Five years of sales.</p><li>Python</li>"}})
+    assert "Five years of sales." in posting_text._from_ats_json(raw)
+
+
+def test_himalayas_source_keeps_text_and_dedupes(monkeypatch):
+    job = {"title": "Sales Engineer", "companyName": "Acme", "guid": "https://himalayas.app/companies/acme/jobs/sales-engineer",
+           "description": "<p>" + "Demo the product. " * 30 + "</p>", "pubDate": "1792654690"}
+    monkeypatch.setattr(pipeline, "_get_json", lambda url, headers=None: {"jobs": [job]})
+    monkeypatch.setattr(pipeline.time, "sleep", lambda s: None)
+    out = pipeline.src_himalayas()
+    assert len(out) == 1  # the same job came back for every query
+    assert out[0]["portal"] == "himalayas" and out[0]["work_mode"] == "remote"
+    assert len(out[0]["description"]) > 300
+
+
+def test_backfill_files_jobs_under_their_posting_day():
+    import daily_digest
+    from datetime import date
+    store = {
+        "a": {"found_on": "2026-10-22", "date": "2026-10-20"},   # posted 2 days ago
+        "b": {"found_on": "2026-10-22", "date": "2026-10-22"},   # posted today
+        "c": {"found_on": "2026-10-22", "date": "2026-10-01"},   # older than the backfill
+        "d": {"found_on": "2026-10-19", "date": "2026-10-19"},   # an earlier run's job
+    }
+    moved = daily_digest.backfill_found_on(store, date(2026, 10, 22), 3)
+    assert moved == {"2026-10-20": 1}
+    assert store["a"]["found_on"] == "2026-10-20" and store["a"]["backfilled"]
+    assert store["b"]["found_on"] == store["c"]["found_on"] == "2026-10-22"
+    assert store["d"]["found_on"] == "2026-10-19"
+
+
+def test_a_development_perk_is_not_a_required_tool():
+    import scoring
+    text = "Professional Development: work with Terraform, OpenTelemetry and strong tooling every day."
+    assert scoring.missing_skill(text) == ""
+
+
+def test_same_job_on_two_sites_keeps_the_employers_link():
+    jobs = [
+        {"title": "Sales Engineer", "company": "Acme, Inc.", "location": "Remote (United States)",
+         "url": "https://www.linkedin.com/jobs/view/1", "portal": "linkedin-search"},
+        {"title": "Sales Engineer", "company": "Acme Inc", "location": "Remote",
+         "url": "https://boards.greenhouse.io/acme/jobs/99", "portal": "freehire-search"},
+        {"title": "Sales Engineer", "company": "Acme Inc", "location": "Minneapolis, MN",
+         "url": "https://boards.greenhouse.io/acme/jobs/100", "portal": "freehire-search"},
+    ]
+    kept, dropped = pipeline.collapse_duplicates(jobs)
+    assert dropped == 1
+    urls = [j["url"] for j in kept]
+    assert "https://boards.greenhouse.io/acme/jobs/99" in urls and "https://www.linkedin.com/jobs/view/1" not in urls
+    assert "https://boards.greenhouse.io/acme/jobs/100" in urls  # a different city is a different job
+    employer = next(j for j in kept if j["url"].endswith("/99"))
+    assert employer["also_on"] == ["linkedin-search"]
+
+
+def test_store_skips_a_job_it_already_holds_from_another_site():
+    import daily_digest
+    store = {}
+    first = {"title": "Sales Engineer", "company": "Acme", "location": "Remote", "url": "https://x.com/a/1", "description": "d"}
+    twin = {"title": "Sales Engineer", "company": "Acme", "location": "Remote (United States)", "url": "https://y.com/b/2", "description": "d"}
+    daily_digest.merge_jobs(store, [first], "2026-10-22")
+    daily_digest.merge_jobs(store, [twin], "2026-10-22")
+    assert len(store) == 1
+
+
+def test_jsearch_is_skipped_without_a_key(monkeypatch):
+    monkeypatch.delenv("RAPIDAPI_KEY", raising=False)
+    with pytest.raises(pipeline.SkipSource):
+        pipeline.src_jsearch()
+
+
+def test_jsearch_maps_a_result(monkeypatch):
+    monkeypatch.setenv("RAPIDAPI_KEY", "k")
+    row = {"job_title": "Sales Engineer", "employer_name": "Acme", "job_city": "Edina", "job_state": "MN",
+           "job_is_remote": False, "job_apply_link": "https://acme.com/j/1", "job_id": "abc",
+           "job_posted_at_datetime_utc": "2026-10-21T10:00:00.000Z", "job_description": "Demo things."}
+    monkeypatch.setattr(pipeline, "_get_json", lambda url, headers=None: {"data": [row]})
+    out = pipeline.src_jsearch()
+    assert out[0]["location"] == "Edina, MN" and out[0]["date"] == "2026-10-21" and out[0]["portal"] == "jsearch"
+
+
+def test_collapse_store_prefers_the_employers_link():
+    import daily_digest
+    store = {
+        "li": {"title": "Sales Engineer", "company": "Acme", "location": "Remote", "url": "https://www.linkedin.com/jobs/view/1"},
+        "gh": {"title": "Sales Engineer", "company": "Acme", "location": "Remote", "url": "https://boards.greenhouse.io/acme/jobs/9"},
+        "other": {"title": "Solutions Engineer", "company": "Acme", "location": "Remote", "url": "https://boards.greenhouse.io/acme/jobs/10"},
+    }
+    assert daily_digest.collapse_store(store) == 1
+    assert set(store) == {"gh", "other"}

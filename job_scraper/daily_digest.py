@@ -27,7 +27,7 @@ import re
 import subprocess
 import sys
 import zipfile
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from xml.sax.saxutils import escape as xml_escape
 
@@ -395,16 +395,55 @@ def _key(url):
     return pipeline._url_key(url or "") or (url or "")
 
 
+def pipeline_dedupe_key(job):
+    import pipeline
+    return pipeline.dedupe_key(job)
+
+
+def collapse_store(store):
+    """Drop stored copies of a job that is also stored from another site.
+
+    Keeps the employer's own link over an aggregator repost, otherwise the earliest
+    copy. Returns the number removed.
+    """
+    import pipeline
+    best = {}
+    for key, row in store.items():
+        twin = pipeline.dedupe_key(row)
+        if not twin:
+            continue
+        cur = best.get(twin)
+        if cur is None:
+            best[twin] = key
+            continue
+        cur_row = store[cur]
+        if pipeline._is_aggregator(cur_row) and not pipeline._is_aggregator(row):
+            best[twin] = key
+    keep = set(best.values()) | {k for k, r in store.items() if not pipeline.dedupe_key(r)}
+    removed = [k for k in store if k not in keep]
+    for k in removed:
+        del store[k]
+    return len(removed)
+
+
 def merge_jobs(store, jobs, found_on):
     """Add jobs that are not already stored. Keep the original found_on."""
     added = 0
+    have = {k for k in (pipeline_dedupe_key(row) for row in store.values()) if k}
     for job in jobs:
         url = job.get("url") or ""
         key = _key(url)
         if not key or key in store:
             continue
+        twin = pipeline_dedupe_key(job)  # the same job already stored from another site
+        if twin and twin in have:
+            continue
+        if twin:
+            have.add(twin)
         store[key] = {
             "found_on": found_on,
+            "found_at": datetime.now().strftime("%H:%M"),
+            "date": (job.get("date") or "")[:10],
             "fit": job.get("fit"),
             "title": job.get("title"),
             "company": job.get("company"),
@@ -817,7 +856,8 @@ def _job_blocks(job, rel_id, number):
             if quote:
                 blocks.append(_p(quote, size=22, space_after=40))
     if job.get("found_on"):
-        blocks.append(_p(f"Found: {job['found_on']}", size=22, space_after=40))
+        when = f"{job['found_on']} {job['found_at']}" if job.get("found_at") else job["found_on"]
+        blocks.append(_p(f"Found: {when}", size=22, space_after=40))
     if job.get("salary"):
         blocks.append(_p(f"Pay on the card: {job['salary']}", size=22, space_after=40))
     blocks.append(_p(_why(job), size=22, space_after=40))
@@ -966,14 +1006,14 @@ def write_docx(path, title, intro, jobs):
     return path
 
 
-def run_pipeline():
+def run_pipeline(extra=()):
     env = os.environ.copy()
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
     if BUN_DIR.is_dir():
         env["PATH"] = str(BUN_DIR) + os.pathsep + env.get("PATH", "")
     proc = subprocess.run(
-        [str(PYTHON), str(SCRAPER / "pipeline.py"), "all"],
+        [str(PYTHON), str(SCRAPER / "pipeline.py"), "all", *extra],
         cwd=str(ROOT),
         capture_output=True,
         text=True,
@@ -1087,8 +1127,26 @@ def _publish(day, store, log_text):
     return dated, latest, html_path
 
 
+def backfill_found_on(store, today, days):
+    """File jobs found today under the day they were posted, for the last `days` days.
+
+    A backfill search finds postings that went up on earlier days. Putting them in
+    their own day's file shows what that day would have held. Returns {day: count}.
+    """
+    moved = {}
+    oldest = (today - timedelta(days=days)).isoformat()
+    for job in store.values():
+        posted = (job.get("date") or "")[:10]
+        if job.get("found_on") == today.isoformat() and oldest <= posted < today.isoformat():
+            job["found_on"] = posted
+            job["backfilled"] = True
+            moved[posted] = moved.get(posted, 0) + 1
+    return moved
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--backfill", type=int, metavar="DAYS", help="also search the last DAYS days and file each job under the day it was posted")
     ap.add_argument("--from-existing", action="store_true", help="write the Word files from today's candidates.json and do not scrape")
     args = ap.parse_args()
     today = date.today()
@@ -1101,7 +1159,7 @@ def main():
         merge_jobs(store, prior.get("new") or [], day)
     log_text = ""
     if not args.from_existing:
-        code, log_text = run_pipeline()
+        code, log_text = run_pipeline(["--window-days", str(args.backfill + 1)] if args.backfill else [])
         if code != 0 and not cand_path.exists():
             dated, latest, html_path = _publish(day, store, log_text + f"\nThe scrape exited {code}. See daily/run.log.")
             print(dated)
@@ -1120,7 +1178,24 @@ def main():
             print(html_path)
         return 1
     store, _removed = prune_jobs(store, today)
+    print(f"duplicate jobs removed from the store: {collapse_store(store)}")
+    if args.backfill:
+        if cand_path.exists():  # older store rows did not keep the posting date
+            for job in json.loads(cand_path.read_text(encoding="utf-8")).get("new") or []:
+                row = store.get(_key(job.get("url")))
+                if row is not None and not row.get("date"):
+                    row["date"] = (job.get("date") or "")[:10]
+        moved = backfill_found_on(store, today, args.backfill)
+        print("backfilled by posting date:", dict(sorted(moved.items())))
     dated, latest, html_path = _publish(day, store, log_text)
+    if args.backfill:
+        for past in sorted({j["found_on"] for j in store.values() if j.get("backfilled")}):
+            past_jobs = listable(jobs_found_on(store, past))
+            write_docx(DAILY / f"{past}.docx", "Adam Colyer job search", [
+                f"Date: {past}",
+                f"Jobs: {len(past_jobs)}    High: {_counts(past_jobs)['high']}    Medium: {_counts(past_jobs)['medium']}    Low: {_counts(past_jobs)['low']}",
+                "Rebuilt by a backfill search: includes jobs posted this day that the daily runs had missed.",
+            ] + _rule_lines(), past_jobs)
     print(dated)
     print(latest)
     if html_path:

@@ -16,6 +16,8 @@ Stdlib only. One request per job, small timeout, failures never raise.
 """
 import json
 import re
+import time
+import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from html import unescape
@@ -68,13 +70,19 @@ def _jsonld_description(html):
 
 
 def _ats_api_url(url):
-    """Public JSON endpoint for Greenhouse, Lever, and Ashby postings, or ''."""
+    """Public JSON endpoint for Greenhouse, Lever, and Workday postings, or ''."""
     m = re.search(r"greenhouse\.io/(?:embed/job_app\?for=)?([\w-]+)/jobs/(\d+)", url)
     if m:
         return f"https://boards-api.greenhouse.io/v1/boards/{m.group(1)}/jobs/{m.group(2)}"
     m = re.search(r"jobs\.lever\.co/([\w-]+)/([0-9a-f-]{36})", url)
     if m:
         return f"https://api.lever.co/v0/postings/{m.group(1)}/{m.group(2)}"
+    m = re.match(
+        r"https://([\w-]+)\.(wd\d+)\.myworkdayjobs\.com/(?:[a-z]{2}-[A-Z]{2}/)?([\w-]+)/(job/[^?#]+)", url
+    )
+    if m:
+        tenant, wd, site, path = m.groups()
+        return f"https://{tenant}.{wd}.myworkdayjobs.com/wday/cxs/{tenant}/{site}/{path}"
     return ""
 
 
@@ -83,6 +91,8 @@ def _from_ats_json(raw):
         data = json.loads(raw)
     except ValueError:
         return ""
+    if isinstance(data, dict) and isinstance(data.get("jobPostingInfo"), dict):  # Workday
+        return html_to_text(unescape(data["jobPostingInfo"].get("jobDescription") or ""))
     if isinstance(data, dict):
         body = data.get("content") or data.get("descriptionPlain") or data.get("description") or ""
         if data.get("lists"):
@@ -97,14 +107,23 @@ def fetch_text(url):
     """Return (status, text) for one posting URL."""
     if not url:
         return "unread", ""
-    try:
-        api = _ats_api_url(url)
-        if api:
-            text = _from_ats_json(_get(api, "application/json"))
-            if len(text) >= 200:
-                return "opened", text[:MAX_CHARS]
-        html = _get(url)
-    except Exception:
+    html = None
+    for attempt in range(2):
+        try:
+            api = _ats_api_url(url)
+            if api:
+                text = _from_ats_json(_get(api, "application/json"))
+                if len(text) >= 200:
+                    return "opened", text[:MAX_CHARS]
+            html = _get(url)
+            break
+        except urllib.error.HTTPError as e:
+            if e.code in (400, 401, 403, 404, 410):  # retrying will not help
+                return "unread", ""
+        except Exception:
+            pass
+        time.sleep(2)
+    if html is None:
         return "unread", ""
     text = _jsonld_description(html) or html_to_text(html)
     if _SHELL_RE.search(text[:3000]) and len(text) < 1500:

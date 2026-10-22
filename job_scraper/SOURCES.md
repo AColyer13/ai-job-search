@@ -17,9 +17,10 @@ HTTP sources are enabled/disabled via the `http_sources` list there (or
 | Source | Endpoint | Coverage |
 |---|---|---|
 | RemoteOK | `remoteok.com/api` | Remote tech, worldwide |
-| Remotive | `remotive.com/api/remote-jobs` | Remote tech; `candidate_required_location` used for US filtering |
+| Remotive | `remotive.com/api/remote-jobs` | Remote tech (the public API now returns about 10 jobs per call); `candidate_required_location` used for US filtering |
 | Arbeitnow | `arbeitnow.com/api/job-board-api` | EU-heavy; only `remote: true` jobs kept |
 | Jobicy | `jobicy.com/api/v2/remote-jobs?geo=usa` | Remote, geo-filtered to USA |
+| Himalayas | `himalayas.app/jobs/api/search` (12 queries, 2 pages) | Remote, US; returns the full posting text. Its job pages return 403 to scripts, so this API is the only way to read them. |
 | WeWorkRemotely | RSS (`/categories/remote-programming-jobs.rss`) | Remote programming |
 | Working Nomads | `workingnomads.com/api/exposed_jobs/` | Remote tech |
 | HN "Who is hiring" | Algolia API (`hn.algolia.com`) | Monthly thread; comments mentioning "remote", capped at 100 |
@@ -36,6 +37,7 @@ These are skipped silently until the env vars are set:
 |---|---|---|
 | Adzuna (US) | `ADZUNA_APP_ID`, `ADZUNA_APP_KEY` | https://developer.adzuna.com/ |
 | USAJobs (federal) | `USAJOBS_API_KEY`, `USAJOBS_EMAIL` | https://developer.usajobs.gov/ |
+| JSearch (RapidAPI) | `RAPIDAPI_KEY` | https://rapidapi.com/letscrape-6bRBa3QguO5/api/jsearch. Google for Jobs results: Indeed, ZipRecruiter, Glassdoor and others, through a licensed API. Free plan is about 200 requests a month; queries are in `queries.json` under `jsearch`. |
 
 ## Tier 4 — Free key, not yet implemented
 
@@ -72,6 +74,10 @@ guessable from the company name.
 
 ## Rejected
 
-- **Indeed / Wellfound / Glassdoor** — no public API, scraping violates ToS.
+- **Scraping Indeed / ZipRecruiter / Glassdoor directly** — no public API, scraping violates their terms and they block bots. Use JSearch (Tier 3) instead. Wellfound, Built In, Adzuna, WhatJobs and startup.jobs arrive through FreeHire.
+
+## Duplicates
+
+The same job often appears on LinkedIn, an aggregator and the employer page. `collapse_duplicates` (run in `pipeline.py process`) treats same company + title + city (or both remote) as one job and keeps the employer's own link. `daily_digest.py` also skips a job already stored from another site and cleans old copies out of the store.
 - **Google Jobs via SerpApi** — paid only.
 - **Reed.co.uk** — UK-only, not this market.
