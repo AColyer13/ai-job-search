@@ -10,91 +10,156 @@ import pipeline  # noqa: E402
 
 
 # --- fit() -----------------------------------------------------------------
+# With no readable posting text the grade is low: a title cannot show whether
+# the job asks for a CS degree or five years of engineering.
 
 @pytest.mark.parametrize("title,expected", [
-    ("Junior Software Engineer", "high"),
-    ("Entry Level Full Stack Developer", "high"),
-    ("Junior AI Engineer", "high"),
-    ("AI Application Engineer", "high"),
-    ("Solutions Engineer", "high"),
-    ("Sales Engineer", "high"),
-    ("Technical Account Manager", "high"),
-    ("Senior Solutions Engineer", "medium"),
-    ("AI Engineer", "medium"),
-    ("Software Engineer", "medium"),
+    ("Junior Software Engineer", "low"),
+    ("Entry Level Full Stack Developer", "low"),
+    ("Junior AI Engineer", "low"),
+    ("Solutions Engineer", "low"),
+    ("Sales Engineer", "low"),
+    ("Technical Account Manager", "low"),
+    ("Customer Engineer", "low"),
+    ("Implementation Consultant", "low"),
+    ("Technical Sales Representative", "low"),
+    ("Pre-Sales Consultant", "low"),
+    ("Solutions Architect", "low"),
+    ("Associate Solutions Architect", "low"),
+    ("Junior QA Engineer", "low"),
+    ("Software Engineer", "low"),
+    ("Web Developer", "low"),
+    ("Senior Solutions Engineer", "low"),
+    ("Senior Technical Sales Consultant", "low"),
     ("Senior Software Engineer", "low"),
     ("Staff AI Engineer", "low"),
     ("Software Engineering Intern", "low"),
     ("Director of Solutions Engineering", "low"),
     ("Embedded Firmware Engineer", "low"),
     ("Senior Software Engineer 2027", "low"),
-    ("Web Developer", "medium"),
-    ("Application Developer", "medium"),
-    ("Junior Web Developer", "high"),
-    ("Junior Application Developer", "high"),
-    ("Python Developer", "medium"),
-    ("Backend Developer", "medium"),
-    ("Customer Engineer", "high"),
-    ("Junior QA Engineer", "medium"),
-    ("Junior Quality Assurance Analyst", "medium"),
-    ("Software Tester", "medium"),
     ("Senior QA Engineer", "low"),
-    ("Senior SDET", "low"),
-    ("Implementation Engineer", "high"),
-    ("Implementation Consultant", "high"),
-    ("Technical Sales Representative", "high"),
-    ("Technical Sales Consultant", "high"),
-    ("Technical Sales Rep", "high"),
-    ("Technical Sales Trainee (Minneapolis)", "high"),
-    ("Senior Technical Sales Consultant", "medium"),
-    ("Pre-Sales Consultant", "high"),
-    ("Presales Consultant", "high"),
-    ("Pre Sales Consultant", "high"),
-    ("Presales Engineer", "high"),
-    ("Solutions Consultant", "high"),
-    ("Solutions Architect", "medium"),
-    ("Senior Solutions Architect", "medium"),
-    ("Associate Solutions Architect", "high"),
     ("Director, Solutions Architect", "low"),
     ("Software Architect", "low"),
     ("Cloud Architect", "low"),
+    ("Java Developer", "low"),
+    ("DevOps Engineer", "low"),
 ])
 def test_fit(title, expected):
     assert pipeline.fit(title) == expected
 
 
 def test_fit_skills_fallback():
-    assert pipeline.fit("Product Engineer", ["react", "typescript"]) == "medium"
-    assert pipeline.fit("Product Engineer", ["cobol"]) == "low"
+    body = _BODY + "1 year of experience."
+    assert pipeline.fit("Product Engineer", ["react", "typescript"]) == "low"
+    assert pipeline.fit("Product Engineer", ["react", "typescript"], body) == "medium"
+    assert pipeline.fit("Product Engineer", ["cobol"], body) == "low"
 
 
-# --- fit() description-based demotion ---------------------------------------
+# --- fit() with posting text ------------------------------------------------
 
-def test_fit_demotes_on_years_required_in_description():
-    desc = "We need someone with 6+ years of professional software experience."
-    assert pipeline.fit("Junior Software Engineer", description=desc) == "medium"
-    assert pipeline.fit("Software Engineer", description=desc) == "low"
+_BODY = "You will run discovery calls and product demos with customers every week. " * 6
 
 
-def test_fit_demotes_on_clearance_required():
-    desc = "Candidates must hold an active security clearance."
-    assert pipeline.fit("Junior Software Engineer", description=desc) == "medium"
+def test_fit_high_needs_posting_text():
+    assert pipeline.fit("Junior Software Engineer", description=_BODY + "1 year of experience.") == "high"
+    assert pipeline.fit("Junior Software Engineer") == "low"
 
 
-def test_fit_low_stays_low_regardless_of_description():
-    desc = "6+ years of experience required. Active security clearance required."
-    assert pipeline.fit("Senior Software Engineer", description=desc) == "low"
+def test_fit_low_when_years_exceed_resume():
+    desc = _BODY + "We need someone with 6+ years of professional software experience."
+    assert pipeline.fit("Junior Software Engineer", description=desc) == "low"
 
 
-def test_fit_description_never_promotes():
-    # A "2 years" mention should never push a low-fit title up a tier.
-    desc = "Only 2 years of experience needed, no clearance."
-    assert pipeline.fit("Embedded Firmware Engineer", description=desc) == "low"
+def test_fit_low_when_cs_degree_required():
+    desc = _BODY + "Bachelor's degree in Computer Science required."
+    assert pipeline.fit("Junior Software Engineer", description=desc) == "low"
+    assert pipeline.fit("Solutions Engineer", description=desc) == "low"
 
 
-def test_fit_no_description_unaffected():
-    assert pipeline.fit("Junior Software Engineer", None, None) == "high"
-    assert pipeline.fit("Junior Software Engineer", None, "") == "high"
+def test_fit_cs_degree_with_equivalent_experience_is_fine():
+    desc = _BODY + "BS in Computer Science or equivalent experience. 1 year of experience."
+    assert pipeline.fit("Junior Software Engineer", description=desc) == "high"
+
+
+def test_fit_low_when_clearance_required():
+    desc = _BODY + "Candidates must hold an active security clearance."
+    assert pipeline.fit("Junior Software Engineer", description=desc) == "low"
+
+
+def test_fit_sales_years_inside_resume_is_high():
+    desc = _BODY + "3+ years of sales experience. Bachelor's degree."
+    assert pipeline.fit("Solutions Engineer", description=desc) == "high"
+
+
+def test_fit_required_five_sales_years_is_not_qualified():
+    import scoring
+    for years in (5, 7):
+        job = {"title": "Sales Engineer", "description": _BODY + f"{years}+ years of sales experience required."}
+        out = scoring.score(job)
+        assert out["grade"] == "low" and out["disqualified"]
+
+
+def test_fit_four_required_sales_years_is_fine():
+    import scoring
+    job = {"title": "Sales Engineer", "description": _BODY + "4+ years of sales experience required."}
+    assert scoring.score(job)["grade"] == "high"
+
+
+def test_preferred_years_under_heading_do_not_disqualify():
+    import scoring
+    desc = _BODY + (
+        "\nRequirements:\n3+ years of sales experience\n"
+        "\nPreferred Qualifications:\n7+ years of sales experience\nExperience with Salesforce\n"
+    )
+    out = scoring.score({"title": "Solutions Consultant", "description": desc})
+    assert out["grade"] == "high" and not out["disqualified"]
+    assert any("preferred, not required" in r for r in out["reasons"])
+
+
+def test_required_years_after_preferred_heading_still_count():
+    import scoring
+    desc = _BODY + (
+        "\nNice to have:\n6+ years of sales experience\n"
+        "\nMinimum Qualifications:\n6+ years of sales experience\n"
+    )
+    out = scoring.score({"title": "Solutions Consultant", "description": desc})
+    assert out["disqualified"]
+
+
+def test_preferred_cs_degree_does_not_disqualify():
+    import scoring
+    desc = _BODY + "\nPreferred:\nBachelor's degree in Computer Science\n"
+    assert not scoring.score({"title": "Solutions Engineer", "description": desc})["disqualified"]
+
+
+def test_disqualified_job_is_left_off_the_list():
+    import daily_digest
+    job = {"title": "Sales Engineer", "fit": "low", "disqualified": True, "url": "https://x"}
+    assert daily_digest.omit_reason(job) == "not qualified"
+    assert daily_digest.listable([job]) == []
+
+
+def test_fit_bare_engineering_title_high_only_with_entry_evidence():
+    plain = _BODY + "2 years of experience."
+    friendly = _BODY + "Bootcamp graduates welcome. Bachelor's degree or equivalent experience."
+    assert pipeline.fit("Full Stack Developer", description=plain) == "medium"
+    assert pipeline.fit("Full Stack Developer", description=friendly) == "high"
+
+
+def test_fit_three_engineering_years_is_low_without_entry_wording():
+    desc = _BODY + "3+ years of full-stack development experience with React."
+    assert pipeline.fit("Full Stack Developer", description=desc) == "low"
+
+
+def test_fit_preferred_requirements_are_ignored():
+    desc = _BODY + "1 year of experience. 5+ years of experience is a plus."
+    assert pipeline.fit("Junior Software Engineer", description=desc) == "high"
+
+
+def test_fit_offshore_firm_is_low():
+    job = {"title": "Full Stack Developer", "company": "Alternative Path Private Limited", "description": _BODY}
+    import scoring
+    assert scoring.score(job)["grade"] == "low"
 
 
 # --- extract_salary() -------------------------------------------------------
@@ -368,3 +433,40 @@ def test_all_command_runs_expire_last(monkeypatch):
 
     assert pipeline.main() == 0
     assert calls == ["search", "process", "update-seen", "expire"]
+
+
+# --- strict disqualification ------------------------------------------------
+
+def _dq(title, extra):
+    import scoring
+    return scoring.score({"title": title, "description": _BODY + "\n" + extra})
+
+
+@pytest.mark.parametrize("title,extra", [
+    ("Solutions Engineer", "Bachelor's degree in Computer Science or a related technical field."),
+    ("Junior Software Engineer", "Bachelor's degree in a technical field is required."),
+    ("Solutions Engineer", "Master's degree required."),
+    ("Junior Software Engineer", "Strong experience with Java and Spring."),
+    ("Solutions Engineer", "Hands-on experience with Kubernetes and Terraform."),
+    ("Solutions Engineer", "AWS Certified Solutions Architect is required."),
+    ("Solutions Engineer", "3+ years in a technical role such as software engineering."),
+    ("Sales Engineer", "This is a senior-level role."),
+])
+def test_strict_requirements_disqualify(title, extra):
+    out = _dq(title, extra)
+    assert out["disqualified"] and out["grade"] == "low"
+
+
+@pytest.mark.parametrize("title,extra", [
+    ("Solutions Engineer", "Bachelor's degree in Computer Science, business, or equivalent experience."),
+    ("Junior Software Engineer", "Experience with Java or Python."),
+    ("Solutions Engineer", "Preferred: AWS Certified Solutions Architect."),
+    ("Solutions Engineer", "Nice to have:\nMaster's degree\nKubernetes experience"),
+])
+def test_alternatives_and_preferred_do_not_disqualify(title, extra):
+    assert not _dq(title, extra)["disqualified"]
+
+
+def test_bare_engineering_title_with_no_entry_signal_is_low():
+    out = _dq("Software Engineer", "You will build features with the team.")
+    assert out["grade"] == "low"

@@ -244,6 +244,9 @@ def _demotion_note(title, skills, description, stored):
 
 def _why(job):
     """Grade, why that grade, then one line from the posting when we have it."""
+    notes = (job.get("fit_blockers") or []) + (job.get("fit_reasons") or [])
+    if notes and job.get("fit_before_location") != "high":
+        return f"{(job.get('fit') or 'low').capitalize()}. {' '.join(notes)} {_body_sentence(job)}"
     title = job.get("title") or ""
     skills = job.get("skills") or []
     stored = (job.get("fit") or "low").lower()
@@ -317,7 +320,7 @@ def render(day, jobs, log_text, from_existing=False):
         "Adam Colyer job search",
         f"Date: {day}",
         f"New jobs: {len(jobs)}    High: {counts['high']}    Medium: {counts['medium']}    Low: {counts['low']}",
-        "Fit is the title score. The posting body was not opened unless the why quotes text already on the card.",
+        "Fit comes from the posting text. The why says what held the grade down.",
         f"These jobs are in this date file only. Each one also stays in daily/latest.docx for {WINDOW_DAYS} days from the day it was found, then it is removed.",
         "",
     ]
@@ -345,7 +348,7 @@ def render_latest(day, jobs):
         f"Jobs: {len(jobs)}    High: {counts['high']}    Medium: {counts['medium']}    Low: {counts['low']}",
         f"A job stays in this file for {WINDOW_DAYS} days from the day it was found, then it is removed.",
         "The first days after a posting goes up are when applications get read. A week is still worth acting on. At 14 days the listing is past the usual first review, and that is also as far back as the scraper looks.",
-        "Fit is the title score. The posting body was not opened unless the why quotes text already on the card.",
+        "Fit comes from the posting text. The why says what held the grade down.",
         "",
     ]
     if not jobs:
@@ -408,9 +411,14 @@ def merge_jobs(store, jobs, found_on):
             "location": job.get("location"),
             "work_mode": job.get("work_mode"),
             "url": url,
-            "description": (job.get("description") or "")[:400],
+            "description": (job.get("description") or "")[:8000],
             "skills": job.get("skills") or [],
             "salary": job.get("salary"),
+            "body_status": job.get("body_status"),
+            "fit_reasons": job.get("fit_reasons") or [],
+            "fit_blockers": job.get("fit_blockers") or [],
+            "entry_evidence": bool(job.get("entry_evidence")),
+            "disqualified": bool(job.get("disqualified")),
         }
         added += 1
     return added
@@ -636,7 +644,9 @@ def omit_reason(job):
     """
     if job.get("omit") == "degree":
         return "degree"
-    if engineering_level_blocked(job.get("title") or ""):
+    if job.get("disqualified"):
+        return "not qualified"
+    if engineering_level_blocked(job.get("title") or "") and not job.get("entry_evidence"):
         return "engineering level"
     if exclusive_engineering_degree(job.get("description") or ""):
         return "degree"
@@ -981,6 +991,32 @@ def run_pipeline():
     return proc.returncode, log
 
 
+def regrade_store(jobs):
+    """Read any posting still missing its text, then grade every stored job.
+
+    Grades come from the resume-aware scorer, so an older title-only grade is
+    replaced. The location cap runs after this.
+    """
+    import posting_text
+    import scoring
+
+    def worth_reading(job):
+        return (
+            job.get("body_status") not in ("opened", "shell")
+            and scoring.score(dict(job, description=""))["grade"] != "low"
+        )
+
+    try:
+        posting_text.enrich(jobs, only=worth_reading)
+    except Exception as exc:
+        print(f"Posting text was not fetched: {exc}")
+    for job in jobs:
+        job.pop("fit_before_location", None)
+        job.pop("location_block", None)
+        scoring.grade_job(job)
+    return jobs
+
+
 def apply_location_caps(jobs):
     """A high grade requires a requested location. Other places drop to medium."""
     import pipeline
@@ -993,7 +1029,8 @@ def apply_location_caps(jobs):
 def _rule_lines():
     """Sentences shared by the date file and latest.docx."""
     return [
-        "Engineering titles are listed only when they say entry, trainee, junior, associate, early career, new grad, or level I. Level II and other engineering titles are left out.",
+        "Grades come from the posting text, not the title. A job whose text could not be read is graded low.",
+        "Engineering is high only when the title or the posting says entry level or accepts a bootcamp or equivalent experience, and it asks for two years or fewer. Technical sales and pre-sales are high when they ask for five years or fewer of experience and no technical degree.",
         "A posting is left out when its qualifications require a degree in engineering or computer science and do not accept another degree or equivalent experience.",
         "A star means the posting names a business or marketing degree, a bootcamp or coding certificate, or a business analytics certificate. The sentence from the posting is on the card.",
         "High and medium jobs are grouped by position type. Every low job is at the bottom, still grouped by type.",
@@ -1011,6 +1048,7 @@ def _source_lines(sources):
 
 def _publish(day, store, log_text):
     """Write the date file, latest.docx, and the HTML page. The date file is one day only."""
+    regrade_store(list(store.values()))
     apply_location_caps(list(store.values()))
     apply_board_shells(list(store.values()))
     fresh = _pipeline_notes(log_text)

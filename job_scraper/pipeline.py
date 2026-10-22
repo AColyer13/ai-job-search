@@ -374,18 +374,29 @@ def _fit_from_title(title, skills=None):
 
 
 def fit(title, skills=None, description=None):
-    """Title/skills-based verdict, demoted using the posting description when
-    available. A title like "Software Engineer" can't tell "3 years, React"
-    apart from "8 years, Java + clearance required" - the description can.
+    """Grade a title (and posting text when there is any) against Adam's resume.
+
+    Delegates to scoring.score. Without readable posting text the grade is
+    low: a title cannot tell "1 year, bootcamp welcome" from "5 years, CS
+    degree required". A non-role title with a React/Python skill tag and
+    readable text that passes the checks is medium.
     """
-    f = _fit_from_title(title, skills)
-    if description and f != "low":
-        years = [int(n) for n in YEARS_EXPERIENCE_RE.findall(description)]
-        if any(y >= 5 for y in years):
-            f = _DEMOTE[f]
-        if CLEARANCE_RE.search(description):
-            f = _DEMOTE[f]
-    return f
+    import scoring
+
+    out = scoring.score({"title": title, "description": description or ""})
+    grade = out["grade"]
+    if (
+        grade == "low"
+        and out["verified"]
+        and not out["disqualified"]
+        and out["family"] == "other"
+        and skills
+        and not scoring.SENIOR_RE.search(title or "")
+    ):
+        sl = " ".join(skills).lower()
+        if any(k in sl for k in ["react", "typescript", "next.js", "nextjs", "python", "fastapi", "langchain", "rag"]):
+            return "medium"
+    return grade
 
 
 SALARY_RE = re.compile(
@@ -985,7 +996,10 @@ def cmd_process(args):
     seen_urls, seen_url_keys, seen_ids, seen_ct = _seen_indexes(seen)
     jobs, health = _load_run_jobs(rd)
 
-    new, all_rows = [], []
+    import posting_text
+    import scoring
+
+    survivors = []
     skipped_seen = skipped_loc = skipped_lang = 0
     for j in jobs:
         if NON_ENGLISH_TITLE_RE.search(j.get("title") or ""):
@@ -994,14 +1008,25 @@ def cmd_process(args):
         if _already(j, seen_urls, seen_url_keys, seen_ids, seen_ct):
             skipped_seen += 1
             continue
-        tier = loc_tier(j.get("location"), j.get("work_mode"))
-        f = fit(j.get("title"), j.get("skills"), j.get("description"))
-        j["tier"] = tier
-        j["fit"] = f
+        j["tier"] = loc_tier(j.get("location"), j.get("work_mode"))
+        survivors.append(j)
+
+    # Read the posting for every job that is in a wanted location and has a
+    # role family he could do. The grade needs the requirements, not the title.
+    def worth_reading(j):
+        if j["tier"] not in ("mn", "remote", "ms"):
+            return False
+        return scoring.score({"title": j.get("title"), "company": j.get("company")})["grade"] != "low"
+
+    opened = posting_text.enrich(survivors, only=worth_reading)
+    print(f"posting text: {opened}")
+
+    new, all_rows = [], []
+    for j in survivors:
+        scoring.grade_job(j)
         cap_high_for_location(j)
-        f = j["fit"]
-        all_rows.append({"url": j.get("url"), "fit": f, "tier": tier})
-        if tier not in ("mn", "remote", "ms"):
+        all_rows.append({"url": j.get("url"), "fit": j["fit"], "tier": j["tier"]})
+        if j["tier"] not in ("mn", "remote", "ms"):
             skipped_loc += 1
             continue
         new.append(j)
@@ -1025,7 +1050,12 @@ def cmd_process(args):
         "portal": j["portal"], "work_mode": j.get("work_mode"),
         "src": j["src"], "skills": j.get("skills") or [],
         "salary": extract_salary(j.get("description")),
-        "description": (j.get("description") or "")[:400],
+        "description": (j.get("description") or "")[:8000],
+        "body_status": j.get("body_status"),
+        "fit_reasons": j.get("fit_reasons") or [],
+        "fit_blockers": j.get("fit_blockers") or [],
+        "entry_evidence": bool(j.get("entry_evidence")),
+        "disqualified": bool(j.get("disqualified")),
     } for j in new]
 
     with open(rd / "candidates.json", "w", encoding="utf-8") as f:
