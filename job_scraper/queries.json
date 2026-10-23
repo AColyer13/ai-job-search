@@ -1,5 +1,5 @@
 {
-  "comment": "Query matrix for job_scraper/pipeline.py. Each cli_query runs `bun run .agents/skills/<portal>/cli/src/cli.ts <args>`. Edit queries here, not in the pipeline. Portal must match a directory under .agents/skills/. Bridge families searched on purpose, alongside entry full-stack and AI: Sales Engineer / Solutions Engineer; Technical Sales Representative / Technical Sales Consultant; Pre-Sales Consultant / Solutions Consultant / Solutions Architect. LinkedIn stays capped at 20 results and 14 days per query.",
+  "comment": "Query matrix for job_scraper/pipeline.py. Each cli_query runs `bun run .agents/skills/<portal>/cli/src/cli.ts <args>`. Edit queries here, not in the pipeline. Portal must match a directory under .agents/skills/. Bridge families searched on purpose, alongside entry full-stack and AI: Sales Engineer / Solutions Engineer; Technical Sales Representative / Technical Sales Consultant; Pre-Sales Consultant / Solutions Consultant / Solutions Architect. LinkedIn is read up to 5 pages of 10 results. --jobage is snapped to LinkedIn's valid windows of 1, 7, 14, or 30 days. It is not capped at 20 results.",
   "search_settings": {
     "min_days": 1,
     "max_days": 14,
@@ -90,7 +90,7 @@
     "usajobs",
     "boards"
   ],
-  "jsearch": { "queries": ["solutions engineer", "sales engineer", "implementation consultant", "technical account manager", "junior software engineer"], "pages": 1, "date_posted": "3days", "runs_per_day": 1, "monthly_limit": 190 },
+  "jsearch": { "queries": ["solutions engineer remote", "sales engineer remote", "implementation consultant Minneapolis", "technical account manager remote", "junior software engineer Minneapolis"], "pages": 1, "date_posted": "3days", "runs_per_day": 1, "monthly_limit": 190 },
   "company_boards": [
     { "name": "Jamf", "platform": "greenhouse", "slug": "jamf" },
     { "name": "Sezzle", "platform": "greenhouse", "slug": "sezzle" }

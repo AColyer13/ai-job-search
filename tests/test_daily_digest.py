@@ -70,6 +70,8 @@ def test_position_type_families():
     assert daily_digest.position_type("Pre Sales Digital Architect") == "solutions_architect"
     assert daily_digest.position_type("Presales -HCM Solution Consultant - Healthcare - East") == "presales"
     assert daily_digest.position_type("Implementation Consultant") == "customer_engineer"
+    assert daily_digest.position_type("Implementation Manager") == "customer_engineer"
+    assert daily_digest.position_type("Onboarding Engineer") == "customer_engineer"
     assert daily_digest.position_type("Junior QA Tester") == "qa"
     assert daily_digest.position_type("3rd Shift, Quality Assurance Technician") == "other"
     assert daily_digest.position_type(".NET Developer (Junior)") == "engineering"
@@ -117,6 +119,10 @@ def test_exclusive_engineering_degree_requirement_is_not_listed():
     assert daily_digest.exclusive_engineering_degree(preferred) == ""
     any_degree = "Bachelor's degree required."
     assert daily_digest.exclusive_engineering_degree(any_degree) == ""
+    related = "Bachelor's degree in Computer Science or related field."
+    assert daily_digest.exclusive_engineering_degree(related)
+    prose = "A computer science degree is required to support our business."
+    assert daily_digest.exclusive_engineering_degree(prose)
     assert daily_digest.omit_reason({"title": "Junior Software Developer", "omit": "degree"}) == "degree"
 
 
@@ -252,7 +258,8 @@ def test_board_shell_is_not_treated_as_read():
     daily_digest.apply_board_shells([shell])
     assert shell["body_status"] == "shell"
     assert "star_notes" not in shell
-    assert shell["fit"] == "high"
+    assert shell["fit"] == "low"
+    assert shell.get("fit_before_location") is None
     why = daily_digest._why(shell)
     assert "did not render" in why
     assert "no open positions" not in why.lower()
@@ -328,3 +335,91 @@ def test_merge_keeps_the_original_found_on():
     only = next(iter(store.values()))
     assert only["found_on"] == "2026-10-01"
     assert only["fit"] == "high"
+
+
+def test_merge_refreshes_unread_text_and_keeps_found_on():
+    store = {}
+    daily_digest.merge_jobs(store, [{
+        "url": "https://example.com/jobs/1",
+        "title": "Sales Engineer",
+        "fit": "low",
+        "description": "",
+        "body_status": "unread",
+        "fit_blockers": ["The posting text could not be read, so the requirements are unchecked."],
+    }], "2026-10-01")
+    daily_digest.merge_jobs(store, [{
+        "url": "https://example.com/jobs/1",
+        "title": "Sales Engineer",
+        "fit": "high",
+        "description": "Opened posting text. " * 20,
+        "body_status": "opened",
+        "fit_blockers": [],
+        "fit_reasons": ["A sales-engineering role."],
+    }], "2026-10-10")
+    row = next(iter(store.values()))
+    assert row["found_on"] == "2026-10-01"
+    assert row["fit"] == "high"
+    assert row["body_status"] == "opened"
+    assert "Opened posting" in row["description"]
+    assert row["found_at"]
+
+
+def test_regrade_rereads_shell_and_unread_only(monkeypatch):
+    import posting_text
+
+    calls = []
+
+    def enrich(jobs, workers=8, only=None):
+        calls.extend(job["url"] for job in jobs if only is None or only(job))
+        return {}
+
+    monkeypatch.setattr(posting_text, "enrich", enrich)
+    jobs = [
+        {"url": "https://a", "title": "Sales Engineer", "company": "Acme", "description": "x" * 2000, "body_status": "shell"},
+        {"url": "https://b", "title": "Sales Engineer", "company": "Acme", "description": "", "body_status": "unread"},
+        {"url": "https://c", "title": "Sales Engineer", "company": "Acme", "description": "y" * 2000, "body_status": "opened"},
+        {"url": "https://d", "title": "Senior Solutions Engineer", "company": "Acme", "description": "", "body_status": "shell"},
+        {"url": "https://e", "title": "Sales Engineer", "company": "Acme", "description": "z" * 2000},
+    ]
+    daily_digest.regrade_store(jobs)
+    assert calls == ["https://a", "https://b"]
+
+
+def test_collapse_store_keeps_earliest_found_on_and_longer_text():
+    store = {
+        "later": {
+            "title": "Sales Engineer", "company": "Acme", "location": "Remote",
+            "url": "https://jobs.example.com/later", "found_on": "2026-10-05",
+            "description": "much longer text",
+        },
+        "early": {
+            "title": "Sales Engineer", "company": "Acme", "location": "Remote",
+            "url": "https://jobs.example.com/early", "found_on": "2026-10-01",
+            "description": "short",
+        },
+    }
+    assert daily_digest.collapse_store(store) == 1
+    row = next(iter(store.values()))
+    assert row["url"].endswith("/early")
+    assert row["found_on"] == "2026-10-01"
+    assert row["description"] == "much longer text"
+
+
+def test_backfill_does_not_overwrite_an_existing_day_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(daily_digest, "DAILY", tmp_path)
+    existing = tmp_path / "2026-10-20.docx"
+    existing.write_bytes(b"original")
+    store = {
+        "a": {
+            "found_on": "2026-10-20", "backfilled": True, "title": "Sales Engineer",
+            "fit": "high", "url": "https://a.example/1", "company": "Acme",
+        },
+        "b": {
+            "found_on": "2026-10-21", "backfilled": True, "title": "Sales Engineer",
+            "fit": "high", "url": "https://b.example/2", "company": "Acme",
+        },
+    }
+    written = daily_digest.write_backfill_files(store)
+    assert existing.read_bytes() == b"original"
+    assert (tmp_path / "2026-10-21.docx").exists()
+    assert written == [tmp_path / "2026-10-21.docx"]

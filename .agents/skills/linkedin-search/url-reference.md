@@ -17,7 +17,7 @@ Query params:
 |-------|---------|---------|
 | `keywords` | Free-text query | `data engineer` |
 | `location` | Place string | `Mumbai, Maharashtra, India` · `Berlin, Germany` · `Remote` |
-| `f_TPR` | Posted-within window (seconds) | `r604800` (7d), `r2592000` (30d) |
+| `f_TPR` | Posted-within window (seconds). `--jobage` snaps up to 1, 7, 14, or 30 days. | `r86400` (1d), `r604800` (7d), `r1209600` (14d), `r2592000` (30d) |
 | `f_WT` | Workplace type | `1` on-site · `2` remote · `3` hybrid |
 | `start` | Pagination offset (10/page) | `0`, `10`, `20`, … |
 

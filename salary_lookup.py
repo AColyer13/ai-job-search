@@ -39,6 +39,7 @@ STRIP_PATTERNS = [
     r"\(vg\)", r"\(.*?\)",  # (VG) and other parentheticals
     r"\bdanmark\b", r"\bdenmark\b", r"\bscandinavia\b", r"\bnordic\b",
     r"\bgroup\b", r"\bholding\b",
+    r"\binc\b", r"\bllc\b", r"\bincorporated\b",
     r",\s*.*$",  # everything after comma (sub-entities)
 ]
 

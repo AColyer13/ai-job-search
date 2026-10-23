@@ -26,7 +26,7 @@ Stdlib only. `score(job)` returns a dict; `grade_job(job)` writes it onto the jo
 import re
 
 # --- Adam's background, in whole years -------------------------------------
-SALES_YEARS = 4          # stated minimum. A posting that REQUIRES more is left off the list.
+SALES_YEARS = 5          # profile: about five years of B2B sales. More than this is left off the list.
 TECH_YEARS = 1           # shipped projects + AI contracts, no engineering title
 MAX_ENTRY_TECH_YEARS = 2  # engineering roles asking more than this are a stretch
 
@@ -127,7 +127,7 @@ _YEARS_RE = re.compile(
     re.I,
 )
 _PREFERRED_RE = re.compile(
-    r"\b(preferred|nice to have|a plus|bonus|ideal(?:ly)?|desired|helpful|advantageous)\b",
+    r"\b(preferred|nice to have|a plus|ideal(?:ly)?|desired|helpful|advantageous)\b",
     re.I,
 )
 _ENTRY_TEXT_RE = re.compile(
@@ -139,8 +139,18 @@ _ENTRY_TEXT_RE = re.compile(
     re.I,
 )
 CLEARANCE_RE = re.compile(
-    r"\b(security clearance|active clearance|top secret|ts/sci|polygraph|"
-    r"u\.?s\.? citizen(?:ship)? (?:is )?required)\b",
+    r"\b(security clearance|active clearance|top secret|ts/sci|polygraph)\b",
+    re.I,
+)
+# "Willing to obtain a clearance" is not an active clearance. Citizenship is
+# something a US applicant already meets, so it is not a clearance either.
+_CLEARANCE_SOFT_RE = re.compile(
+    r"\b(?:willing|able|ability|eligible|eligibility)\b.{0,60}\b(?:obtain|obtaining|secure|acquire)\b|"
+    r"\b(?:obtain|obtaining)\b.{0,40}\b(?:a\s+|an\s+)?(?:u\.?s\.?\s+)?(?:security\s+)?clearance\b",
+    re.I,
+)
+_CLEARANCE_ACTIVE_RE = re.compile(
+    r"\b(?:active|current|currently hold|must hold|must possess|existing clearance)\b",
     re.I,
 )
 _SENIOR_TEXT_RE = re.compile(
@@ -160,11 +170,14 @@ _DEGREE_FIELD_RE = re.compile(
     r"\b(?:engineering|computer science|computer engineering)\s+degree\b",
     re.I,
 )
+# "business" / "marketing" count only as a listed alternative ("CS, business, or
+# equivalent"), not as prose ("to support our business").
 _DEGREE_ESCAPE_RE = re.compile(
-    r"\b(?:equivalent|business|marketing|any discipline|any field|any degree|"
-    r"similar experience|preferred|nice to have|ideally|bonus|a plus|"
+    r"\b(?:equivalent|any discipline|any field|any degree|"
+    r"similar experience|preferred|nice to have|ideally|a plus|a bonus|"
     r"boot ?camp|or experience|or work experience|or practical|or relevant|or comparable|"
-    r"in lieu|self[- ]taught|demonstrated|portfolio)\b",
+    r"in lieu|self[- ]taught|demonstrated|portfolio)\b|"
+    r"(?:,|\bor\b)\s+(?:a\s+)?(?:business|marketing)\b",
     re.I,
 )
 
@@ -176,8 +189,13 @@ def _chunks(text):
 
 
 _PREF_HEADER_RE = re.compile(
-    r"\b(preferred|nice[- ]to[- ]haves?|bonus|a plus|pluses|desired|ideal candidate|"
+    r"\b(preferred|nice[- ]to[- ]haves?|a plus|pluses|desired|ideal candidate|"
     r"extra credit|good to have|would be great|not required|optional)\b",
+    re.I,
+)
+# Compensation headings ("Sign-on Bonus:") are not "nice to have" sections.
+_COMP_HEADER_RE = re.compile(
+    r"\b(sign-?on bonus|signing bonus|compensation|salary|benefits|perks|what we offer)\b",
     re.I,
 )
 _REQ_HEADER_RE = re.compile(
@@ -219,12 +237,13 @@ def sections(text):
     for line in _chunks(text):
         if _is_header(line):
             colon = line.endswith(":")
-            if _PREF_HEADER_RE.search(line):
+            if _PREF_HEADER_RE.search(line) and not _COMP_HEADER_RE.search(line):
                 mode_pref = True
                 out.append((line, True))
                 continue
             if (
-                _REQ_HEADER_RE.search(line)
+                _COMP_HEADER_RE.search(line)
+                or _REQ_HEADER_RE.search(line)
                 or _NEUTRAL_HEADER_RE.search(line)
                 or (colon and _REQ_COLON_HEADER_RE.search(line))
             ):
@@ -247,13 +266,18 @@ _ADVANCED_DEGREE_RE = re.compile(
 )
 
 
+def _negated(line):
+    return bool(_NEGATED_REQUIREMENT_RE.search(line or ""))
+
+
 def exclusive_degree(text):
     """The sentence that REQUIRES a CS/engineering/technical degree or a graduate degree
     with no experience alternative, or ''. Marketing B.A., bootcamp, and equivalent
-    experience are alternatives; "or related field" is not.
+    experience are alternatives; "or related field" is not. Bare "business" in
+    prose ("to support our business") is not an alternative either.
     """
     for line, preferred in sections(text):
-        if preferred or _DEGREE_ESCAPE_RE.search(line):
+        if preferred or _negated(line) or _DEGREE_ESCAPE_RE.search(line):
             continue
         if _DEGREE_FIELD_RE.search(line) or _TECH_FIELD_DEGREE_RE.search(line):
             return line[:240]
@@ -277,7 +301,16 @@ _OWN_SKILL_RE = re.compile(
 )
 _SKILL_REQUIRED_RE = re.compile(
     r"\b(experience|proficien\w*|knowledge|expertise|skilled|hands[- ]on|fluen\w*|"
-    r"strong|solid|working|command)\b",
+    r"strong|solid|working|command|required|must)\b",
+    re.I,
+)
+# A line that cancels the requirement ("no Java experience required",
+# "we do not require a clearance") is not a requirement.
+_NEGATED_REQUIREMENT_RE = re.compile(
+    r"\b(?:no|not|without|never)\b.{0,60}\b(?:required|requirement|experience|necessary|needed)\b|"
+    r"\b(?:do not|don't|does not|doesn't)\s+require\b|"
+    r"\bnot\s+required\b|"
+    r"\bno\b.{0,40}\bexperience\b",
     re.I,
 )
 _CREDENTIAL_RE = re.compile(
@@ -299,7 +332,7 @@ _NOT_A_REQUIREMENT_RE = re.compile(
 def missing_skill(text):
     """First required line naming a language or tool you lack, or ''."""
     for line, preferred in sections(text):
-        if preferred or len(line) > 400 or _NOT_A_REQUIREMENT_RE.search(line):
+        if preferred or _negated(line) or len(line) > 400 or _NOT_A_REQUIREMENT_RE.search(line):
             continue
         if (
             _LACKING_SKILL_RE.search(line)
@@ -313,11 +346,26 @@ def missing_skill(text):
 def missing_credential(text):
     """First required line naming a certification or license you lack, or ''."""
     for line, preferred in sections(text):
-        if preferred or _DEGREE_ESCAPE_RE.search(line):
+        if preferred or _negated(line) or _DEGREE_ESCAPE_RE.search(line):
             continue
         if _CREDENTIAL_RE.search(line):
             return line[:240]
     return ""
+
+
+def requires_clearance(text):
+    """True when a required line demands an active clearance.
+
+    "Willing to obtain a clearance" and "we do not require a clearance" are not.
+    U.S. citizenship is not a clearance.
+    """
+    for line, preferred in sections(text):
+        if preferred or _negated(line) or not CLEARANCE_RE.search(line):
+            continue
+        if _CLEARANCE_SOFT_RE.search(line) and not _CLEARANCE_ACTIVE_RE.search(line):
+            continue
+        return True
+    return False
 
 
 def years_required(text):
@@ -330,6 +378,8 @@ def years_required(text):
     """
     sales = tech = other = pref = 0
     for line, preferred in sections(text):
+        if _negated(line):
+            continue
         for m in _YEARS_RE.finditer(line):
             if preferred:
                 n = int(m.group(1))
@@ -454,8 +504,8 @@ def score(job):
         blockers.append(f"It requires a degree you do not have, with no experience alternative: \"{degree[:140]}\"")
         return result(_LOW, disqualified=True)
 
-    if CLEARANCE_RE.search(desc):
-        blockers.append("It requires a security clearance or U.S. citizenship.")
+    if requires_clearance(desc):
+        blockers.append("It requires an active security clearance.")
         return result(_LOW, disqualified=True)
 
     credential = missing_credential(desc)
@@ -494,8 +544,10 @@ def score(job):
             blockers.append("It requires 3+ years in a technical role; you have about 1.")
             return result(_LOW, disqualified=True)
         sales_need = max(sales_y, other_y)
-        if sales_need > SALES_YEARS:         # 5+ required: not qualified
-            blockers.append(f"It requires {sales_need}+ years of experience; you have 4 in sales.")
+        if sales_need > SALES_YEARS:         # more than 5 years required
+            blockers.append(
+                f"It requires {sales_need}+ years of experience; you have {SALES_YEARS} in sales."
+            )
             return result(_LOW, disqualified=True)
         if sales_need:
             reasons.append(f"It asks for {sales_need} year{'s' if sales_need != 1 else ''}, inside your sales history.")
