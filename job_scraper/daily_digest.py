@@ -180,7 +180,7 @@ def is_board_shell(description):
 
 
 def apply_board_shells(jobs):
-    """Mark shell pages unread as text. Leave the title grade as it is.
+    """A board error page is not a high grade and does not stay in the High section.
 
     A star stays only when its quote is still in the saved description.
     """
@@ -188,6 +188,11 @@ def apply_board_shells(jobs):
         if not is_board_shell(job.get("description")):
             continue
         job["body_status"] = "shell"
+        job["fit"] = "low"
+        job["fit_reasons"] = []
+        job["fit_blockers"] = ["The posting page did not render."]
+        job.pop("fit_before_location", None)
+        job.pop("location_block", None)
         notes = job.get("star_notes") or []
         desc = job.get("description") or ""
         kept = [note for note in notes if (note.get("quote") or "") in desc]
@@ -257,6 +262,8 @@ def _why(job):
             f"The title score would be high. {block[0].upper()}{block[1:]}, "
             f"so the grade is {stored}."
         )
+        if notes:
+            reason = f"{reason} {' '.join(notes)}"
     else:
         demotion = _demotion_note(title, skills, job.get("description") or "", stored)
         reason = demotion or _title_reason(title, skills)
@@ -404,7 +411,7 @@ def collapse_store(store):
     """Drop stored copies of a job that is also stored from another site.
 
     Keeps the employer's own link over an aggregator repost, otherwise the earliest
-    copy. Returns the number removed.
+    found_on. The kept row also keeps the longer description. Returns the number removed.
     """
     import pipeline
     best = {}
@@ -417,13 +424,65 @@ def collapse_store(store):
             best[twin] = key
             continue
         cur_row = store[cur]
-        if pipeline._is_aggregator(cur_row) and not pipeline._is_aggregator(row):
+        incoming_employer = pipeline._is_aggregator(cur_row) and not pipeline._is_aggregator(row)
+        current_employer = pipeline._is_aggregator(row) and not pipeline._is_aggregator(cur_row)
+        if incoming_employer:
+            pipeline._copy_longer_description(row, cur_row)
+            pipeline._copy_earliest_found(row, cur_row)
             best[twin] = key
+        elif current_employer:
+            pipeline._copy_longer_description(cur_row, row)
+            pipeline._copy_earliest_found(cur_row, row)
+        elif (row.get("found_on") or "9999") < (cur_row.get("found_on") or "9999"):
+            pipeline._copy_longer_description(row, cur_row)
+            pipeline._copy_earliest_found(row, cur_row)
+            best[twin] = key
+        else:
+            pipeline._copy_longer_description(cur_row, row)
+            pipeline._copy_earliest_found(cur_row, row)
     keep = set(best.values()) | {k for k, r in store.items() if not pipeline.dedupe_key(r)}
     removed = [k for k in store if k not in keep]
     for k in removed:
         del store[k]
     return len(removed)
+
+
+def _row_needs_text(row):
+    """True when a stored row was never read, or the saved page was a shell."""
+    status = row.get("body_status") or ""
+    desc = row.get("description") or ""
+    blockers = " ".join(row.get("fit_blockers") or [])
+    if status in ("shell", "unread"):
+        return True
+    if "could not be read" in blockers or "did not render" in blockers:
+        return True
+    if is_board_shell(desc):
+        return True
+    return not desc and status != "opened"
+
+
+def _incoming_text_better(stored, job):
+    """True when this run actually read a posting the store only had a shell for."""
+    desc = job.get("description") or ""
+    if not desc or is_board_shell(desc):
+        return False
+    if (job.get("body_status") or "") == "opened":
+        return True
+    return len(desc) > len(stored.get("description") or "")
+
+
+def _refresh_stored_text(stored, job):
+    """Replace the unread text and grade. Leave the day it was first found."""
+    stored["description"] = (job.get("description") or "")[:8000]
+    stored["body_status"] = job.get("body_status")
+    if job.get("fit"):
+        stored["fit"] = job.get("fit")
+    stored["fit_reasons"] = job.get("fit_reasons") or []
+    stored["fit_blockers"] = job.get("fit_blockers") or []
+    stored["entry_evidence"] = bool(job.get("entry_evidence"))
+    stored["disqualified"] = bool(job.get("disqualified"))
+    if job.get("salary"):
+        stored["salary"] = job.get("salary")
 
 
 def merge_jobs(store, jobs, found_on):
@@ -433,7 +492,12 @@ def merge_jobs(store, jobs, found_on):
     for job in jobs:
         url = job.get("url") or ""
         key = _key(url)
-        if not key or key in store:
+        if not key:
+            continue
+        if key in store:
+            stored = store[key]
+            if _row_needs_text(stored) and _incoming_text_better(stored, job):
+                _refresh_stored_text(stored, job)
             continue
         twin = pipeline_dedupe_key(job)  # the same job already stored from another site
         if twin and twin in have:
@@ -522,7 +586,8 @@ _PRESALES_ARCH_RE = re.compile(
 _PRESALES_RE = re.compile(r"\b(?:pre[-\s]?sales|solutions? consultant)\b", re.I)
 _IMPL_RE = re.compile(
     r"\b(?:technical account|customer engineer|forward deployed|"
-    r"implementation engineer|implementation consultant|implementation specialist)\b",
+    r"implementation engineer|implementation consultant|implementation specialist|"
+    r"implementation manager|onboarding engineer)\b",
     re.I,
 )
 # Software QA only. "Quality Assurance Technician" and "Quality Engineer"
@@ -552,27 +617,6 @@ _ENGINEERING_ENTRY_RE = re.compile(
     r"\b(?:engineer|developer)\s+(?:i|1)\b",
     re.I,
 )
-# A degree requirement is exclusive when the sentence names engineering or
-# computer science and does not accept another degree or equivalent experience.
-_DEGREE_FIELD_RE = re.compile(
-    r"\b(?:bachelor(?:'?s)?|b\.?\s?s\.?\b|m\.?\s?s\.?\b|master(?:'?s)?|undergraduate|college)\b"
-    r".{0,40}\b(?:in|of)\s+(?:computer science|computer engineering|software engineering|"
-    r"electrical engineering|mechanical engineering|engineering|cs\b)|"
-    r"\b(?:bs|ms|b\.s\.?|m\.s\.?)\b(?:\s*/\s*(?:bs|ms|b\.s\.?|m\.s\.?))?\s+(?:in\s+)?"
-    r"(?:computer science|computer engineering|software engineering|engineering|cs)\b|"
-    r"\b(?:engineering|computer science|computer engineering)\s+degree\b|"
-    r"\bdegree\s+in\s+(?:computer science|computer engineering|software engineering|"
-    r"electrical engineering|mechanical engineering|engineering)\b",
-    re.I,
-)
-_DEGREE_ESCAPE_RE = re.compile(
-    r"\b(?:equivalent|related field|related discipline|related technical|related area|"
-    r"business|technical discipline|technical field|any discipline|any field|"
-    r"similar experience|or related|preferred|nice to have|ideally|bonus)\b",
-    re.I,
-)
-
-
 def position_type(title):
     """Which section a title belongs in. One title, one section."""
     import pipeline
@@ -659,18 +703,14 @@ def engineering_level_blocked(title):
 
 
 def exclusive_engineering_degree(text):
-    """Sentence that requires an engineering or computer-science degree, or ''."""
-    if not text:
-        return ""
-    chunks = _plain_chunks(text)
-    for chunk in chunks:
-        line = " ".join(chunk.split())
-        if not line or not _DEGREE_FIELD_RE.search(line):
-            continue
-        if _DEGREE_ESCAPE_RE.search(line):
-            continue
-        return line[:240]
-    return ""
+    """Sentence that requires an engineering or computer-science degree, or ''.
+
+    Same rule as scoring.exclusive_degree. "Or related field" is not an
+    alternative. A listed "business" or "marketing" degree is.
+    """
+    import scoring
+
+    return scoring.exclusive_degree(text)
 
 
 def omit_reason(job):
@@ -1031,20 +1071,34 @@ def run_pipeline(extra=()):
     return proc.returncode, log
 
 
+def _stored_text_readable(job):
+    """True when the saved text is a real posting, not a shell or an empty card."""
+    import scoring
+
+    status = job.get("body_status") or ""
+    if status in ("shell", "unread"):
+        return False
+    text = job.get("description") or ""
+    if is_board_shell(text):
+        return False
+    return scoring.has_text(text)
+
+
 def regrade_store(jobs):
     """Read any posting still missing its text, then grade every stored job.
 
-    Grades come from the resume-aware scorer, so an older title-only grade is
-    replaced. The location cap runs after this.
+    A shell page and an empty card are read again when the title is worth it.
+    A long posting that already opened is not fetched again. Grades come from
+    the resume-aware scorer, so an older title-only grade is replaced. The
+    location cap runs after this.
     """
     import posting_text
     import scoring
 
     def worth_reading(job):
-        return (
-            job.get("body_status") not in ("opened", "shell")
-            and scoring.score(dict(job, description=""))["grade"] != "low"
-        )
+        if _stored_text_readable(job):
+            return False
+        return scoring.worth_reading(job)
 
     try:
         posting_text.enrich(jobs, only=worth_reading)
@@ -1075,7 +1129,6 @@ def _rule_lines():
         "A star means the posting names a business or marketing degree, a bootcamp or coding certificate, or a business analytics certificate. The sentence from the posting is on the card.",
         "High and medium jobs are grouped by position type. Every low job is at the bottom, still grouped by type.",
         "Each card says why the grade is high, medium, or low. The posting sentence is on the card when the page could be read.",
-        "High, medium, and low are title matches.",
         "A high grade is only for the Twin Cities area, Gulfport–Biloxi, or a US remote role that does not name another city. Any other location stays medium or low.",
     ]
 
@@ -1125,6 +1178,29 @@ def _publish(day, store, log_text):
     except Exception as exc:
         print(f"Dashboard was not written: {exc}")
     return dated, latest, html_path
+
+
+def write_backfill_files(store):
+    """Write a past day's file only when that file is not already on disk.
+
+    A backfill must not replace a morning file with the pruned store. Jobs
+    older than the window are already gone, so rewriting the old file would
+    drop cards that were on it.
+    """
+    written = []
+    for past in sorted({j["found_on"] for j in store.values() if j.get("backfilled")}):
+        path = DAILY / f"{past}.docx"
+        if path.exists():
+            continue
+        past_jobs = listable(jobs_found_on(store, past))
+        result = write_docx(path, "Adam Colyer job search", [
+            f"Date: {past}",
+            f"Jobs: {len(past_jobs)}    High: {_counts(past_jobs)['high']}    Medium: {_counts(past_jobs)['medium']}    Low: {_counts(past_jobs)['low']}",
+            "Rebuilt by a backfill search: includes jobs posted this day that the daily runs had missed.",
+        ] + _rule_lines(), past_jobs)
+        if result:
+            written.append(result)
+    return written
 
 
 def backfill_found_on(store, today, days):
@@ -1189,13 +1265,7 @@ def main():
         print("backfilled by posting date:", dict(sorted(moved.items())))
     dated, latest, html_path = _publish(day, store, log_text)
     if args.backfill:
-        for past in sorted({j["found_on"] for j in store.values() if j.get("backfilled")}):
-            past_jobs = listable(jobs_found_on(store, past))
-            write_docx(DAILY / f"{past}.docx", "Adam Colyer job search", [
-                f"Date: {past}",
-                f"Jobs: {len(past_jobs)}    High: {_counts(past_jobs)['high']}    Medium: {_counts(past_jobs)['medium']}    Low: {_counts(past_jobs)['low']}",
-                "Rebuilt by a backfill search: includes jobs posted this day that the daily runs had missed.",
-            ] + _rule_lines(), past_jobs)
+        write_backfill_files(store)
     print(dated)
     print(latest)
     if html_path:

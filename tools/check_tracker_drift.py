@@ -75,7 +75,7 @@ def load_tracker_slugs():
     cover_letter_file columns (the authoritative link) and, as a fallback,
     from normalized company+role text (in case those columns are blank)."""
     if not TRACKER_PATH.exists():
-        return set(), []
+        return set(), set(), []
     rows = []
     file_slugs = set()
     text_slugs = set()
@@ -94,8 +94,7 @@ def load_tracker_slugs():
             company = _normalize(row.get("company"))
             role = _normalize(row.get("role"))
             if company and role:
-                text_slugs.add(company + "_" + role)
-                text_slugs.add(company)  # loose fallback: company alone
+                text_slugs.add(_normalize(company + role))
     return file_slugs, text_slugs, rows
 
 
@@ -108,7 +107,7 @@ def find_drift():
         if slug in file_slugs:
             continue
         norm_slug = _normalize(slug)
-        if any(norm_slug.startswith(t) or t.startswith(norm_slug) for t in text_slugs if t):
+        if norm_slug in text_slugs:
             continue
         archive_exists = (ARCHIVE_DIR / slug).exists()
         missing.append({

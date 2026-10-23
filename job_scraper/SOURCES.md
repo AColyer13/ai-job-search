@@ -18,7 +18,7 @@ HTTP sources are enabled/disabled via the `http_sources` list there (or
 |---|---|---|
 | RemoteOK | `remoteok.com/api` | Remote tech, worldwide |
 | Remotive | `remotive.com/api/remote-jobs` | Remote tech (the public API now returns about 10 jobs per call); `candidate_required_location` used for US filtering |
-| Arbeitnow | `arbeitnow.com/api/job-board-api` | EU-heavy; only `remote: true` jobs kept |
+| Arbeitnow | `arbeitnow.com/api/job-board-api` | EU-heavy; only `remote: true` jobs kept. A non-US location stays international. An empty location is not tagged as US remote. |
 | Jobicy | `jobicy.com/api/v2/remote-jobs?geo=usa` | Remote, geo-filtered to USA |
 | Himalayas | `himalayas.app/jobs/api/search` (12 queries, 2 pages) | Remote, US; returns the full posting text. Its job pages return 403 to scripts, so this API is the only way to read them. |
 | WeWorkRemotely | RSS (`/categories/remote-programming-jobs.rss`) | Remote programming |
@@ -37,7 +37,7 @@ These are skipped silently until the env vars are set:
 |---|---|---|
 | Adzuna (US) | `ADZUNA_APP_ID`, `ADZUNA_APP_KEY` | https://developer.adzuna.com/ |
 | USAJobs (federal) | `USAJOBS_API_KEY`, `USAJOBS_EMAIL` | https://developer.usajobs.gov/ |
-| JSearch (OpenWebNinja) | `JSEARCH_API_KEY` (a RapidAPI key in `RAPIDAPI_KEY` also works) | https://www.openwebninja.com/api/jsearch. Google for Jobs results: Indeed, ZipRecruiter, Glassdoor and others, through a licensed API. Free plan is 200 requests a month. It runs once a day (first run), 5 queries, and stops at `monthly_limit` (190); the count is kept in `job_scraper/jsearch_runs.json`. Queries are in `queries.json` under `jsearch`. |
+| JSearch (OpenWebNinja) | `JSEARCH_API_KEY` (a RapidAPI key in `RAPIDAPI_KEY` also works) | https://www.openwebninja.com/api/jsearch. Google for Jobs results: Indeed, ZipRecruiter, Glassdoor and others, through a licensed API. Free plan is 200 requests a month. It runs once a day when at least one request succeeds, 5 location-scoped queries, and stops at `monthly_limit` (190). Each successful call is charged `pages` requests. A failed call is not charged, and a run that lands nothing does not use the day's run. A corrupt `job_scraper/jsearch_runs.json` skips the source instead of resetting the count. Queries are in `queries.json` under `jsearch`. |
 
 ## Tier 4 — Free key, not yet implemented
 

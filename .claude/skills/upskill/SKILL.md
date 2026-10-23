@@ -53,7 +53,7 @@ Extract required and preferred technical skills from each job source:
 ### Aggregate mode
 For each job row in the tracker, you do not have the full posting — use the `role`, `sector`, and `notes` columns to infer likely required skills. If the row has a `source` URL, you may optionally WebFetch it for more detail, but skip if the URL is missing or dead.
 
-Build a **skill frequency map**: for each extracted skill, count how many jobs mention it. Then apply a **fit weight**: for each job, multiply the skill count contribution by `(100 - fit_rating) / 100` — lower fit jobs contribute more to the gap score.
+Build a **skill frequency map**: for each extracted skill, count how many jobs mention it. Then apply a **fit weight**: for each job, multiply the skill count contribution by `max(0.2, (100 - fit_rating) / 100)`. A blank `fit_rating` counts as 50. A fit of 100 still counts, at the 0.2 floor, so a perfect-fit role does not disappear from the gap list.
 
 Final score for each skill: `sum of (fit_weight × occurrence)` across all jobs.
 

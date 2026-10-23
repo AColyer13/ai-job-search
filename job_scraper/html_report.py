@@ -173,7 +173,7 @@ a {{ color: #1d4e89; }}
 <h1>Adam Colyer job search</h1>
 <p>Latest jobs as of {esc(day)}</p>
 <p>Jobs: {total}    High: {counts['high']}    Medium: {counts['medium']}    Low: {counts['low']}</p>
-<p>High, medium, and low are title matches.</p>
+<p>Grades come from the posting text, not the title. A job whose text could not be read is graded low.</p>
 {source_html}
 <div class="filters">
 <label>Search <input id="q" type="search" autocomplete="off"></label>
