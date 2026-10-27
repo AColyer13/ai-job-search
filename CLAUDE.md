@@ -96,6 +96,14 @@ None.
 4. **Verify both documents** (see Verification Checklist below)
 5. Prepare interview talking points based on the role requirements and your strengths
 
+## Daily apply log (`daily/applied_for.docx`)
+When Adam asks you to apply to jobs from the daily list, work from `daily/latest.docx` (the same jobs are in `daily/latest.json`, best fit first). Skip anything already in the log (`python job_scraper/applied_log.py list`). Open each posting and sort it:
+- **You can submit it:** the form is reachable without creating an account, logging in or solving a CAPTCHA, and every answer comes from the canonical resume and this profile. Submit it only because Adam asked for that day's batch, then log it: `python job_scraper/applied_log.py add --url URL --status applied --method "Greenhouse form" --resume "C:\Users\adamc\OneDrive\Resumes\Adam_Colyer_Resume.pdf"` (that PDF is the resume to upload; add `--cover-letter` if one went in; the tracker's `cv_file` and `cover_letter_file` columns, `/outcome` and `/notion-sync` read them).
+- **Adam has to apply by hand:** an account or login is required, there is a CAPTCHA, assessment or video step, a question only he can answer (pay, work authorization, demographics, anything not in the profile), or the posting looks stale or wrong. Do not guess. Log it: `... add --url URL --status recommended --reason "why"`.
+- When Adam says he applied to a recommended job: `... add --url URL --status applied --by Adam`.
+
+The command updates `daily/applied_for.json`, rewrites the Word file (grouped by month, newest first) and adds each applied job to `job_search_tracker.csv`, which `/rank`, `/scrape` and `/gmail-sync` read. Recommended jobs stay out of the tracker. A job is never logged twice, and an applied job never goes back to recommended. Both files are gitignored. After a batch, tell Adam what went into each list.
+
 **Important:** When mentioning agentic coding or AI tooling in CVs/cover letters, explicitly name whichever tool was actually used for that referenced work (see Technical Skills above: Claude Code, Cursor, or Antigravity) - never hardcode one regardless of which tool actually did the work.
 
 ## Verification Checklist
