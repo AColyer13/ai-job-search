@@ -250,10 +250,24 @@ export function parseJobDetail(html: string, id: string): JobDetail {
   }
 }
 
-/** Convert a job-age in days to LinkedIn's f_TPR seconds value. */
+/** LinkedIn f_TPR only accepts these posted-within windows. */
+const LINKEDIN_JOBAGE_DAYS = [1, 7, 14, 30]
+
+/** Convert a job-age in days to LinkedIn's f_TPR seconds value.
+
+Any other positive day count snaps up to the next valid window, so a 5-day
+search still covers those five days. 9999 and above mean "no date filter".
+*/
 export function jobageToTPR(days: number): string | null {
   if (!days || days <= 0 || days >= 9999) return null
-  return `r${days * 86400}`
+  let bucket = LINKEDIN_JOBAGE_DAYS[LINKEDIN_JOBAGE_DAYS.length - 1]
+  for (const allowed of LINKEDIN_JOBAGE_DAYS) {
+    if (days <= allowed) {
+      bucket = allowed
+      break
+    }
+  }
+  return `r${bucket * 86400}`
 }
 
 /** Workplace-type flag: on-site=1, remote=2, hybrid=3. */

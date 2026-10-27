@@ -30,7 +30,7 @@ Rate limits at 12 runs a day:
 |---|---|---|
 | RemoteOK | `remoteok.com/api` | Remote tech, worldwide |
 | Remotive | `remotive.com/api/remote-jobs` | Remote tech (the public API now returns about 10 jobs per call); `candidate_required_location` used for US filtering |
-| Arbeitnow | `arbeitnow.com/api/job-board-api` | EU-heavy; only `remote: true` jobs kept |
+| Arbeitnow | `arbeitnow.com/api/job-board-api` | EU-heavy; only `remote: true` jobs kept. A non-US location stays international. An empty location is not tagged as US remote. |
 | Jobicy | `jobicy.com/api/v2/remote-jobs?geo=usa` | Remote, geo-filtered to USA |
 | Workable | `jobs.workable.com/api/v1/jobs` (8 queries, 4 pages, US, 21 days) | Every company on Workable; full text. |
 | SimplifyJobs | public `listings.json` on GitHub | Entry-level tech roles, active and posted in 21 days; no text, so the reader opens each. |
@@ -52,7 +52,7 @@ These are skipped silently until the env vars are set:
 |---|---|---|
 | Jooble | `JOOBLE_API_KEY` (set as a Windows user environment variable) | https://jooble.org/api/about. Aggregates US boards. 8 queries × 2 locations (Minnesota, remote), 1 page of 20 each, 3-day window, so 16 requests a run. Text is a short snippet; the reader opens the link. Queries are in `queries.json` under `jooble`. |
 | USAJobs (federal) | `USAJOBS_API_KEY`, `USAJOBS_EMAIL` | https://developer.usajobs.gov/ |
-| JSearch (OpenWebNinja) | `JSEARCH_API_KEY` (a RapidAPI key in `RAPIDAPI_KEY` also works) | https://www.openwebninja.com/api/jsearch. Google for Jobs results: Indeed, ZipRecruiter, Glassdoor and others, through a licensed API. The plan allows 10,000 requests a month. Each run sends every query (5), so 12 runs a day is about 1,800 requests a month, and it stops at `monthly_limit` (9,500). The count is kept in `job_scraper/jsearch_runs.json`. Queries are in `queries.json` under `jsearch`. |
+| JSearch (OpenWebNinja) | `JSEARCH_API_KEY` (a RapidAPI key in `RAPIDAPI_KEY` also works) | https://www.openwebninja.com/api/jsearch. Google for Jobs results: Indeed, ZipRecruiter, Glassdoor and others, through a licensed API. The plan allows 10,000 requests a month. Each run sends every query (5), so 12 runs a day is about 1,800 requests a month, and it stops at `monthly_limit` (9,500). The count is kept in `job_scraper/jsearch_runs.json`. Each successful call is charged `pages` requests; a failed call is not charged, and a run that lands nothing is not counted. A corrupt budget file skips the source instead of resetting the count. `runs_per_day` is optional. Queries are in `queries.json` under `jsearch`. |
 
 ## Tier 4 — Free key, not yet implemented
 

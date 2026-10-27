@@ -131,7 +131,7 @@ BRIDGE_RE = re.compile(
     r"solutions consultant|solutions architect|"
     r"technical account|customer engineer|"
     r"forward deployed|implementation engineer|implementation consultant|"
-    r"implementation specialist)\b",
+    r"implementation specialist|implementation manager|onboarding engineer)\b",
     re.I,
 )
 ENTRY_RE = re.compile(
@@ -204,6 +204,11 @@ def loc_tier(loc, work_mode=None):
     if "mississippi" in l or re.search(r",\s*ms\b", l):
         return "ms-inland"
     if "remote" in l or wm == "remote":
+        # A US state, abbreviated ("Austin, TX") or spelled out ("Austin, Texas",
+        # "Remote, Texas"), is US remote. Only a non-US place with work_mode
+        # remote is international.
+        if _region_code(l):
+            return "remote"
         if re.search(r"united states|, us\b|usa|us - remote|remote, us|us remote", l) or l in (
             "remote",
             "united states",
@@ -212,8 +217,6 @@ def loc_tier(loc, work_mode=None):
         if wm == "remote" and not loc:
             return "remote"
         if wm == "remote":
-            if re.search(r", (al|ak|az|ar|ca|co|ct|dc|fl|ga|hi|id|il|ia|ks|ky|la|ma|md|me|mi|mo|mt|nc|nd|ne|nh|nj|nm|nv|ny|oh|ok|or|pa|ri|sc|sd|tn|tx|ut|va|vt|wa|wi|wv|wy)\b", l) or "united states" in l or ", us" in l:
-                return "remote"
             return "exclude-intl"
         return "remote"
     if "minnesota" in l or re.search(r",\s*mn\b", l):
@@ -246,7 +249,7 @@ def _generic_us_remote(loc):
     cleaned = _REMOTE_FILLER_RE.sub(" ", low)
     cleaned = re.sub(r"[,()/.\-]", " ", cleaned)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    return cleaned in ("", "canada")
+    return cleaned == ""
 
 
 def _card_in_requested_location(loc, work_mode=None):
@@ -436,6 +439,11 @@ def extract_salary(description):
 # title, company, location, date, url, id, portal, work_mode, skills, description
 # ---------------------------------------------------------------------------
 
+# posting_text.enrich skips a refetch once the saved text is 1,500 characters,
+# so keep the API body up to the same cap the fetcher uses (8,000).
+DESC_MAX = 8000
+
+
 def _get(url, headers=None, timeout=HTTP_TIMEOUT, data=None):
     """GET (POST when `data` is bytes) with two retries on 429/502/503/504, waiting out Retry-After (capped at 30 s)."""
     req = urllib.request.Request(url, data=data, headers={"User-Agent": USER_AGENT, **(headers or {})})
@@ -507,6 +515,23 @@ def _is_aggregator(job):
     return any(h in url for h in AGGREGATOR_HOSTS)
 
 
+def _copy_longer_description(dest, src):
+    """Keep the longer posting text when two rows are the same job."""
+    src_text = src.get("description") or ""
+    if len(src_text) > len(dest.get("description") or ""):
+        dest["description"] = src_text
+        if src.get("body_status"):
+            dest["body_status"] = src.get("body_status")
+
+
+def _copy_earliest_found(dest, src):
+    """Keep the earlier found_on when collapsing stored copies."""
+    if (src.get("found_on") or "9999") < (dest.get("found_on") or "9999"):
+        dest["found_on"] = src.get("found_on")
+        if src.get("found_at"):
+            dest["found_at"] = src.get("found_at")
+
+
 def collapse_duplicates(jobs):
     """One row per job across sites. Keeps the employer's own link over a repost.
 
@@ -525,10 +550,14 @@ def collapse_duplicates(jobs):
             order.append(job)
             continue
         if _is_aggregator(cur) and not _is_aggregator(job):
+            _copy_longer_description(job, cur)
+            _copy_earliest_found(job, cur)
             job.setdefault("also_on", []).extend(cur.get("also_on", []) + [cur.get("portal")])
             order[order.index(cur)] = job
             best[key] = job
         else:
+            _copy_longer_description(cur, job)
+            _copy_earliest_found(cur, job)
             cur.setdefault("also_on", []).append(job.get("portal"))
     return order, len(jobs) - len(order)
 
@@ -583,7 +612,7 @@ def src_remoteok():
             "portal": "remoteok",
             "work_mode": "remote",
             "skills": j.get("tags") or [],
-            "description": _strip_html(j.get("description"))[:2000],
+            "description": _strip_html(j.get("description"))[:DESC_MAX],
         })
     return out
 
@@ -612,7 +641,7 @@ def src_remotive():
             "portal": "remotive",
             "work_mode": "remote",
             "skills": j.get("tags") or [],
-            "description": _strip_html(j.get("description"))[:2000],
+            "description": _strip_html(j.get("description"))[:DESC_MAX],
         })
     return out
 
@@ -628,17 +657,28 @@ def src_arbeitnow():
             if not _keep_title(j.get("title")):
                 continue
             created = j.get("created_at")
+            raw_loc = (j.get("location") or "").strip()
+            # The feed is EU-heavy. A bare "Remote" would look like US remote.
+            # Only an explicit US location is tagged remote-US; everything else
+            # keeps its country so loc_tier can exclude it.
+            us = bool(re.search(r"\b(united states|u\.s\.a?\.?|usa)\b", raw_loc, re.I))
+            if us:
+                location, work_mode = f"Remote ({raw_loc})", "remote"
+            elif raw_loc:
+                location, work_mode = f"Remote ({raw_loc})", "remote"
+            else:
+                location, work_mode = "", None
             out.append({
                 "title": j.get("title"),
                 "company": j.get("company_name"),
-                "location": "Remote",
+                "location": location,
                 "date": datetime.fromtimestamp(created, tz=timezone.utc).date().isoformat() if created else "",
                 "url": j.get("url"),
                 "id": j.get("slug") or "",
                 "portal": "arbeitnow",
-                "work_mode": "remote",
+                "work_mode": work_mode,
                 "skills": j.get("tags") or [],
-                "description": _strip_html(j.get("description"))[:2000],
+                "description": _strip_html(j.get("description"))[:DESC_MAX],
             })
         url = (data.get("links") or {}).get("next")
         if not url:
@@ -662,7 +702,7 @@ def src_jobicy():
             "portal": "jobicy",
             "work_mode": "remote",
             "skills": j.get("jobIndustry") or [],
-            "description": _strip_html(j.get("jobDescription"))[:2000],
+            "description": _strip_html(j.get("jobDescription"))[:DESC_MAX],
         })
     return out
 
@@ -692,10 +732,13 @@ def src_himalayas():
                 if not url or url in seen or not _keep_title(j.get("title")):
                     continue
                 seen.add(url)
-                try:
-                    date = datetime.fromtimestamp(int(j.get("pubDate") or 0)).date().isoformat()
-                except (TypeError, ValueError, OSError):
-                    date = ""
+                raw_date = j.get("pubDate")
+                date = ""
+                if raw_date not in (None, "", 0):
+                    try:
+                        date = datetime.fromtimestamp(int(raw_date)).date().isoformat()
+                    except (TypeError, ValueError, OSError):
+                        date = ""
                 out.append({
                     "title": j.get("title"),
                     "company": j.get("companyName"),
@@ -706,7 +749,7 @@ def src_himalayas():
                     "portal": "himalayas",
                     "work_mode": "remote",
                     "skills": [],
-                    "description": _strip_html(j.get("description"))[:8000],
+                    "description": _strip_html(j.get("description"))[:DESC_MAX],
                 })
             if len(jobs) < 20:
                 break
@@ -754,7 +797,7 @@ def src_weworkremotely():
                 "portal": "weworkremotely",
                 "work_mode": "remote",
                 "skills": [],
-                "description": _strip_html(item.findtext("description"))[:2000],
+                "description": _strip_html(item.findtext("description"))[:DESC_MAX],
             })
     _fail_if_all_failed("We Work Remotely", errors, len(WWR_CATEGORIES))
     return out
@@ -776,7 +819,7 @@ def src_workingnomads():
             "portal": "workingnomads",
             "work_mode": "remote",
             "skills": (j.get("tags") or "").split(",") if isinstance(j.get("tags"), str) else (j.get("tags") or []),
-            "description": _strip_html(j.get("description"))[:2000],
+            "description": _strip_html(j.get("description"))[:DESC_MAX],
         })
     return out
 
@@ -811,7 +854,7 @@ def src_hn_hiring():
             "portal": "hn_hiring",
             "work_mode": "remote",
             "skills": [],
-            "description": text[:2000],
+            "description": text[:DESC_MAX],
         })
         if len(out) >= 100:
             break
@@ -860,12 +903,51 @@ def src_jooble():
     return out
 
 
+def _load_jsearch_budget(path, month):
+    """Return the month's budget, a fresh month, or None when the file is corrupt.
+
+    A missing file is a first run. A new month starts at zero. A corrupt file
+    is not treated as zero — that would spend past the free-plan cap.
+    """
+    if not path.exists():
+        return {"month": month, "requests": 0}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(raw, dict) or not isinstance(raw.get("requests"), int) or raw["requests"] < 0:
+        return None
+    if not isinstance(raw.get("month"), str):
+        return None
+    if raw.get("month") != month:
+        return {"month": month, "requests": 0}
+    return raw
+
+
+def _save_jsearch_budget(path, budget):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(budget), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _jsearch_query_text(query):
+    """Don't append a country when the query already names a place or remote."""
+    if re.search(r"\b(remote|minneapolis|gulfport|minnesota|mississippi|united states)\b", query, re.I):
+        return query
+    return query + " in United States"
+
+
 def src_jsearch():
     """Google-for-Jobs results (Indeed, ZipRecruiter, Glassdoor and others) through the JSearch API.
 
     Those sites do not allow scraping, so this goes through a licensed aggregator. It
     needs a JSearch key; the plan's monthly request count is the cap, so see
     `jsearch` in queries.json.
+
+    Each successful HTTP call is charged `pages` requests (JSearch bills per page).
+    Failed calls are not charged, and a run that lands nothing does not use up
+    the day's run. A corrupt budget file skips the source instead of resetting.
     """
     key = os.environ.get("JSEARCH_API_KEY")
     rapid_key = os.environ.get("RAPIDAPI_KEY")
@@ -875,35 +957,40 @@ def src_jsearch():
     queries = cfg.get("queries") or ["solutions engineer", "sales engineer", "junior software engineer"]
     # Every run sends every query; `monthly_limit` stops it below the plan's request count.
     budget_path = SCRAPER_DIR / "jsearch_runs.json"
-    try:
-        budget = json.loads(budget_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        budget = {}
     month = TODAY[:7]
-    if budget.get("month") != month:
-        budget = {"month": month, "requests": 0}
+    budget = _load_jsearch_budget(budget_path, month)
+    if budget is None:
+        raise SkipSource(f"jsearch budget file is unreadable ({budget_path.name}); not spending requests")
+    runs_per_day = cfg.get("runs_per_day")  # unset: the monthly limit is the only cap
+    if runs_per_day and budget.get("date") == TODAY and budget.get("count", 0) >= int(runs_per_day):
+        raise SkipSource(f"already ran {budget['count']} time(s) today (jsearch.runs_per_day in queries.json)")
+    pages = max(1, int(cfg.get("pages", 1)))
     limit = int(cfg.get("monthly_limit", 190))
-    if budget["requests"] + len(queries) > limit:
+    planned = len(queries) * pages
+    if budget["requests"] + planned > limit:
         raise SkipSource(f"monthly request budget used ({budget['requests']} of {limit})")
-    budget["requests"] += len(queries)
-    budget_path.write_text(json.dumps(budget), encoding="utf-8")
     if key:  # OpenWebNinja, where JSearch is now hosted
         base, headers = "https://api.openwebninja.com/jsearch/search", {"x-api-key": key}
     else:
         base = "https://jsearch.p.rapidapi.com/search"
         headers = {"X-RapidAPI-Key": rapid_key, "X-RapidAPI-Host": "jsearch.p.rapidapi.com"}
     out = []
+    succeeded = 0
     for q in queries:
+        remote_only = bool(re.search(r"\bremote\b", q, re.I))
         url = (
             f"{base}"
-            f"?query={urllib.parse.quote(q + ' in United States')}&page=1&num_pages={int(cfg.get('pages', 1))}"
+            f"?query={urllib.parse.quote(_jsearch_query_text(q))}&page=1&num_pages={pages}"
             f"&date_posted={cfg.get('date_posted', 'week')}&country=us"
         )
+        if remote_only:
+            url += "&remote_jobs_only=true"
         try:
             data = _get_json(url, headers=headers, timeout=90).get("data") or []  # a live search takes 20-30 s
         except Exception as exc:
             print(f"jsearch query {q!r} failed: {exc}", flush=True)
             continue
+        succeeded += pages
         for j in data:
             city = ", ".join(p for p in (j.get("job_city"), j.get("job_state")) if p)
             out.append({
@@ -916,8 +1003,14 @@ def src_jsearch():
                 "portal": "jsearch",
                 "work_mode": "remote" if j.get("job_is_remote") else None,
                 "skills": [],
-                "description": (j.get("job_description") or "")[:8000],
+                "description": (j.get("job_description") or "")[:DESC_MAX],
             })
+    if succeeded:
+        runs_today = budget.get("count", 0) if budget.get("date") == TODAY else 0
+        budget.update(month=month, date=TODAY, count=runs_today + 1, requests=budget["requests"] + succeeded)
+        _save_jsearch_budget(budget_path, budget)
+    elif queries:
+        print("jsearch: no request succeeded; today's run was not counted", flush=True)
     return out
 
 
@@ -1090,7 +1183,7 @@ def src_usajobs():
                 "portal": "usajobs",
                 "work_mode": "remote" if j.get("TeleworkEligible") else None,
                 "skills": [],
-                "description": _strip_html(j.get("UserArea", {}).get("Details", {}).get("JobSummary"))[:2000],
+                "description": _strip_html(j.get("UserArea", {}).get("Details", {}).get("JobSummary"))[:DESC_MAX],
             })
     return out
 
@@ -1115,7 +1208,7 @@ def _gh_board_jobs(slug):
             "id": str(j.get("id") or ""),
             "work_mode": "remote" if "remote" in loc.lower() else None,
             "skills": [],
-            "description": _strip_html(j.get("content"))[:2000],
+            "description": _strip_html(j.get("content"))[:DESC_MAX],
         })
     return out
 
@@ -1134,7 +1227,7 @@ def _lever_board_jobs(slug):
             "id": str(j.get("id") or ""),
             "work_mode": "remote" if "remote" in loc.lower() else None,
             "skills": [],
-            "description": _strip_html(j.get("descriptionPlain") or j.get("description"))[:2000],
+            "description": _strip_html(j.get("descriptionPlain") or j.get("description"))[:DESC_MAX],
         })
     return out
 
@@ -1152,7 +1245,7 @@ def _ashby_board_jobs(slug):
             "id": str(j.get("id") or ""),
             "work_mode": "remote" if j.get("isRemote") else None,
             "skills": [],
-            "description": _strip_html(j.get("descriptionPlain") or "")[:2000],
+            "description": _strip_html(j.get("descriptionPlain") or "")[:DESC_MAX],
         })
     return out
 
@@ -1241,6 +1334,23 @@ def selected(names, args):
 # ---------------------------------------------------------------------------
 
 LAST_RUN_PATH = SCRAPER_DIR / "last_run.json"
+# LinkedIn's f_TPR control only accepts these posted-within windows.
+LINKEDIN_JOBAGE_DAYS = (1, 7, 14, 30)
+
+
+def portal_jobage(portal, days):
+    """Days value to pass as `--jobage`.
+
+    LinkedIn rejects any other window, so snap up to the next valid bucket
+    (a 5-day gap still covers those five days). Other portals keep the raw count.
+    """
+    days = int(days)
+    if portal != "linkedin-search":
+        return str(days)
+    for bucket in LINKEDIN_JOBAGE_DAYS:
+        if days <= bucket:
+            return str(bucket)
+    return str(LINKEDIN_JOBAGE_DAYS[-1])
 DEFAULT_SEARCH_SETTINGS = {
     "min_days": 1,
     "max_days": 14,
@@ -1325,11 +1435,12 @@ def _run_cli_query(name, portal, args_list, out_dir, settings=None, jobage_days=
     delay = float(settings.get("page_delay_seconds", 0))
     base = _set_flag(args_list, "--limit", page_size)
     if jobage_days:
-        base = _set_flag(base, "--jobage", jobage_days)
+        base = _set_flag(base, "--jobage", portal_jobage(portal, jobage_days))
     print(f"START {name}", flush=True)
 
     results, seen_keys, meta, stderr_all, rc = [], set(), {}, [], 0
     pages_read = 0
+    later_failed = False
     for page in range(1, max_pages + 1):
         rc, out, err = _cli_page(portal, _set_flag(base, "--page", page))
         if err:
@@ -1343,6 +1454,7 @@ def _run_cli_query(name, portal, args_list, out_dir, settings=None, jobage_days=
                     (out_dir / f"{name}.err").write_text("\n".join(stderr_all), encoding="utf-8")
                 print(f"FAIL {name} exit={rc} parse={e} stderr={err[:300]}", flush=True)
                 return rc or 1
+            later_failed = True
             break  # later page failed: keep what was read
         rows = data.get("results") or []
         meta = data.get("meta") or meta
@@ -1367,6 +1479,10 @@ def _run_cli_query(name, portal, args_list, out_dir, settings=None, jobage_days=
     capped = pages_read == max_pages and len(results) >= page_size * max_pages
     note = " CAPPED" if capped else ""
     print(f"OK {name} n={len(results)} pages={pages_read} exit={rc}{note}", flush=True)
+    # A later page failing must not throw away the pages already saved, and must
+    # not block last_run.json. The first page failing still counts as a failure.
+    if later_failed:
+        return 0 if results else (rc or 1)
     return rc
 
 
@@ -1443,6 +1559,44 @@ def _url_key(url):
     return base + ("?" + "&".join(kept) if kept else "")
 
 
+# A posting id is only the same job when it is the same id on the same host.
+# A bare 8-digit number shows up in unrelated URLs and must not match globally.
+_POSTING_ID_RE = re.compile(r"(?:gh_jid=|/jobs/(?:view/)?)(\d{6,})", re.I)
+
+
+def _posting_id(url):
+    if not url:
+        return None
+    match = _POSTING_ID_RE.search(url)
+    if not match:
+        return None
+    host = urllib.parse.urlparse(url).netloc.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if not host:
+        return None
+    return (host, match.group(1))
+
+
+def _company_title_place(job):
+    """Company + title + city, using the same word normalization as dedupe_key.
+
+    An empty place is not a match. Two openings with no city, or the same title
+    in two cities, are different jobs.
+    """
+    company, title = _norm_words(job.get("company")), _norm_words(job.get("title"))
+    if not company or not title:
+        return None
+    loc = (job.get("location") or "").lower()
+    if "remote" in loc or (job.get("work_mode") or "").lower() == "remote":
+        place = "remote"
+    else:
+        place = _norm_words((job.get("location") or "").split(",")[0])
+    if not place:
+        return None
+    return (company, title, place)
+
+
 def _seen_indexes(seen):
     seen_urls = set(seen.keys()) | {v.get("url", "") for v in seen.values()}
     seen_url_keys = {_url_key(u) for u in seen_urls if u}
@@ -1450,14 +1604,12 @@ def _seen_indexes(seen):
     seen_ct = set()
     for k, v in seen.items():
         u = v.get("url") or k
-        m = re.search(r"(\d{8,})", u)
-        if m:
-            seen_ids.add(m.group(1))
-        m2 = re.search(r"(?:gh_jid=|/jobs/)(\d{6,})", u)
-        if m2:
-            seen_ids.add(m2.group(1))
-        seen_ct.add(((v.get("company") or "").strip().lower(),
-                     (v.get("title") or "").strip().lower()))
+        pid = _posting_id(u)
+        if pid:
+            seen_ids.add(pid)
+        ct = _company_title_place(v)
+        if ct:
+            seen_ct.add(ct)
     return seen_urls, seen_url_keys, seen_ids, seen_ct
 
 
@@ -1465,14 +1617,11 @@ def _already(j, seen_urls, seen_url_keys, seen_ids, seen_ct):
     url = j.get("url") or ""
     if url and (url in seen_urls or _url_key(url) in seen_url_keys):
         return True
-    m = re.search(r"(\d{8,})", url) or re.search(r"(\d{8,})", str(j.get("id") or ""))
-    if m and m.group(1) in seen_ids:
+    pid = _posting_id(url)
+    if pid and pid in seen_ids:
         return True
-    m2 = re.search(r"(?:gh_jid=|/jobs/)(\d{6,})", url)
-    if m2 and m2.group(1) in seen_ids:
-        return True
-    ct = ((j.get("company") or "").strip().lower(), (j.get("title") or "").strip().lower())
-    return ct in seen_ct and bool(ct[0]) and bool(ct[1])
+    ct = _company_title_place(j)
+    return bool(ct) and ct in seen_ct
 
 
 def _load_run_jobs(rd):
@@ -1576,7 +1725,7 @@ def cmd_process(args):
         "portal": j["portal"], "work_mode": j.get("work_mode"),
         "src": j["src"], "skills": j.get("skills") or [],
         "salary": extract_salary(j.get("description")),
-        "description": (j.get("description") or "")[:8000],
+        "description": (j.get("description") or "")[:DESC_MAX],
         "body_status": j.get("body_status"),
         "fit_reasons": j.get("fit_reasons") or [],
         "fit_blockers": j.get("fit_blockers") or [],
@@ -1626,7 +1775,11 @@ def cmd_update_seen(args):
     # next run reads it again instead of locking in a low grade.
     retry_urls = {
         j["url"] for j in cand["new"]
-        if any("could not be read" in b for b in (j.get("fit_blockers") or []))
+        if j.get("body_status") in ("shell", "unread")
+        or any(
+            "could not be read" in b or "did not render" in b
+            for b in (j.get("fit_blockers") or [])
+        )
     }
     fit_by_url = {r["url"]: r["fit"] for r in cand.get("all", [])}
 
@@ -1646,6 +1799,8 @@ def cmd_update_seen(args):
         seen[url] = {
             "title": j.get("title"),
             "company": j.get("company"),
+            "location": j.get("location"),
+            "work_mode": j.get("work_mode"),
             "url": url,
             "first_seen": TODAY,
             "fit": f,

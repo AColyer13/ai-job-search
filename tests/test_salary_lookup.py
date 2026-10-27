@@ -331,6 +331,11 @@ class UtilityTests(unittest.TestCase):
         self.assertEqual(normalize("Ørsted (VG) Holding"), "ørsted")
         self.assertEqual(normalize("Chr. Hansen, Denmark Division"), "chrhansen")
         self.assertEqual(normalize("Simple Corp ApS"), "simplecorp")
+        self.assertEqual(normalize("Acme, Inc."), "acme")
+        self.assertEqual(normalize("Acme LLC"), "acme")
+        self.assertEqual(normalize("Acme Incorporated"), "acme")
+        self.assertEqual(match_score("Acme", "Acme, Inc."), 100)
+        self.assertEqual(match_score("Acme", "Acme LLC"), 100)
 
     def test_anglicize_replaces_danish_chars(self):
         self.assertEqual(anglicize("ørsted"), "orsted")

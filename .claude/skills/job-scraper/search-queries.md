@@ -11,7 +11,7 @@ The `site:` query templates in this file are the **WebSearch fallback** — for 
 Primary:
 - **linkedin.com/jobs** - filter: United States / Minneapolis-St. Paul metro / Remote; also covered by `linkedin-search` CLI
 - **freehire.me** - also covered by `freehire-search` CLI
-- **Remote aggregators** - RemoteOK, Remotive, Arbeitnow, Jobicy, WeWorkRemotely, Working Nomads, and the HN "Who is hiring" thread are all covered by `job_scraper/pipeline.py` (keyless HTTP sources; see `job_scraper/SOURCES.md`). Adzuna and USAJobs activate once their free API keys are set as env vars. No WebSearch fallback needed for these.
+- **Remote aggregators** - RemoteOK, Remotive, Arbeitnow, Jobicy, Himalayas, WeWorkRemotely, Working Nomads, and the HN "Who is hiring" thread are all covered by `job_scraper/pipeline.py` (keyless HTTP sources; see `job_scraper/SOURCES.md`). Himalayas is US-remote and returns the full posting. Adzuna, USAJobs, and JSearch (OpenWebNinja, a licensed Google-for-Jobs feed) activate once their API keys are set. JSearch is capped at about 200 requests a month and its queries stay location-scoped. No WebSearch fallback needed for these.
 - **Target-company boards** - the `boards` source polls Greenhouse/Lever/Ashby directly for companies listed in `job_scraper/queries.json`'s `company_boards` (verify a slug with `tools/probe_company_board.py` before adding it - see `job_scraper/SOURCES.md` Tier 5).
 
 Secondary (company career pages via Google):
@@ -73,7 +73,7 @@ site:linkedin.com/jobs "junior qa" OR "junior quality assurance" OR "junior soft
 ## Location Filter
 
 When evaluating results, verify the job location matches one of these tiers:
-- **Ideal:** Fully remote (any location)
+- **Ideal:** US remote (a remote role that does not name a city outside the Twin Cities or Gulfport–Biloxi list), the Twin Cities west suburbs, or the Gulfport–Biloxi coast. Non-US remote is excluded.
 - **Acceptable:** Local commute from Edina spanning **Rogers, MN** (north) to **Chanhassen, MN** (south): Edina, Eden Prairie, Minnetonka, Hopkins, St. Louis Park, Golden Valley, Plymouth, Maple Grove, Osseo, Brooklyn Park, Rogers, Dayton, Medina, Wayzata, Orono, Chaska, Victoria, Bloomington, Richfield. Garmin (Chanhassen) is in range. Hybrid with occasional Minneapolis days is OK; skip 5-day downtown-only offices when possible.
 - **Acceptable (relocation):** Mississippi, preferably Gulfport and Biloxi (and nearby Gulf Coast: Long Beach, D'Iberville, Ocean Springs, Pass Christian)
 - **Borderline:** Other US locations requiring relocation

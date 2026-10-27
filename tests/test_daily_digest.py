@@ -70,6 +70,8 @@ def test_position_type_families():
     assert daily_digest.position_type("Pre Sales Digital Architect") == "solutions_architect"
     assert daily_digest.position_type("Presales -HCM Solution Consultant - Healthcare - East") == "presales"
     assert daily_digest.position_type("Implementation Consultant") == "customer_engineer"
+    assert daily_digest.position_type("Implementation Manager") == "customer_engineer"
+    assert daily_digest.position_type("Onboarding Engineer") == "customer_engineer"
     assert daily_digest.position_type("Junior QA Tester") == "qa"
     assert daily_digest.position_type("3rd Shift, Quality Assurance Technician") == "other"
     assert daily_digest.position_type(".NET Developer (Junior)") == "engineering"
@@ -117,6 +119,10 @@ def test_exclusive_engineering_degree_requirement_is_not_listed():
     assert daily_digest.exclusive_engineering_degree(preferred) == ""
     any_degree = "Bachelor's degree required."
     assert daily_digest.exclusive_engineering_degree(any_degree) == ""
+    related = "Bachelor's degree in Computer Science or related field."
+    assert daily_digest.exclusive_engineering_degree(related)
+    prose = "A computer science degree is required to support our business."
+    assert daily_digest.exclusive_engineering_degree(prose)
     assert daily_digest.omit_reason({"title": "Junior Software Developer", "omit": "degree"}) == "degree"
 
 
@@ -258,7 +264,8 @@ def test_board_shell_is_not_treated_as_read():
     daily_digest.apply_board_shells([shell])
     assert shell["body_status"] == "shell"
     assert "star_notes" not in shell
-    assert shell["fit"] == "high"
+    assert shell["fit"] == "low"
+    assert shell.get("fit_before_location") is None
     why = daily_digest._why(shell)
     assert "did not render" in why
     assert "no open positions" not in why.lower()

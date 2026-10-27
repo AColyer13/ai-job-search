@@ -94,7 +94,7 @@ def test_fit_sales_years_inside_resume_is_high():
     assert pipeline.fit("Solutions Engineer", description=desc) == "high"
 
 
-def test_fit_required_five_sales_years_is_not_qualified():
+def test_fit_required_five_sales_years_is_qualified():
     import scoring
     for years in (6, 7):
         job = {"title": "Sales Engineer", "description": _BODY + f"{years}+ years of sales experience required."}
@@ -197,6 +197,11 @@ def test_extract_salary(desc, expected):
     ("Remote", None, "remote"),
     ("United States", "remote", "remote"),
     ("Austin, TX", "remote", "remote"),
+    ("Austin, Texas", "remote", "remote"),
+    ("Remote, Texas", "remote", "remote"),
+    ("Remote, Washington", "remote", "remote"),
+    ("Remote, Canada", "remote", "exclude-intl"),
+    ("Remote, Germany", "remote", "exclude-intl"),
     ("Berlin, Germany", None, "exclude-intl"),
     ("Toronto, Canada", "remote", "exclude-intl"),
     ("Chicago, IL", None, "us-reloc"),
@@ -246,7 +251,7 @@ def test_high_requires_a_requested_location():
     assert pipeline.location_high_block("Biloxi, MS", None) is None
     assert pipeline.location_high_block("Remote", "remote") is None
     assert pipeline.location_high_block("United States", "remote") is None
-    assert pipeline.location_high_block("Remote - Canada, USA", "remote") is None
+    assert pipeline.location_high_block("Remote - Canada, USA", "remote")
     assert pipeline.location_high_block("Richmond, VA, USA", "remote")
     assert pipeline.location_high_block("Farmington, NM, United States", "remote")
     assert pipeline.location_high_block("Austin, TX", "remote")
@@ -324,15 +329,23 @@ def test_already_matches_url_id_and_company_title():
     seen = {
         "https://x.com/jobs/12345678": {
             "url": "https://x.com/jobs/12345678",
-            "company": "Acme", "title": "Junior SWE",
+            "company": "Acme, Inc.", "title": "Junior SWE",
+            "location": "Edina, MN",
         }
     }
     urls, url_keys, ids, ct = pipeline._seen_indexes(seen)
     assert pipeline._already({"url": "https://x.com/jobs/12345678"}, urls, url_keys, ids, ct)
     assert pipeline._already({"url": "https://x.com/jobs/12345678?utm_source=y"}, urls, url_keys, ids, ct)
-    assert pipeline._already({"url": "https://other.com/12345678"}, urls, url_keys, ids, ct)
-    assert pipeline._already({"url": "https://new.com/1", "company": "ACME", "title": "junior swe"}, urls, url_keys, ids, ct)
-    assert not pipeline._already({"url": "https://new.com/2", "company": "Beta", "title": "SWE"}, urls, url_keys, ids, ct)
+    assert pipeline._already({"url": "https://www.x.com/jobs/view/12345678"}, urls, url_keys, ids, ct)
+    assert not pipeline._already({"url": "https://other.com/12345678"}, urls, url_keys, ids, ct)
+    assert not pipeline._already({"url": "https://other.com/jobs/12345678"}, urls, url_keys, ids, ct)
+    same_city = {"url": "https://new.com/1", "company": "Acme Inc", "title": "junior swe", "location": "Edina, Minnesota"}
+    assert pipeline._already(same_city, urls, url_keys, ids, ct)
+    other_city = {"url": "https://new.com/2", "company": "Acme Inc", "title": "Junior SWE", "location": "Austin, TX"}
+    assert not pipeline._already(other_city, urls, url_keys, ids, ct)
+    no_city = {"url": "https://new.com/3", "company": "ACME", "title": "junior swe"}
+    assert not pipeline._already(no_city, urls, url_keys, ids, ct)
+    assert not pipeline._already({"url": "https://new.com/4", "company": "Beta", "title": "SWE", "location": "Edina, MN"}, urls, url_keys, ids, ct)
 
 
 def test_already_does_not_collide_on_shared_path_distinct_query_id():
@@ -542,7 +555,7 @@ def test_cli_query_keeps_pages_read_when_a_later_page_fails(tmp_path, monkeypatc
 
     monkeypatch.setattr(pipeline, "_cli_page", fake)
     rc = pipeline._run_cli_query("li_t", "linkedin-search", ["search"], tmp_path, {**pipeline.DEFAULT_SEARCH_SETTINGS, "page_delay_seconds": 0})
-    assert rc == 1 and len(json.loads((tmp_path / "li_t.json").read_text(encoding="utf-8"))["results"]) == 10
+    assert rc == 0 and len(json.loads((tmp_path / "li_t.json").read_text(encoding="utf-8"))["results"]) == 10
 
 
 def test_search_window_follows_last_run(tmp_path, monkeypatch):
@@ -1030,3 +1043,253 @@ def test_failed_refetch_of_a_long_snippet_keeps_it_readable(monkeypatch):
     job = {"url": "https://example.com/j", "company": "Acme", "description": "x" * 2000}
     pt.enrich([job], workers=1)
     assert "body_status" not in job and len(job["description"]) == 2000
+def test_generic_us_remote_keeps_state_names_and_drops_canada():
+    assert pipeline._generic_us_remote("Remote (United States)")
+    assert pipeline._generic_us_remote("Remote")
+    assert not pipeline._generic_us_remote("Remote, Canada")
+    assert not pipeline._generic_us_remote("Austin, Texas")
+    assert pipeline._card_in_requested_location("Remote (United States)", "remote")
+    assert not pipeline._card_in_requested_location("Remote, Canada", "remote")
+    assert pipeline.loc_tier("Austin, Texas", "remote") == "remote"
+
+
+def test_required_language_negation_and_clearance_wording():
+    import scoring
+    java = scoring.score({"title": "Sales Engineer", "description": _BODY + "Rust is required."})
+    assert java["disqualified"]
+    skills = scoring.score({"title": "Sales Engineer", "description": _BODY + "Required skills: Scala and Spring."})
+    assert skills["disqualified"]
+    no_java = scoring.score({"title": "Sales Engineer", "description": _BODY + "No Rust experience required."})
+    assert no_java["grade"] == "high" and not no_java["disqualified"]
+    no_clear = scoring.score({"title": "Sales Engineer", "description": _BODY + "We do not require a security clearance."})
+    assert no_clear["grade"] == "high" and not no_clear["disqualified"]
+    active = scoring.score({"title": "Sales Engineer", "description": _BODY + "Must hold an active security clearance."})
+    assert active["disqualified"]
+    willing = scoring.score({"title": "Sales Engineer", "description": _BODY + "Willing to obtain a security clearance."})
+    assert willing["grade"] == "high" and not willing["disqualified"]
+    citizen = scoring.score({"title": "Sales Engineer", "description": _BODY + "U.S. citizenship is required."})
+    assert citizen["grade"] == "high" and not citizen["disqualified"]
+    business = scoring.score({
+        "title": "Sales Engineer",
+        "description": _BODY + "Bachelor's degree in Computer Science required to support our business.",
+    })
+    assert business["disqualified"]
+    listed = scoring.score({
+        "title": "Sales Engineer",
+        "description": _BODY + "Bachelor's degree in Computer Science, business, or equivalent.",
+    })
+    assert listed["grade"] == "high" and not listed["disqualified"]
+
+
+def test_sign_on_bonus_heading_does_not_hide_a_requirement():
+    import scoring
+    desc = _BODY + "\nSign-on Bonus:\n5+ years of Java experience required.\n"
+    out = scoring.score({"title": "Sales Engineer", "description": desc})
+    assert out["disqualified"]
+
+
+def test_linkedin_jobage_snaps_up_to_a_valid_window(tmp_path, monkeypatch):
+    calls = _fake_pages(monkeypatch, {1: _rows(0, 3)})
+    pipeline._run_cli_query(
+        "li_t", "linkedin-search", ["search", "--jobage", "14"], tmp_path, jobage_days=5,
+    )
+    args = calls[0][1]
+    assert args[args.index("--jobage") + 1] == "7"
+    calls.clear()
+    pipeline._run_cli_query(
+        "li_u", "linkedin-search", ["search"], tmp_path, jobage_days=15,
+    )
+    args = calls[0][1]
+    assert args[args.index("--jobage") + 1] == "30"
+
+
+def test_search_advances_last_run_when_a_later_page_fails(tmp_path, monkeypatch):
+    def fake(portal, args_list):
+        page = int(args_list[args_list.index("--page") + 1])
+        if page == 2:
+            return 1, "not json", "rate limited"
+        return 0, json.dumps({"meta": {}, "results": _rows(0, 10)}), ""
+
+    monkeypatch.setattr(pipeline, "_cli_page", fake)
+    monkeypatch.setattr(pipeline, "LAST_RUN_PATH", tmp_path / "last_run.json")
+    monkeypatch.setattr(pipeline, "QUERIES_PATH", tmp_path / "queries.json")
+    (tmp_path / "queries.json").write_text(json.dumps({
+        "cli_queries": [{"name": "li_t", "portal": "linkedin-search", "args": ["search", "--jobage", "14"]}],
+        "http_sources": ["__none__"],
+        "search_settings": {
+            "min_days": 1,
+            "max_days": 14,
+            "page_size": {"linkedin-search": 10},
+            "max_pages": {"linkedin-search": 2},
+            "page_delay_seconds": 0,
+        },
+    }), encoding="utf-8")
+    out = tmp_path / "run"
+    monkeypatch.setattr(pipeline, "run_dir", lambda args: out)
+    args = type("A", (), {"only": None, "skip": None, "workers": 1, "window_days": None})()
+    assert pipeline.cmd_search(args) == 0
+    saved = json.loads((out / "li_t.json").read_text(encoding="utf-8"))
+    assert len(saved["results"]) == 10
+    assert (tmp_path / "last_run.json").exists()
+
+
+def test_source_keeps_a_description_past_the_enrich_threshold(monkeypatch):
+    body = "A" * 3000
+    monkeypatch.setattr(pipeline, "_get_json", lambda url, headers=None, timeout=None: [
+        {"legal": True},
+        {
+            "position": "Sales Engineer",
+            "company": "Acme",
+            "id": "1",
+            "url": "https://remoteok.com/1",
+            "description": body,
+            "date": "2026-10-01",
+            "tags": [],
+        },
+    ])
+    out = pipeline.src_remoteok()
+    assert len(out[0]["description"]) == 3000
+
+
+def test_collapse_keeps_the_longer_description_and_earliest_found_on():
+    short = {
+        "title": "Sales Engineer", "company": "Acme", "location": "Remote",
+        "url": "https://www.linkedin.com/jobs/view/1", "portal": "linkedin-search",
+        "description": "short", "found_on": "2026-10-01",
+    }
+    long = {
+        "title": "Sales Engineer", "company": "Acme", "location": "Remote",
+        "url": "https://boards.greenhouse.io/acme/jobs/9", "portal": "greenhouse",
+        "description": "x" * 2000, "found_on": "2026-10-03",
+    }
+    kept, dropped = pipeline.collapse_duplicates([short, long])
+    assert dropped == 1
+    assert kept[0]["url"].endswith("/9")
+    assert len(kept[0]["description"]) == 2000
+    assert kept[0]["found_on"] == "2026-10-01"
+    employer_short = {**long, "description": "short", "found_on": "2026-10-04"}
+    aggregator_long = {**short, "description": "y" * 1800, "found_on": "2026-10-02"}
+    kept, dropped = pipeline.collapse_duplicates([employer_short, aggregator_long])
+    assert dropped == 1
+    assert kept[0]["url"].endswith("/9")
+    assert len(kept[0]["description"]) == 1800
+    assert kept[0]["found_on"] == "2026-10-02"
+
+
+def test_himalayas_missing_pubdate_is_blank(monkeypatch):
+    job = {
+        "title": "Sales Engineer", "companyName": "Acme",
+        "guid": "https://himalayas.app/companies/acme/jobs/sales-engineer",
+        "description": "<p>Demo the product.</p>",
+    }
+    monkeypatch.setattr(pipeline, "_get_json", lambda url, headers=None: {"jobs": [job]})
+    monkeypatch.setattr(pipeline.time, "sleep", lambda s: None)
+    out = pipeline.src_himalayas()
+    assert out[0]["date"] == ""
+
+
+def test_arbeitnow_remote_outside_the_us_is_not_us_remote(monkeypatch):
+    payload = {"data": [
+        {"remote": True, "title": "Sales Engineer", "company_name": "Berlin Co", "location": "Berlin",
+         "url": "https://arbeitnow.com/1", "slug": "1", "description": "x", "created_at": 1790000000, "tags": []},
+        {"remote": True, "title": "Sales Engineer", "company_name": "US Co", "location": "United States",
+         "url": "https://arbeitnow.com/2", "slug": "2", "description": "x", "created_at": 1790000000, "tags": []},
+        {"remote": True, "title": "Solutions Engineer", "company_name": "Nowhere", "location": "",
+         "url": "https://arbeitnow.com/3", "slug": "3", "description": "x", "created_at": 1790000000, "tags": []},
+    ], "links": {}}
+    monkeypatch.setattr(pipeline, "_get_json", lambda url, headers=None: payload)
+    out = {j["url"]: j for j in pipeline.src_arbeitnow()}
+    assert pipeline.loc_tier(out["https://arbeitnow.com/1"]["location"], out["https://arbeitnow.com/1"]["work_mode"]) == "exclude-intl"
+    assert pipeline.loc_tier(out["https://arbeitnow.com/2"]["location"], out["https://arbeitnow.com/2"]["work_mode"]) == "remote"
+    assert pipeline.loc_tier(out["https://arbeitnow.com/3"]["location"], out["https://arbeitnow.com/3"]["work_mode"]) == "unknown"
+
+
+def test_jsearch_does_not_burn_a_failed_day(monkeypatch, tmp_path):
+    monkeypatch.setenv("JSEARCH_API_KEY", "k")
+    monkeypatch.setattr(pipeline, "SCRAPER_DIR", tmp_path)
+    monkeypatch.setattr(pipeline, "QUERIES_PATH", tmp_path / "queries.json")
+    (tmp_path / "queries.json").write_text(json.dumps({
+        "jsearch": {
+            "queries": ["solutions engineer remote", "junior software engineer"],
+            "pages": 2,
+            "runs_per_day": 1,
+            "monthly_limit": 190,
+        }
+    }), encoding="utf-8")
+
+    def boom(url, headers=None, timeout=None):
+        raise OSError("down")
+
+    monkeypatch.setattr(pipeline, "_get_json", boom)
+    assert pipeline.src_jsearch() == []
+    assert not (tmp_path / "jsearch_runs.json").exists()
+    calls = []
+
+    def ok(url, headers=None, timeout=None):
+        calls.append(url)
+        return {"data": []}
+
+    monkeypatch.setattr(pipeline, "_get_json", ok)
+    assert pipeline.src_jsearch() == []
+    assert "remote_jobs_only=true" in calls[0]
+    assert "in%20United%20States" not in calls[0]
+    assert "in%20United%20States" in calls[1]
+    assert "remote_jobs_only" not in calls[1]
+    budget = json.loads((tmp_path / "jsearch_runs.json").read_text(encoding="utf-8"))
+    assert budget["requests"] == 4
+    assert budget["count"] == 1
+
+
+def test_jsearch_corrupt_budget_is_not_reset(monkeypatch, tmp_path):
+    monkeypatch.setenv("JSEARCH_API_KEY", "k")
+    monkeypatch.setattr(pipeline, "SCRAPER_DIR", tmp_path)
+    path = tmp_path / "jsearch_runs.json"
+    path.write_text("{not json", encoding="utf-8")
+    with pytest.raises(pipeline.SkipSource, match="unreadable"):
+        pipeline.src_jsearch()
+    assert path.read_text(encoding="utf-8") == "{not json"
+    path.write_text(json.dumps(["nope"]), encoding="utf-8")
+    with pytest.raises(pipeline.SkipSource, match="unreadable"):
+        pipeline.src_jsearch()
+    assert json.loads(path.read_text(encoding="utf-8")) == ["nope"]
+
+
+def test_jsonld_type_list_and_ats_error_fallback(monkeypatch):
+    import urllib.error
+    import posting_text
+
+    html = (
+        '<script type="application/ld+json">'
+        '{"@type": ["JobPosting"], "description": "<p>Five years of Python.</p>"}'
+        "</script>"
+    )
+    assert "Five years of Python." in posting_text._jsonld_description(html)
+    page = "<html>" + html.replace("Five years of Python.", "Sell the product. " * 20) + "</html>"
+
+    def fake_get(url, accept="text/html,application/json"):
+        if "boards-api.greenhouse.io" in url:
+            raise urllib.error.HTTPError(url, 403, "no", hdrs=None, fp=None)
+        return page
+
+    monkeypatch.setattr(posting_text, "_get", fake_get)
+    monkeypatch.setattr(posting_text.time, "sleep", lambda _s: None)
+    status, text = posting_text.fetch_text("https://boards.greenhouse.io/acme/jobs/123456")
+    assert status == "opened"
+    assert "Sell the product." in text
+
+
+def test_enrich_refetches_a_long_shell(monkeypatch):
+    import posting_text
+
+    calls = []
+
+    def fake(url, company=""):
+        calls.append(url)
+        return "opened", "Real posting. " * 40
+
+    monkeypatch.setattr(posting_text, "fetch_text", fake)
+    shell = {"url": "https://example.com/s", "description": "x" * 2000, "body_status": "shell"}
+    opened = {"url": "https://example.com/o", "description": "y" * 2000, "body_status": "opened"}
+    posting_text.enrich([shell, opened])
+    assert calls == ["https://example.com/s"]
+    assert shell["body_status"] == "opened"

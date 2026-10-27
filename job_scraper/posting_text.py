@@ -69,7 +69,14 @@ def _jsonld_description(html):
             if isinstance(node, dict) and "@graph" in node:
                 nodes = list(nodes) + list(node["@graph"])
         for node in nodes:
-            if isinstance(node, dict) and str(node.get("@type", "")).lower() == "jobposting":
+            if not isinstance(node, dict):
+                continue
+            raw_type = node.get("@type") or ""
+            if isinstance(raw_type, list):
+                type_names = [str(item).lower() for item in raw_type]
+            else:
+                type_names = [str(raw_type).lower()]
+            if "jobposting" in type_names:
                 desc = node.get("description") or ""
                 if desc:
                     return html_to_text(desc)
@@ -171,13 +178,21 @@ def fetch_text(url, company=""):
     embedded = _greenhouse_by_jid(url, company)
     if embedded:
         return "opened", embedded[:MAX_CHARS]
+    api = _ats_api_url(url)
+    api_blocked = False
     for attempt in range(2):
         try:
-            api = _ats_api_url(url)
-            if api:
-                text = _from_ats_json(_get(api, "application/json"))
-                if len(text) >= 200:
-                    return "opened", text[:MAX_CHARS]
+            if api and not api_blocked:
+                try:
+                    text = _from_ats_json(_get(api, "application/json"))
+                    if len(text) >= 200:
+                        return "opened", text[:MAX_CHARS]
+                except urllib.error.HTTPError as e:
+                    # A dead JSON endpoint still has an HTML page worth reading.
+                    if e.code in (400, 401, 403, 404, 410):
+                        api_blocked = True
+                    else:
+                        raise
             html = _get(url)
             break
         except urllib.error.HTTPError as e:
@@ -203,20 +218,26 @@ def fetch_text(url, company=""):
 # Board feeds and aggregators cut their text at 2,000 characters, which loses the requirements
 # section of a long posting. Text that long and never opened is a snippet, not the posting.
 TRUNCATED_AT = 1900
+TRUNCATED_MAX = 2000  # the cut length; longer text came from a source that keeps more
 
 
 def enrich(jobs, workers=8, only=None):
     """Fetch posting text for each job and set description + body_status in place.
 
     `only` is an optional predicate; jobs it rejects are skipped. A job that
-    already has long text (an earlier fetch) is not fetched again.
+    already has long readable text is not fetched again. A shell or unread
+    page is fetched again even when the saved error text is long.
     """
-    todo = [
-        j for j in jobs
-        if (only is None or only(j))
-        and j.get("body_status") not in ("opened", "gone")
-        and not (1500 <= len(j.get("description") or "") < TRUNCATED_AT)
-    ]
+    def _needs_fetch(job):
+        status = job.get("body_status")
+        if status in ("opened", "gone"):
+            return False
+        if status in ("shell", "unread"):
+            return True
+        size = len(job.get("description") or "")
+        return size < 1500 or TRUNCATED_AT <= size <= TRUNCATED_MAX
+
+    todo = [j for j in jobs if (only is None or only(j)) and _needs_fetch(j)]
 
     def work(job):
         if _himalayas_slug(job.get("url")):

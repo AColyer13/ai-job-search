@@ -151,7 +151,8 @@ _REGION_OK_RE = re.compile(
 _US_STATES = frozenset(
     "AL AK AZ AR CA CO CT DE FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY".split()
 )
-_STATE_LIST_RE = re.compile(r"\b[A-Z]{2}(?:\s*[/,&]\s*[A-Z]{2})+\b")
+# "NM/CO", "KY, W TN": a state code may carry a compass letter ("W TN" is West Tennessee).
+_STATE_LIST_RE = re.compile(r"\b(?:[NSEW]{1,2}\s+)?[A-Z]{2}(?:\s*[/,&]\s*(?:[NSEW]{1,2}\s+)?[A-Z]{2})+\b")
 
 
 # Home (Minnesota, Mississippi) and the states he has said he would relocate to.
@@ -430,7 +431,7 @@ def _numerals(text):
 
 
 _PREFERRED_RE = re.compile(
-    r"\b(preferred|nice to have|a plus|bonus|ideal(?:ly)?|desired|helpful|advantageous)\b",
+    r"\b(preferred|nice to have|a plus|ideal(?:ly)?|desired|helpful|advantageous)\b",
     re.I,
 )
 _IDEAL_DOMAIN_RE = re.compile(r"\bideal(?:ly)?\s+(?:with|in|within|from|using|at|across|on|for)\b", re.I)
@@ -454,8 +455,18 @@ _ENTRY_TEXT_RE = re.compile(
     re.I,
 )
 CLEARANCE_RE = re.compile(
-    r"\b(security clearance|active clearance|top secret|ts/sci|polygraph|"
-    r"u\.?s\.? citizen(?:ship)? (?:is )?required)\b",
+    r"\b(security clearance|active clearance|top secret|ts/sci|polygraph)\b",
+    re.I,
+)
+# "Willing to obtain a clearance" is not an active clearance. Citizenship is
+# something a US applicant already meets, so it is not a clearance either.
+_CLEARANCE_SOFT_RE = re.compile(
+    r"\b(?:willing|able|ability|eligible|eligibility)\b.{0,60}\b(?:obtain|obtaining|secure|acquire)\b|"
+    r"\b(?:obtain|obtaining)\b.{0,40}\b(?:a\s+|an\s+)?(?:u\.?s\.?\s+)?(?:security\s+)?clearance\b",
+    re.I,
+)
+_CLEARANCE_ACTIVE_RE = re.compile(
+    r"\b(?:active|current|currently hold|must hold|must possess|existing clearance)\b",
     re.I,
 )
 
@@ -485,6 +496,26 @@ _HOME_PLACE_RE = re.compile(
     r"new orleans|baton rouge|birmingham|huntsville|tulsa|oklahoma city|little rock|nashville)\b",
     re.I,
 )
+# "MUST BE BASED IN CHICAGO", "must reside in Toledo, OH". Unlike the on-site and area gates this one
+# is not switched off by the word Remote: a remote job that must be filled from one city is still
+# a job he cannot take. The verb phrase is case-insensitive, the place must be capitalised.
+_BASED_IN_RE = re.compile(
+    r"(?i:\b(?:must|need to|needs to|required to|has to)\s+(?:be\s+)?"
+    r"(?:based|located|reside|residing|live|living|local)\s+(?:in|near|within|to)(?:\s+or\s+(?:near|around|within))?\s+(?:the\s+)?)"
+    r"([A-Z][\w.'-]*(?:\s+[A-Z][\w.'-]*){0,3}(?:,\s*[A-Z]{2}\b)?)"
+)
+# A short capitalised acronym ("TOLA region", "EMEA") is a sales region whose members the snippet does
+# not spell out, so it is left alone unless it is a state code or a zone known to leave him out.
+_BASED_ACRONYM_OUT = frozenset({"PST", "PDT", "MST", "MDT", "NYC"})
+_BASED_IN_STOP_RE = re.compile(r"\s+(?:AND|OR|WITH|TO|FOR|HAVE|AS|WHO|IN|OF)\b")
+# Places a "must be based in" may name without ruling him out: the whole country, a region that
+# contains a place he would live, and his home or relocation states.
+_BASED_OK_RE = re.compile(
+    r"\b(?:u\.?s\.?a?|united states|america|country|midwest|southeast|central|north america|"
+    r"texas|oklahoma|arkansas|louisiana|alabama|georgia|florida|mississippi|minnesota|"
+    r"time zone|cst|cdt|eastern|est|edt)\b|,\s*(?:TX|OK|AR|LA|AL|GA|FL|MN|MS)\b",  # Eastern holds Georgia and Florida
+    re.I,
+)
 _TRAINING_FIRM_RE = re.compile(
     r"\b(?:positions?|roles?|opportunities)\s+with\s+(?:our\s+)?clients\b|"
     r"\bour\s+client\s+network\b|"
@@ -504,6 +535,12 @@ def snippet_blocker(company, text):
         return "The snippet says the job needs a security clearance, which you do not hold."
     if _TRAINING_FIRM_RE.search(text) or MILL_COMPANY_RE.search(company or ""):
         return f"{company or 'The poster'} reads like a training or placement firm that hires for clients, not the employer."
+    for m in _BASED_IN_RE.finditer(text):
+        place = _BASED_IN_STOP_RE.split(m.group(1))[0].strip(" ,")
+        if place.isupper() and len(place) <= 5 and place not in _US_STATES and place not in _BASED_ACRONYM_OUT:
+            continue
+        if place and not _BASED_OK_RE.search(place) and not _HOME_PLACE_RE.search(place):
+            return f"The snippet says the person hired must be based in {place}, which is not a place you can work from."
     remote = _REMOTE_WORD_RE.search(text)
     home = _HOME_PLACE_RE.search(text)
     if not remote and not home:
@@ -535,11 +572,14 @@ _DEGREE_FIELD_RE = re.compile(
     r"data science|technical)\s+degree\b",
     re.I,
 )
+# "business" / "marketing" count only as a listed alternative ("CS, business, or
+# equivalent"), not as prose ("to support our business").
 _DEGREE_ESCAPE_RE = re.compile(
-    r"\b(?:equivalent|business|marketing|any discipline|any field|any degree|"
-    r"similar experience|preferred|nice to have|ideally|bonus|a plus|"
+    r"\b(?:equivalent|any discipline|any field|any degree|"
+    r"similar experience|preferred|nice to have|ideally|a plus|a bonus|"
     r"boot ?camp|or experience|or work experience|or practical|or relevant|or comparable|"
-    r"in lieu|self[- ]taught|demonstrated|portfolio)\b",
+    r"in lieu|self[- ]taught|demonstrated|portfolio)\b|"
+    r"(?:,|\bor\b)\s+(?:a\s+)?(?:business|marketing)\b",
     re.I,
 )
 
@@ -552,8 +592,13 @@ def _chunks(text):
 
 
 _PREF_HEADER_RE = re.compile(
-    r"\b(preferred|nice[- ]to[- ]haves?|bonus|a plus|pluses|desired|ideal candidate|"
+    r"\b(preferred|nice[- ]to[- ]haves?|a plus|pluses|desired|ideal candidate|"
     r"extra credit|good to have|would be great|not required|optional)\b",
+    re.I,
+)
+# Compensation headings ("Sign-on Bonus:") are not "nice to have" sections.
+_COMP_HEADER_RE = re.compile(
+    r"\b(sign-?on bonus|signing bonus|compensation|salary|benefits|perks|what we offer)\b",
     re.I,
 )
 _REQ_HEADER_RE = re.compile(
@@ -600,12 +645,13 @@ def _sections_mode(text):
     for line in _chunks(text):
         if _is_header(line):
             colon = line.endswith(":")
-            if _PREF_HEADER_RE.search(line):
+            if _PREF_HEADER_RE.search(line) and not _COMP_HEADER_RE.search(line):
                 mode_pref = True
                 out.append((line, True))
                 continue
             if (
-                _REQ_HEADER_RE.search(line)
+                _COMP_HEADER_RE.search(line)
+                or _REQ_HEADER_RE.search(line)
                 or _NEUTRAL_HEADER_RE.search(line)
                 or (colon and _REQ_COLON_HEADER_RE.search(line))
             ):
@@ -648,13 +694,18 @@ _ADVANCED_DEGREE_RE = re.compile(
 )
 
 
+def _negated(line):
+    return bool(_NEGATED_REQUIREMENT_RE.search(line or ""))
+
+
 def exclusive_degree(text):
     """The sentence that REQUIRES a CS/engineering/technical degree or a graduate degree
     with no experience alternative, or ''. Marketing B.A., bootcamp, and equivalent
-    experience are alternatives; "or related field" is not.
+    experience are alternatives; "or related field" is not. Bare "business" in
+    prose ("to support our business") is not an alternative either.
     """
     for line, preferred in sections(text):
-        if preferred or _DEGREE_ESCAPE_RE.search(line):
+        if preferred or _negated(line) or _DEGREE_ESCAPE_RE.search(line):
             continue
         if _DEGREE_FIELD_RE.search(line) or _TECH_FIELD_DEGREE_RE.search(line):
             return line[:240]
@@ -702,7 +753,16 @@ _OWN_SKILL_RE = re.compile(
 )
 _SKILL_REQUIRED_RE = re.compile(
     r"\b(experience|proficien\w*|knowledge|expertise|skilled|hands[- ]on|fluen\w*|"
-    r"strong|solid|working|command)\b",
+    r"strong|solid|working|command|required|must)\b",
+    re.I,
+)
+# A line that cancels the requirement ("no Java experience required",
+# "we do not require a clearance") is not a requirement.
+_NEGATED_REQUIREMENT_RE = re.compile(
+    r"\b(?:no|not|without|never)\b.{0,60}\b(?:required|requirement|experience|necessary|needed)\b|"
+    r"\b(?:do not|don't|does not|doesn't)\s+require\b|"
+    r"\bnot\s+required\b|"
+    r"\bno\b.{0,40}\bexperience\b",
     re.I,
 )
 _CREDENTIAL_RE = re.compile(
@@ -741,7 +801,7 @@ def missing_skill(text):
         if line and _ANY_OF_RE.search(line):
             start = i + 1
     for i, (line, preferred) in enumerate(rows):
-        if preferred or any_of_ok[i] or len(line) > 400 or _NOT_A_REQUIREMENT_RE.search(line):
+        if preferred or any_of_ok[i] or _negated(line) or len(line) > 400 or _NOT_A_REQUIREMENT_RE.search(line):
             continue
         if (
             _LACKING_SKILL_RE.search(line)
@@ -755,11 +815,26 @@ def missing_skill(text):
 def missing_credential(text):
     """First required line naming a certification or license you lack, or ''."""
     for line, preferred in sections(text):
-        if preferred or _DEGREE_ESCAPE_RE.search(line):
+        if preferred or _negated(line) or _DEGREE_ESCAPE_RE.search(line):
             continue
         if _CREDENTIAL_RE.search(line):
             return line[:240]
     return ""
+
+
+def requires_clearance(text):
+    """True when a required line demands an active clearance.
+
+    "Willing to obtain a clearance" and "we do not require a clearance" are not.
+    U.S. citizenship is not a clearance.
+    """
+    for line, preferred in sections(text):
+        if preferred or _negated(line) or not CLEARANCE_RE.search(line):
+            continue
+        if _CLEARANCE_SOFT_RE.search(line) and not _CLEARANCE_ACTIVE_RE.search(line):
+            continue
+        return True
+    return False
 
 
 def years_required(text):
@@ -772,6 +847,8 @@ def years_required(text):
     """
     sales = tech = other = pref = 0
     for line, under_pref_heading in _sections_mode(_numerals(text)):
+        if _negated(line):
+            continue
         for m in _YEARS_RE.finditer(line):
             # "6+ years of pre-sales required; SaaS selling strongly preferred" asks for 6: the
             # preferred word belongs to the clause after the semicolon, not to the years.
@@ -1182,8 +1259,8 @@ def score(job):
         blockers.append(f"It is limited to a recent graduating class, and you graduated in 2019: \"{grad_class[:140]}\"")
         return result(_LOW, disqualified=True)
 
-    if CLEARANCE_RE.search(desc):
-        blockers.append("It requires a security clearance or U.S. citizenship.")
+    if requires_clearance(desc):
+        blockers.append("It requires an active security clearance.")
         return result(_LOW, disqualified=True)
 
     credential = missing_credential(desc)
