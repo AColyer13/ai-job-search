@@ -94,7 +94,7 @@
     "boards"
   ],
   "jooble": { "queries": ["solutions engineer", "sales engineer", "technical account manager", "implementation consultant", "junior software engineer", "full stack developer", "AI engineer", "customer engineer"], "locations": ["Minnesota", "remote"], "pages": 1, "days": 3 },
-  "jsearch": { "queries": ["solutions engineer", "sales engineer", "implementation consultant", "technical account manager", "junior software engineer", "customer engineer", "pre-sales engineer", "associate software engineer", "full stack developer", "AI engineer", "solutions architect", "technical sales representative", "associate solutions consultant", "software developer entry level", "forward deployed engineer"], "pages": 1, "date_posted": "3days", "monthly_limit": 9500 },
+  "jsearch": { "queries": ["solutions engineer", "sales engineer", "implementation consultant", "technical account manager", "junior software engineer", "customer engineer", "pre-sales engineer", "associate software engineer", "full stack developer", "AI engineer", "solutions architect", "technical sales representative", "associate solutions consultant", "software developer entry level", "forward deployed engineer", "onboarding engineer", "technical consultant", "software test engineer entry level", "QA automation engineer junior", "AI application developer", "LLM engineer entry level", "technical account executive"], "pages": 1, "date_posted": "3days", "monthly_limit": 9500 },
   "company_boards": [
     {"name": "Jamf", "platform": "greenhouse", "slug": "jamf"},
     {"name": "Sezzle", "platform": "greenhouse", "slug": "sezzle"},

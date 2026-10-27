@@ -44,7 +44,7 @@ per-file diff commands.
 - Searches: junior QA queries are gone, associate and junior sales and solutions engineer queries are added, and JSearch now sends technical sales representative and pre-sales consultant in place of implementation consultant and technical account manager.
 
 ### Added
-- Jooble source (`JOOBLE_API_KEY`). Company boards grew from 2 to 225 (Greenhouse, Lever, Ashby). JSearch sends 15 queries a run instead of 5. Adzuna removed.
+- Jooble source (`JOOBLE_API_KEY`). Company boards grew from 2 to 225 (Greenhouse, Lever, Ashby). JSearch sends 22 queries a run instead of 5. Adzuna removed.
 - HTTP requests retry a 429 or 5xx twice and honor `Retry-After`. Remotive runs four times a day (its published limit) and skips the other hourly runs.
 - JSearch sends every query on each run, against a 9,500 a month cap. The Windows scheduled task runs the search hourly from 6 AM to 5 PM; the code has no schedule of its own.
 - More free sources: Workable global search, SimplifyJobs new-grad list, The Muse, all seven We Work Remotely categories, and six RemoteOK tags.
