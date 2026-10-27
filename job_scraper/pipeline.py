@@ -26,6 +26,7 @@ import re
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -285,11 +286,19 @@ def _required_elsewhere(description):
     return ""
 
 
-def location_high_block(loc, work_mode=None, description=None):
+def location_high_block(loc, work_mode=None, description=None, title=None):
     """Why this job cannot be high, or None when the location is on the list."""
     elsewhere = _required_elsewhere(description)
     if elsewhere:
         return f"the posting requires {elsewhere}"
+    import scoring
+
+    named = scoring.title_states(title)
+    if named and not {"MN", "MS"} & set(named):
+        return f"the title ties the seat to {', '.join(named)}, so you would relocate"
+    limited_to = scoring.state_restriction(description)
+    if limited_to and not {"MN", "MS"} & set(limited_to):
+        return f"the posting is limited to {', '.join(limited_to)}, so you would relocate"
     if _card_in_requested_location(loc, work_mode):
         return None
     shown = (loc or "").strip() or "not listed"
@@ -302,7 +311,7 @@ def cap_high_for_location(job):
     if (job.get("fit") or "").lower() != "high" and not capped_before:
         return job
     block = location_high_block(
-        job.get("location"), job.get("work_mode"), job.get("description")
+        job.get("location"), job.get("work_mode"), job.get("description"), job.get("title")
     )
     if not block:
         if capped_before:
@@ -387,6 +396,10 @@ def fit(title, skills=None, description=None):
 
     out = scoring.score({"title": title, "description": description or ""})
     grade = out["grade"]
+    if not out["verified"]:
+        # scoring.grade_job keeps an unread target title as medium for the daily list.
+        # A title-only call has no text at all, so it stays low.
+        return "low"
     if (
         grade == "low"
         and out["verified"]
@@ -423,14 +436,22 @@ def extract_salary(description):
 # title, company, location, date, url, id, portal, work_mode, skills, description
 # ---------------------------------------------------------------------------
 
-def _get(url, headers=None, timeout=HTTP_TIMEOUT):
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, **(headers or {})})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read().decode("utf-8", errors="replace")
+def _get(url, headers=None, timeout=HTTP_TIMEOUT, data=None):
+    """GET (POST when `data` is bytes) with two retries on 429/502/503/504, waiting out Retry-After (capped at 30 s)."""
+    req = urllib.request.Request(url, data=data, headers={"User-Agent": USER_AGENT, **(headers or {})})
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as e:
+            if e.code not in (429, 502, 503, 504) or attempt == 2:
+                raise
+            retry_after = e.headers.get("Retry-After", "") if e.headers else ""
+            time.sleep(min(30, int(retry_after)) if retry_after.isdigit() else 5 * 2 ** attempt)
 
 
-def _get_json(url, headers=None, timeout=HTTP_TIMEOUT):
-    return json.loads(_get(url, headers=headers, timeout=timeout))
+def _get_json(url, headers=None, timeout=HTTP_TIMEOUT, data=None):
+    return json.loads(_get(url, headers=headers, timeout=timeout, data=data))
 
 
 def _strip_html(text):
@@ -447,7 +468,7 @@ NON_ENGLISH_TITLE_RE = re.compile(
 # Sites that repost another employer's job. When the same job is also on the
 # employer's own page or ATS, the employer's link wins.
 AGGREGATOR_HOSTS = (
-    "linkedin.com", "himalayas.app", "jobs.workable.com", "themuse.com", "simplify.jobs", "adzuna.com", "whatjobs.com", "startup.jobs",
+    "linkedin.com", "himalayas.app", "jobs.workable.com", "jooble.org", "themuse.com", "simplify.jobs", "adzuna.com", "whatjobs.com", "startup.jobs",
     "echojobs.io", "wellfound.com", "builtin.com", "indeed.com", "ziprecruiter.com",
     "glassdoor.com", "google.com/search", "governmentjobs.com", "arbeitnow.com",
     "remoteok.com", "weworkremotely.com", "workingnomads.com", "jobicy.com", "remotive.com",
@@ -458,9 +479,22 @@ def _norm_words(text):
     return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
 
 
+_COMPANY_NOISE_RE = re.compile(
+    r"\b(?:inc|incorporated|llc|ltd|limited|corp|corporation|co|company|plc|careers?|jobs|hiring|"
+    r"linkedin|board|boards|us|usa)(?=\b|$)"
+)
+
+
+def company_key(name):
+    """Company name without legal suffixes or board labels, so "Rithum" and "Rithum LinkedIn Board" match."""
+    words = _norm_words(name)
+    stripped = " ".join(_COMPANY_NOISE_RE.sub(" ", words).split())
+    return stripped or words
+
+
 def dedupe_key(job):
     """Same company, same title, same city (or both remote) is one job."""
-    company, title = _norm_words(job.get("company")), _norm_words(job.get("title"))
+    company, title = company_key(job.get("company")), _norm_words(job.get("title"))
     if not company or not title:
         return None
     loc = (job.get("location") or "").lower()
@@ -554,7 +588,14 @@ def src_remoteok():
     return out
 
 
+# Remotive asks for at most 4 fetches a day and blocks more than that, so it runs on
+# these four hours of the hourly schedule and skips the rest.
+REMOTIVE_HOURS = (6, 10, 13, 16)
+
+
 def src_remotive():
+    if datetime.now().hour not in REMOTIVE_HOURS:
+        raise SkipSource("Remotive allows 4 fetches a day; runs at 6, 10, 13 and 16")
     data = _get_json("https://remotive.com/api/remote-jobs?limit=200")
     out = []
     for j in data.get("jobs") or []:
@@ -779,30 +820,43 @@ def src_hn_hiring():
 
 # --- Key-required sources (skipped silently when env vars are absent) --------
 
-def src_adzuna():
-    app_id, app_key = os.environ.get("ADZUNA_APP_ID"), os.environ.get("ADZUNA_APP_KEY")
-    if not (app_id and app_key):
-        raise SkipSource("set ADZUNA_APP_ID and ADZUNA_APP_KEY to enable - free at developer.adzuna.com")
-    out = []
-    for q in ["junior software engineer", "AI engineer", "full stack developer"]:
-        url = (
-            "https://api.adzuna.com/v1/api/jobs/us/search/1"
-            f"?app_id={app_id}&app_key={app_key}&results_per_page=50"
-            f"&what={urllib.parse.quote(q)}&max_days_old=14&content-type=application/json"
-        )
-        for j in _get_json(url).get("results") or []:
-            out.append({
-                "title": _strip_html(j.get("title")),
-                "company": (j.get("company") or {}).get("display_name"),
-                "location": (j.get("location") or {}).get("display_name"),
-                "date": (j.get("created") or "")[:10],
-                "url": j.get("redirect_url"),
-                "id": str(j.get("id") or ""),
-                "portal": "adzuna",
-                "work_mode": "remote" if "remote" in (j.get("title") or "").lower() else None,
-                "skills": [],
-                "description": _strip_html(j.get("description"))[:2000],
-            })
+def src_jooble():
+    """Jooble's aggregator API (many US boards). Every query runs for every location."""
+    key = os.environ.get("JOOBLE_API_KEY")
+    if not key:
+        raise SkipSource("set JOOBLE_API_KEY to enable - free key from jooble.org/api/about")
+    cfg = json.loads(QUERIES_PATH.read_text(encoding="utf-8")).get("jooble") or {}
+    since = (date.today() - timedelta(days=int(cfg.get("days", 3)))).isoformat()
+    out, seen, errors = [], set(), []
+    combos = [(q, loc) for q in cfg.get("queries") or [] for loc in cfg.get("locations") or [""]]
+    for q, loc in combos:
+        for page in range(1, int(cfg.get("pages", 1)) + 1):
+            body = json.dumps({"keywords": q, "location": loc, "page": page, "datecreatedfrom": since}).encode()
+            try:
+                data = _get_json(f"https://jooble.org/api/{key}", headers={"Content-Type": "application/json"}, data=body)
+            except Exception as e:
+                errors.append(e)
+                break
+            for j in data.get("jobs") or []:
+                jid = str(j.get("id") or "")
+                if not jid or jid in seen or not _keep_title(j.get("title")):
+                    continue
+                seen.add(jid)
+                place = j.get("location") or ""
+                remote = loc == "remote" or "remote" in place.lower()
+                out.append({
+                    "title": j.get("title"),
+                    "company": j.get("company"),
+                    "location": f"Remote ({place})" if remote and place else ("Remote (United States)" if remote else place),
+                    "date": (j.get("updated") or "")[:10],
+                    "url": j.get("link"),
+                    "id": jid,
+                    "portal": "jooble",
+                    "work_mode": "remote" if remote else None,
+                    "skills": [],
+                    "description": _strip_html(j.get("snippet"))[:2000],
+                })
+    _fail_if_all_failed("Jooble", errors, len(combos))
     return out
 
 
@@ -1146,7 +1200,7 @@ HTTP_SOURCES = {
     "weworkremotely": src_weworkremotely,
     "workingnomads": src_workingnomads,
     "hn_hiring": src_hn_hiring,
-    "adzuna": src_adzuna,
+    "jooble": src_jooble,
     "jsearch": src_jsearch,
     "usajobs": src_usajobs,
     "boards": src_boards,
@@ -1504,7 +1558,7 @@ def cmd_process(args):
         new.append(j)
 
     order = {"high": 0, "medium": 1, "low": 2}
-    new.sort(key=lambda j: (order.get(j["fit"], 9), str(j.get("date") or ""), j.get("title") or ""))
+    new.sort(key=lambda j: (order.get(j["fit"], 9), -(j.get("fit_score") or 0), str(j.get("date") or ""), j.get("title") or ""))
 
     from collections import Counter
     print(f"TOTAL unique={len(jobs)} new={len(new)} seen={skipped_seen} loc_skip={skipped_loc} lang_skip={skipped_lang}")
@@ -1544,6 +1598,11 @@ def cmd_process(args):
         salary_suffix = f" | {j['salary']}" if j.get("salary") else ""
         print(f"    {j.get('company')} | {j.get('location')} | {j.get('date')}{salary_suffix}")
         print(f"    {j.get('url')}")
+    unchecked = daily_digest.unchecked_jobs(new)
+    if unchecked:
+        print(f"\n=== UNCHECKED, NOT GRADED ({len(unchecked)}) ===")
+        for j in unchecked:
+            print(f"  {j.get('title')} | {j.get('company')} | {j.get('url')}")
     if left_out:
         print(f"\n=== LEFT OUT ({len(left_out)}) ===")
         for j, reason in left_out:

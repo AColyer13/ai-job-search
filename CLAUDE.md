@@ -39,6 +39,7 @@ This repo is a job application workspace. The AI agent running this session (Cla
 
 ### Technical Skills
 - **Primary:** React, Next.js, TypeScript, Python (FastAPI/Flask), Node.js/Express, AI/LLM integration (RAG, agents, prompt engineering, local/faster-whisper, Claude API and others), Auth (OAuth, JWT, RBAC, Presidio)
+- **Also working knowledge:** Java and SQL (stated by Adam; not yet on the resume, so confirm his depth before claiming it in a CV or cover letter)
 - **Secondary:** Mobile (React Native, Flutter, native iOS/Android), data science tooling (PyTorch, PEFT, Pandas), cloud/DevOps (AWS, GCP, Azure, Docker, CI/CD), UI polish (DCI-P3, fluid animation, light/dark themes)
 - **Domain:** Privacy-first system design (sensitive info stripped or local inference before model calls), B2B technical sales and stakeholder management (transferable, not engineering experience)
 - **Software:** Claude Code, Cursor, Antigravity, GitHub Actions, Vercel, Render, Firebase, PostgreSQL, Playwright/Vitest/pytest
@@ -77,8 +78,9 @@ None.
   1. Ideal: Fully remote
   2. Acceptable: Twin Cities west/NW/SW suburbs from **Rogers, MN** (north) through **Chanhassen, MN** (south), including Edina, Eden Prairie, Minnetonka, Hopkins, St. Louis Park, Golden Valley, Plymouth, Maple Grove, Osseo, Brooklyn Park, Rogers, Dayton, Medina, Wayzata, Orono, Chaska, Victoria, Bloomington, and Richfield. Garmin in Chanhassen is in range. Still skip a required downtown Minneapolis 5-day commute when a west-suburb office exists; hybrid with 1–2 days in Minneapolis is acceptable.
   3. Acceptable (relocation): Mississippi, preferably the Gulfport–Biloxi area (also nearby Gulf Coast: Long Beach, D'Iberville, Ocean Springs, Pass Christian)
-  4. Borderline: Other US locations requiring relocation
-  5. Too far: St. Paul or anywhere east of Minneapolis, unless the role is fully remote; Mississippi roles well inland from the Gulf Coast
+  4. Acceptable (relocation, stated by Adam): Texas, Oklahoma, Arkansas, Louisiana, Alabama, Georgia, Florida. A remote role limited to these states ("TX/OK/AR/LA only") is Medium, not Low.
+  5. Borderline: Other US locations requiring relocation
+  6. Too far: St. Paul or anywhere east of Minneapolis, unless the role is fully remote; Mississippi roles well inland from the Gulf Coast
 - Prefers remote/hybrid; open otherwise (no other hard deal-breakers specified yet)
 
 ## Repo Structure

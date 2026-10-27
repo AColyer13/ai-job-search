@@ -41,16 +41,18 @@ def load_drift():
 def _card(job, number, type_key):
     import daily_digest
 
-    fit = (job.get("fit") or "low").lower()
+    unchecked = daily_digest.is_unchecked(job)
+    fit = "unchecked" if unchecked else (job.get("fit") or "low").lower()
     title = job.get("title") or "Untitled"
     company = job.get("company") or "Company not listed"
     where = daily_digest._where(job)
-    why = daily_digest._why(job)
+    why = daily_digest._unchecked_why(job) if unchecked else daily_digest._why(job)
     hits = job.get("star_notes") or []
     star = "★ " if hits else ""
     blob = " ".join([title, company, where, why, fit]).lower()
     pay = job.get("salary") or ""
-    url = job.get("url") or ""
+    url = daily_digest.apply_link(job)
+    minimums = "" if unchecked else daily_digest._minimums_line(job)
     parts = [
         f'<article class="card" data-job data-fit="{esc(fit)}" data-type="{esc(type_key)}" data-text="{esc(blob)}">',
         f"<h3>{esc(star + str(number) + '. ' + fit.upper() + ' | ' + title)}</h3>",
@@ -66,6 +68,8 @@ def _card(job, number, type_key):
     if pay:
         parts.append(f"<p>Pay on the card: {esc(pay)}</p>")
     parts.append(f"<p>{esc(why)}</p>")
+    if minimums:
+        parts.append(f"<p class=\"minimums\">{esc(minimums)}</p>")
     if url:
         parts.append(f'<p><a href="{esc(url)}">{esc(url)}</a></p>')
     parts.append("</article>")
@@ -123,11 +127,18 @@ def render_page(jobs, rows, drift, sources, day):
     import daily_digest
 
     upper, lows = daily_digest._split_for_doc(jobs)
-    counts = daily_digest._counts(daily_digest.listable(jobs))
+    counts = daily_digest._counts([j for j in daily_digest.listable(jobs) if not daily_digest.is_unchecked(j)])
     total = sum(counts.values())
     blocks = []
     if upper:
         blocks.append("<h2>High and medium by type</h2>\n" + _sections(upper))
+    unchecked = daily_digest.unchecked_jobs(jobs)
+    if unchecked:
+        blocks.append(
+            f"<h2>{esc(daily_digest.UNCHECKED_HEADING)} ({len(unchecked)})</h2>\n"
+            f"<p>{esc(daily_digest.UNCHECKED_NOTE)}</p>\n"
+            + _sections([{"key": "unchecked", "label": "Not graded", "jobs": unchecked}])
+        )
     if lows:
         blocks.append("<h2>Low</h2>\n" + _sections(lows))
     job_html = "\n".join(blocks) if blocks else "<p>No jobs in this file.</p>"
@@ -160,6 +171,7 @@ a {{ color: #1d4e89; }}
 .card[data-fit="high"] {{ border-left-color: #1f7a4d; }}
 .card[data-fit="medium"] {{ border-left-color: #a15c07; }}
 .card[data-fit="low"] {{ border-left-color: #8a8175; }}
+.card[data-fit="unchecked"] {{ border-left-color: #1d4e89; border-left-style: dashed; }}
 .star {{ font-weight: 600; }}
 [hidden] {{ display: none !important; }}
 @media (max-width: 700px) {{
@@ -172,7 +184,7 @@ a {{ color: #1d4e89; }}
 <main>
 <h1>Adam Colyer job search</h1>
 <p>Latest jobs as of {esc(day)}</p>
-<p>Jobs: {total}    High: {counts['high']}    Medium: {counts['medium']}    Low: {counts['low']}</p>
+<p>Jobs: {total}    High: {counts['high']}    Medium: {counts['medium']}    Unchecked: {len(unchecked)}    Low: {counts['low']}</p>
 <p>High, medium, and low are title matches.</p>
 {source_html}
 <div class="filters">
@@ -183,6 +195,7 @@ a {{ color: #1d4e89; }}
 <option value="high">High</option>
 <option value="medium">Medium</option>
 <option value="low">Low</option>
+<option value="unchecked">Unchecked</option>
 </select>
 </label>
 <label>Type

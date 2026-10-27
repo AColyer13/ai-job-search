@@ -9,6 +9,14 @@ HTTP sources are enabled/disabled via the `http_sources` list there (or
 
 The Windows task "Adam daily job search" runs `run_daily.cmd` hourly from 6 AM to 5 PM, and every run searches every source. The daily Word files are rewritten on each run from the jobs found so far.
 
+Rate limits at 12 runs a day:
+
+- **Remotive** publishes a limit of 4 fetches a day, so it runs only at 6, 10, 13 and 16 and skips the other runs.
+- **Jobicy** asks for at most one automated check an hour; an hourly run is exactly that.
+- **JSearch** is a paid plan: about 1,800 requests a month of 10,000.
+- **LinkedIn and FreeHire** retry 429 and 5xx with backoff in their own CLIs. No 429 appears in the last week of run logs.
+- **Every other HTTP source** has no published limit. `_get` retries a 429 or 5xx twice, waiting out `Retry-After`; a source that still fails reports FAIL for that run and tries again the next hour.
+
 ## Tier 1 — CLI portals (`.agents/skills/`, run via `bun`)
 
 | Portal | Coverage | Notes |
@@ -42,19 +50,16 @@ These are skipped silently until the env vars are set:
 
 | Source | Env vars | Get a key |
 |---|---|---|
-| Adzuna (US) | `ADZUNA_APP_ID`, `ADZUNA_APP_KEY` | https://developer.adzuna.com/ |
+| Jooble | `JOOBLE_API_KEY` (set as a Windows user environment variable) | https://jooble.org/api/about. Aggregates US boards. 8 queries × 2 locations (Minnesota, remote), 1 page of 20 each, 3-day window, so 16 requests a run. Text is a short snippet; the reader opens the link. Queries are in `queries.json` under `jooble`. |
 | USAJobs (federal) | `USAJOBS_API_KEY`, `USAJOBS_EMAIL` | https://developer.usajobs.gov/ |
 | JSearch (OpenWebNinja) | `JSEARCH_API_KEY` (a RapidAPI key in `RAPIDAPI_KEY` also works) | https://www.openwebninja.com/api/jsearch. Google for Jobs results: Indeed, ZipRecruiter, Glassdoor and others, through a licensed API. The plan allows 10,000 requests a month. Each run sends every query (5), so 12 runs a day is about 1,800 requests a month, and it stops at `monthly_limit` (9,500). The count is kept in `job_scraper/jsearch_runs.json`. Queries are in `queries.json` under `jsearch`. |
 
 ## Tier 4 — Free key, not yet implemented
 
-Worth adding if coverage gaps appear (follow the `src_adzuna` pattern in
+Worth adding if coverage gaps appear (follow the `src_jooble` pattern in
 `pipeline.py`):
 
-- **The Muse** — https://www.themuse.com/developers/api/v2 (free key, US)
-- **Jooble** — https://jooble.org/api/about (free key, aggregates US boards)
 - **Careerjet** — https://www.careerjet.com/partners/api/ (free affiliate key)
-- **CareerOneStop** — https://www.careeronestop.org/Developers/WebAPI/ (US Dept. of Labor, free key)
 
 ## Tier 5 — Target-company board APIs (implemented as the `boards` source)
 
@@ -73,7 +78,7 @@ python tools/probe_company_board.py lever <slug>
 python tools/probe_company_board.py ashby <slug>
 ```
 
-Currently seeded (both confirmed live): Jamf and Sezzle, both on Greenhouse.
+Currently seeded: 225 boards (Greenhouse, Lever and Ashby), each probed live and returning open roles. A full run reads about 8,900 postings from them in about a minute. Slugs that resolved to a different company (Orca, Invisible, Vast, Pure, Alloy, Neon) were left out.
 Several other Twin Cities employers were tried (SPS Commerce, Arctic Wolf,
 Calabrio, Workiva, Seeq, Garmin under various slug guesses) and all 404'd —
 their real slugs, if they use one of these three platforms at all, aren't

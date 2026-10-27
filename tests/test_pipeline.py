@@ -58,10 +58,13 @@ def test_fit_skills_fallback():
 # --- fit() with posting text ------------------------------------------------
 
 _BODY = "You will run discovery calls and product demos with customers every week. " * 6
+# An engineering seat is high only when the posting overlaps the stack he has shipped.
+_STACK = "You will build features in Python, TypeScript and React against REST APIs and PostgreSQL. "
 
 
 def test_fit_high_needs_posting_text():
-    assert pipeline.fit("Junior Software Engineer", description=_BODY + "1 year of experience.") == "high"
+    assert pipeline.fit("Junior Software Engineer", description=_BODY + _STACK + "1 year of experience.") == "high"
+    assert pipeline.fit("Junior Software Engineer", description=_BODY + "1 year of experience.") == "medium"
     assert pipeline.fit("Junior Software Engineer") == "low"
 
 
@@ -77,7 +80,7 @@ def test_fit_low_when_cs_degree_required():
 
 
 def test_fit_cs_degree_with_equivalent_experience_is_fine():
-    desc = _BODY + "BS in Computer Science or equivalent experience. 1 year of experience."
+    desc = _BODY + _STACK + "BS in Computer Science or equivalent experience. 1 year of experience."
     assert pipeline.fit("Junior Software Engineer", description=desc) == "high"
 
 
@@ -93,10 +96,17 @@ def test_fit_sales_years_inside_resume_is_high():
 
 def test_fit_required_five_sales_years_is_not_qualified():
     import scoring
-    for years in (5, 7):
+    for years in (6, 7):
         job = {"title": "Sales Engineer", "description": _BODY + f"{years}+ years of sales experience required."}
         out = scoring.score(job)
         assert out["grade"] == "low" and out["disqualified"]
+
+
+def test_fit_five_required_sales_years_is_a_stretch_never_high():
+    import scoring
+    job = {"title": "Sales Engineer", "description": _BODY + "5+ years of sales experience required."}
+    out = scoring.score(job)
+    assert out["grade"] == "medium" and not out["disqualified"]
 
 
 def test_fit_four_required_sales_years_is_fine():
@@ -140,8 +150,8 @@ def test_disqualified_job_is_left_off_the_list():
 
 
 def test_fit_bare_engineering_title_high_only_with_entry_evidence():
-    plain = _BODY + "2 years of experience."
-    friendly = _BODY + "Bootcamp graduates welcome. Bachelor's degree or equivalent experience."
+    plain = _BODY + _STACK + "2 years of experience."
+    friendly = _BODY + _STACK + "Bootcamp graduates welcome. Bachelor's degree or equivalent experience."
     assert pipeline.fit("Full Stack Developer", description=plain) == "medium"
     assert pipeline.fit("Full Stack Developer", description=friendly) == "high"
 
@@ -152,7 +162,7 @@ def test_fit_three_engineering_years_is_low_without_entry_wording():
 
 
 def test_fit_preferred_requirements_are_ignored():
-    desc = _BODY + "1 year of experience. 5+ years of experience is a plus."
+    desc = _BODY + _STACK + "1 year of experience. 5+ years of experience is a plus."
     assert pipeline.fit("Junior Software Engineer", description=desc) == "high"
 
 
@@ -446,7 +456,7 @@ def _dq(title, extra):
     ("Solutions Engineer", "Bachelor's degree in Computer Science or a related technical field."),
     ("Junior Software Engineer", "Bachelor's degree in a technical field is required."),
     ("Solutions Engineer", "Master's degree required."),
-    ("Junior Software Engineer", "Strong experience with Java and Spring."),
+    ("Junior Software Engineer", "Strong experience with C++ and Rust."),
     ("Solutions Engineer", "Hands-on experience with Kubernetes and Terraform."),
     ("Solutions Engineer", "AWS Certified Solutions Architect is required."),
     ("Solutions Engineer", "3+ years in a technical role such as software engineering."),
@@ -758,3 +768,265 @@ def test_multi_request_source_fails_when_every_request_fails(monkeypatch, source
     monkeypatch.setattr(pipeline, "_get", boom)
     with pytest.raises(RuntimeError, match="request"):
         getattr(pipeline, "src_" + source)()
+
+
+def _http_error(code, retry_after=None):
+    import email.message
+    import urllib.error
+    hdrs = email.message.Message()
+    if retry_after:
+        hdrs["Retry-After"] = retry_after
+    return urllib.error.HTTPError("http://x", code, "err", hdrs, None)
+
+
+def test_get_waits_out_a_429_and_retries(monkeypatch):
+    class Resp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return b"ok"
+
+    calls, waits = [], []
+    def fake_urlopen(req, timeout=None):
+        calls.append(1)
+        if len(calls) < 3:
+            raise _http_error(429, "7")
+        return Resp()
+    monkeypatch.setattr(pipeline.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(pipeline.time, "sleep", waits.append)
+    assert pipeline._get("http://x") == "ok" and waits == [7, 7]
+
+
+def test_get_gives_up_after_three_429s_and_never_retries_a_404(monkeypatch):
+    import urllib.error
+    calls = []
+    monkeypatch.setattr(pipeline.time, "sleep", lambda s: None)
+    monkeypatch.setattr(pipeline.urllib.request, "urlopen", lambda req, timeout=None: calls.append(1) or (_ for _ in ()).throw(_http_error(429)))
+    with pytest.raises(urllib.error.HTTPError):
+        pipeline._get("http://x")
+    assert len(calls) == 3
+    calls.clear()
+    monkeypatch.setattr(pipeline.urllib.request, "urlopen", lambda req, timeout=None: calls.append(1) or (_ for _ in ()).throw(_http_error(404)))
+    with pytest.raises(urllib.error.HTTPError):
+        pipeline._get("http://x")
+    assert len(calls) == 1
+
+
+def test_remotive_runs_four_times_a_day(monkeypatch):
+    import datetime as real
+    class FakeDT(real.datetime):
+        hour_now = 6
+        @classmethod
+        def now(cls, tz=None): return cls(2026, 10, 27, cls.hour_now)
+    monkeypatch.setattr(pipeline, "datetime", FakeDT)
+    monkeypatch.setattr(pipeline, "_get_json", lambda url, headers=None, timeout=None: {"jobs": []})
+    ran = []
+    for h in range(6, 18):
+        FakeDT.hour_now = h
+        try:
+            pipeline.src_remotive(); ran.append(h)
+        except pipeline.SkipSource:
+            pass
+    assert ran == [6, 10, 13, 16]
+
+
+def test_jooble_needs_a_key(monkeypatch):
+    monkeypatch.delenv("JOOBLE_API_KEY", raising=False)
+    with pytest.raises(pipeline.SkipSource):
+        pipeline.src_jooble()
+
+
+def test_jooble_maps_and_dedupes_results(monkeypatch, tmp_path):
+    monkeypatch.setenv("JOOBLE_API_KEY", "k")
+    (tmp_path / "queries.json").write_text(json.dumps({"jooble": {"queries": ["a", "b"], "locations": ["Minnesota", "remote"]}}))
+    monkeypatch.setattr(pipeline, "QUERIES_PATH", tmp_path / "queries.json")
+    row = {"title": "Solutions Engineer", "company": "Acme", "location": "Minneapolis, MN", "link": "https://jooble.org/desc/1",
+           "id": 1, "updated": "2026-10-24T00:00:00.0000000", "snippet": "Demo <b>things</b>."}
+    sent = []
+    def fake(url, headers=None, timeout=None, data=None):
+        sent.append(json.loads(data)); return {"jobs": [row]}
+    monkeypatch.setattr(pipeline, "_get_json", fake)
+    out = pipeline.src_jooble()
+    assert len(sent) == 4 and len(out) == 1
+    assert out[0]["portal"] == "jooble" and out[0]["date"] == "2026-10-24" and "<b>" not in out[0]["description"]
+
+
+def test_a_post_body_makes_get_a_post(monkeypatch):
+    seen = {}
+    class Resp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return b"{}"
+    def fake(req, timeout=None):
+        seen["method"] = req.get_method(); return Resp()
+    monkeypatch.setattr(pipeline.urllib.request, "urlopen", fake)
+    pipeline._get("http://x", data=b"{}")
+    assert seen["method"] == "POST"
+
+
+def test_state_limited_remote_job_is_a_relocation_medium():
+    block = pipeline.location_high_block("Remote (United States)", "remote", "Candidates in TX/OK/AR/LA only.")
+    assert block and "relocate" in block
+    assert pipeline.location_high_block("Remote (United States)", "remote", "Candidates in MN/WI only.") is None
+
+
+def test_company_key_ignores_legal_suffixes_and_board_labels():
+    assert pipeline.company_key("Rithum") == pipeline.company_key("Rithum LinkedIn Board")
+    assert pipeline.company_key("Billtrust US Careers") == pipeline.company_key("Billtrust US")
+    assert pipeline.company_key("SHI International Corp.") == pipeline.company_key("SHI International")
+    assert pipeline.company_key("Epic") != pipeline.company_key("Epic Systems")
+
+
+def test_same_job_under_two_company_spellings_is_one_job():
+    a = {"company": "Rithum", "title": "Technical Account Manager", "location": "United States - Remote"}
+    b = {"company": "Rithum LinkedIn Board", "title": "Technical Account Manager", "location": "United States - Remote"}
+    assert pipeline.dedupe_key(a) == pipeline.dedupe_key(b)
+
+
+def test_collapse_store_drops_a_repost_whose_employer_page_is_stored():
+    import daily_digest
+
+    store = {
+        "himalayas": {"url": "https://himalayas.app/companies/acme/jobs/se", "company": "Acme", "title": "SE",
+                      "apply_url": "https://job-boards.greenhouse.io/acme/jobs/1"},
+        "greenhouse": {"url": "https://job-boards.greenhouse.io/acme/jobs/1", "company": "Acme Inc", "title": "Other"},
+    }
+    assert daily_digest.collapse_store(store) == 1
+    assert list(store) == ["greenhouse"]
+
+
+def _posting_text():
+    import posting_text
+
+    return posting_text
+
+
+def test_board_slugs_come_from_the_company_and_the_himalayas_page():
+    pt = _posting_text()
+    job = {"company": "Net at Work, LLC", "url": "https://himalayas.app/companies/net-at-work-llc/jobs/tam"}
+    slugs = pt.board_slugs(job)
+    assert slugs[0] == "net-at-work-llc" and "netatwork" in slugs and "net-at-work" in slugs
+
+
+def test_resolve_apply_needs_the_exact_title(monkeypatch):
+    pt = _posting_text()
+    rows = [
+        {"title": "Solutions Engineer", "url": "https://jobs.example/a", "text": "full text", "location": "Remote - US"},
+        {"title": "Senior Solutions Engineer", "url": "https://jobs.example/b", "text": "x", "location": "Remote - US"},
+    ]
+    monkeypatch.setattr(pt, "_board_jobs", lambda ats, slug: rows if (ats, slug) == ("ashby", "acme") else [])
+    job = {"title": "Solutions Engineer", "company": "Acme", "location": "Remote (United States)"}
+    assert pt.resolve_apply(job) == ("https://jobs.example/a", "full text", "ashby")
+    assert pt.resolve_apply(dict(job, title="Sales Engineer")) == ("", "", "")
+
+
+def test_resolve_apply_links_sets_the_employer_link_and_text(monkeypatch):
+    pt = _posting_text()
+    monkeypatch.setattr(pt, "resolve_apply", lambda job: ("https://jobs.example/a", "Real posting text. " * 40, "lever"))
+    aggregator = {"title": "T", "company": "C", "url": "https://himalayas.app/companies/c/jobs/t", "body_status": "unread"}
+    own = {"title": "T2", "company": "C", "url": "https://jobs.lever.co/c/1"}
+    out = pt.resolve_apply_links([aggregator, own], workers=1)
+    assert out == {"found": 1, "tried": 1}
+    assert aggregator["apply_url"] == "https://jobs.example/a" and aggregator["body_status"] == "opened"
+    assert "apply_url" not in own
+    again = pt.resolve_apply_links([aggregator], workers=1)
+    assert again["tried"] == 0
+
+
+def _himalayas_page(*slugs, body="Real posting text. " * 30):
+    import json
+
+    return json.dumps({"jobs": [
+        {"guid": f"https://himalayas.app/companies/acme/jobs/{s}", "title": s, "description": f"<p>{body}</p>"}
+        for s in slugs
+    ]})
+
+
+def test_himalayas_slug_reads_company_job_urls_only():
+    pt = _posting_text()
+    assert pt._himalayas_slug("https://himalayas.app/companies/acme/jobs/solutions-engineer?utm_source=x") == "solutions-engineer"
+    assert pt._himalayas_slug("https://himalayas.app/jobs/api/search?q=x") == ""
+    assert pt._himalayas_slug("https://jobs.lever.co/acme/1") == ""
+
+
+def test_fetch_himalayas_matches_the_slug_in_the_search_results(monkeypatch):
+    pt = _posting_text()
+    calls = []
+
+    def fake_get(url, accept=""):
+        calls.append(url)
+        return _himalayas_page("other-role", "solutions-engineer")
+
+    monkeypatch.setattr(pt, "_get", fake_get)
+    job = {"url": "https://himalayas.app/companies/acme/jobs/solutions-engineer?utm_source=x", "title": "Solutions Engineer", "company": "Acme"}
+    status, text = pt.fetch_himalayas(job)
+    assert status == "opened" and text.startswith("Real posting text.")
+    assert len(calls) == 1 and "q=Solutions%20Engineer" in calls[0]
+
+
+def test_fetch_himalayas_tries_title_and_company_then_gives_up_unread(monkeypatch):
+    pt = _posting_text()
+    calls = []
+    monkeypatch.setattr(pt, "_get", lambda url, accept="": calls.append(url) or _himalayas_page("someone-else"))
+    job = {"url": "https://himalayas.app/companies/acme/jobs/missing-role", "title": "Missing Role", "company": "Acme"}
+    assert pt.fetch_himalayas(job) == ("unread", "")
+    assert len(calls) == 2 and "Acme" in calls[1]
+
+
+def test_fetch_himalayas_survives_a_failing_api(monkeypatch):
+    pt = _posting_text()
+
+    def boom(url, accept=""):
+        raise OSError("down")
+
+    monkeypatch.setattr(pt, "_get", boom)
+    job = {"url": "https://himalayas.app/companies/acme/jobs/x", "title": "X", "company": "Acme"}
+    assert pt.fetch_himalayas(job) == ("unread", "")
+
+
+def test_enrich_reads_himalayas_rows_through_the_api(monkeypatch):
+    pt = _posting_text()
+    monkeypatch.setattr(pt, "fetch_himalayas", lambda job: ("opened", "Full text from the API. " * 20))
+    monkeypatch.setattr(pt, "fetch_text", lambda url, company="": ("unread", ""))
+    himalayas = {"url": "https://himalayas.app/companies/acme/jobs/se", "title": "SE", "company": "Acme"}
+    other = {"url": "https://example.com/job/1", "title": "T", "company": "C"}
+    pt.enrich([himalayas, other], workers=1)
+    assert himalayas["body_status"] == "opened" and himalayas["description"].startswith("Full text from the API.")
+    assert other["body_status"] == "unread"
+
+
+
+def test_title_tied_to_a_relocation_state_caps_high_to_medium():
+    block = pipeline.location_high_block("Remote (United States)", "remote", "", "Solutions Engineer, Florida (Enterprise)")
+    assert block and "FL" in block
+    assert pipeline.location_high_block("Remote (United States)", "remote", "", "Solutions Engineer, Minnesota") is None
+    assert pipeline.location_high_block("Remote (United States)", "remote", "", "Solutions Engineer") is None
+
+
+def test_enrich_fetches_text_that_looks_cut_at_two_thousand_characters(monkeypatch):
+    import posting_text as pt
+
+    monkeypatch.setattr(pt, "fetch_text", lambda url, company="": ("opened", "Full posting. " * 400))
+    snippet = {"url": "https://boards.greenhouse.io/acme/jobs/1", "company": "Acme", "description": "x" * 2000}
+    whole = {"url": "https://boards.greenhouse.io/acme/jobs/2", "company": "Acme", "description": "x" * 1700}
+    pt.enrich([snippet, whole], workers=1)
+    assert snippet["body_status"] == "opened" and "whole" not in snippet and len(snippet["description"]) > 2000
+    assert "body_status" not in whole
+
+
+def test_embedded_greenhouse_link_is_read_through_the_board_api(monkeypatch):
+    import posting_text as pt
+
+    seen = []
+    monkeypatch.setattr(pt, "_get", lambda url, accept=None, *a, **k: (seen.append(url), '{"content": "' + "Requirements text. " * 30 + '"}')[1])
+    status, text = pt.fetch_text("https://cribl.io/job-detail/?gh_jid=6199340004", "Cribl")
+    assert status == "opened" and text.startswith("Requirements text")
+    assert seen[0] == "https://boards-api.greenhouse.io/v1/boards/cribl/jobs/6199340004"
+
+
+def test_failed_refetch_of_a_long_snippet_keeps_it_readable(monkeypatch):
+    import posting_text as pt
+
+    monkeypatch.setattr(pt, "fetch_text", lambda url, company="": ("unread", ""))
+    job = {"url": "https://example.com/j", "company": "Acme", "description": "x" * 2000}
+    pt.enrich([job], workers=1)
+    assert "body_status" not in job and len(job["description"]) == 2000

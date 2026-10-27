@@ -18,6 +18,7 @@ import json
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from html import unescape
@@ -29,6 +30,12 @@ MAX_CHARS = 8000
 _SHELL_RE = re.compile(
     r"\{\{position\.name\}\}|an error occured|showalllocations|unsupported browser|"
     r"enable javascript|just a moment|performing security verification",
+    re.I,
+)
+_CLOSED_RE = re.compile(
+    r"no longer (?:accepting applications|available|open)|(?:position|job|role|posting) (?:has been|is|was) "
+    r"(?:filled|closed|removed|expired)|this (?:job|position|posting) (?:has )?expired|"
+    r"job (?:is )?no longer exists|page you.re looking for (?:doesn.t|does not) exist",
     re.I,
 )
 _JSONLD_RE = re.compile(
@@ -103,11 +110,67 @@ def _from_ats_json(raw):
     return ""
 
 
-def fetch_text(url):
+def _himalayas_slug(url):
+    m = re.match(r"https?://(?:www\.)?himalayas\.app/companies/[\w-]+/jobs/([\w-]+)", url or "")
+    return m.group(1) if m else ""
+
+
+def fetch_himalayas(job):
+    """(status, text) for a himalayas.app posting, read from its search API by URL slug.
+
+    The posting page itself refuses a plain request; the search API (the one src_himalayas
+    uses) carries the full text. Searches the title, then title and company, three pages each.
+    """
+    slug = _himalayas_slug(job.get("url"))
+    if not slug:
+        return "unread", ""
+    for q in (job.get("title") or "", f"{job.get('title') or ''} {job.get('company') or ''}".strip()):
+        if not q:
+            continue
+        for page in (1, 2, 3):
+            try:
+                data = json.loads(_get(
+                    "https://himalayas.app/jobs/api/search?sort=recent&country=US"
+                    f"&page={page}&q={urllib.parse.quote(q)}", "application/json"))
+            except Exception:
+                break
+            hits = data.get("jobs") or []
+            for hit in hits:
+                if _himalayas_slug(hit.get("guid") or hit.get("applicationLink")) == slug:
+                    text = html_to_text(hit.get("description") or "")
+                    return ("opened", text[:MAX_CHARS]) if len(text) >= 200 else ("shell", text)
+            if len(hits) < 20:
+                break
+            time.sleep(0.4)
+    return "unread", ""
+
+
+_GH_JID_RE = re.compile(r"[?&]gh_jid=(\d+)")
+
+
+def _greenhouse_by_jid(url, company):
+    """Text of a Greenhouse job embedded on the employer's own site (a ?gh_jid=123 link), or ''."""
+    m = _GH_JID_RE.search(url or "")
+    if not m or not company:
+        return ""
+    for slug in board_slugs({"company": company, "url": url})[:4]:
+        try:
+            text = _from_ats_json(_get(f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs/{m.group(1)}", "application/json"))
+        except Exception:
+            continue
+        if len(text) >= 200:
+            return text
+    return ""
+
+
+def fetch_text(url, company=""):
     """Return (status, text) for one posting URL."""
     if not url:
         return "unread", ""
     html = None
+    embedded = _greenhouse_by_jid(url, company)
+    if embedded:
+        return "opened", embedded[:MAX_CHARS]
     for attempt in range(2):
         try:
             api = _ats_api_url(url)
@@ -118,7 +181,9 @@ def fetch_text(url):
             html = _get(url)
             break
         except urllib.error.HTTPError as e:
-            if e.code in (400, 401, 403, 404, 410):  # retrying will not help
+            if e.code in (404, 410):  # the posting was taken down
+                return "gone", ""
+            if e.code in (400, 401, 403):  # blocked or malformed: retrying will not help
                 return "unread", ""
         except Exception:
             pass
@@ -126,11 +191,18 @@ def fetch_text(url):
     if html is None:
         return "unread", ""
     text = _jsonld_description(html) or html_to_text(html)
+    if _CLOSED_RE.search(text[:3000]):
+        return "gone", ""
     if _SHELL_RE.search(text[:3000]) and len(text) < 1500:
         return "shell", text[:MAX_CHARS]
     if len(text) < 200:
         return "shell", text
     return "opened", text[:MAX_CHARS]
+
+
+# Board feeds and aggregators cut their text at 2,000 characters, which loses the requirements
+# section of a long posting. Text that long and never opened is a snippet, not the posting.
+TRUNCATED_AT = 1900
 
 
 def enrich(jobs, workers=8, only=None):
@@ -142,17 +214,166 @@ def enrich(jobs, workers=8, only=None):
     todo = [
         j for j in jobs
         if (only is None or only(j))
-        and j.get("body_status") != "opened"
-        and len(j.get("description") or "") < 1500
+        and j.get("body_status") not in ("opened", "gone")
+        and not (1500 <= len(j.get("description") or "") < TRUNCATED_AT)
     ]
 
     def work(job):
-        status, text = fetch_text(job.get("url"))
+        if _himalayas_slug(job.get("url")):
+            status, text = fetch_himalayas(job)
+        else:
+            status, text = fetch_text(job.get("url"), job.get("company"))
         if status == "opened" or not job.get("description"):
             job["description"] = text or job.get("description") or ""
-        job["body_status"] = status
+        # A failed re-fetch of a long snippet must not turn "read the snippet" into "could not read it".
+        if status in ("opened", "gone") or len(job.get("description") or "") < 1500:
+            job["body_status"] = status
         return status
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
         statuses = list(ex.map(work, todo))
     return {s: statuses.count(s) for s in set(statuses)}
+
+
+# --- the employer's own apply page ---------------------------------------------------------
+# A job that reached us through an aggregator (Himalayas, startup.jobs, WhatJobs) has a link to the
+# repost, often a page that returns 403 to scripts. Many employers publish the same job on a public
+# ATS board API (Greenhouse, Lever, Ashby, Workable). When the company's board lists a job with the
+# same title, that listing is the real apply page and carries the full text.
+BOARD_TIMEOUT = 10
+_BOARD_CACHE = {}
+_NAME_NOISE_RE = re.compile(
+    r"\b(?:inc|incorporated|llc|ltd|limited|corp|corporation|co|company|plc|group|holdings|careers?|jobs|hiring|us|usa)\b"
+)
+
+
+def _words(text):
+    return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
+
+
+def board_slugs(job):
+    """Likely ATS board names for the job's company, best first."""
+    slugs = []
+    m = re.search(r"himalayas\.app/companies/([\w-]+)/", job.get("url") or "")
+    if m:
+        slugs.append(m.group(1))
+    base = " ".join(_NAME_NOISE_RE.sub(" ", _words(job.get("company"))).split())
+    if base:
+        slugs.extend([base.replace(" ", ""), base.replace(" ", "-"), base.split()[0]])
+    if m:  # "net-at-work-llc" -> "net-at-work"
+        slugs.append(re.sub(r"-(?:inc|llc|ltd|corp|co)$", "", m.group(1)))
+    seen, out = set(), []
+    for slug in slugs:
+        if len(slug) >= 3 and slug not in seen:
+            seen.add(slug)
+            out.append(slug)
+    return out[:4]
+
+
+def _get_json(url):
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=BOARD_TIMEOUT) as resp:
+            return json.loads(resp.read().decode("utf-8", errors="replace"))
+    except Exception:
+        return None
+
+
+def _board_jobs(ats, slug):
+    """[{title, url, text, location}] for one company board, cached for the run. [] when there is none."""
+    key = (ats, slug)
+    if key in _BOARD_CACHE:
+        return _BOARD_CACHE[key]
+    rows = []
+    if ats == "greenhouse":
+        data = _get_json(f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true")
+        for j in (data or {}).get("jobs", []) if isinstance(data, dict) else []:
+            rows.append({"title": j.get("title"), "url": j.get("absolute_url"),
+                         "text": html_to_text(unescape(j.get("content") or "")),
+                         "location": (j.get("location") or {}).get("name", "")})
+    elif ats == "lever":
+        data = _get_json(f"https://api.lever.co/v0/postings/{slug}?mode=json")
+        for j in data if isinstance(data, list) else []:
+            lists = " ".join(f"{i.get('text', '')} {html_to_text(i.get('content') or '')}" for i in j.get("lists") or [])
+            rows.append({"title": j.get("text"), "url": j.get("hostedUrl"),
+                         "text": (j.get("descriptionPlain") or "") + "\n" + lists,
+                         "location": (j.get("categories") or {}).get("location", "")})
+    elif ats == "ashby":
+        data = _get_json(f"https://api.ashbyhq.com/posting-api/job-board/{slug}")
+        for j in (data or {}).get("jobs", []) if isinstance(data, dict) else []:
+            rows.append({"title": j.get("title"), "url": j.get("jobUrl") or j.get("applyUrl"),
+                         "text": j.get("descriptionPlain") or html_to_text(j.get("descriptionHtml") or ""),
+                         "location": ("Remote " if j.get("isRemote") else "") + str(j.get("location") or "")})
+    elif ats == "workable":
+        data = _get_json(f"https://apply.workable.com/api/v1/widget/accounts/{slug}?details=true")
+        for j in (data or {}).get("jobs", []) if isinstance(data, dict) else []:
+            rows.append({"title": j.get("title"), "url": j.get("url") or j.get("shortlink"),
+                         "text": html_to_text(unescape(j.get("description") or "")),
+                         "location": " ".join(str(j.get(k) or "") for k in ("city", "state", "country"))})
+    rows = [r for r in rows if r["title"] and r["url"]]
+    _BOARD_CACHE[key] = rows
+    return rows
+
+
+_REMOTE_LOC_RE = re.compile(r"remote|united states|usa|\bus\b|anywhere", re.I)
+
+
+def _pick_listing(rows, job):
+    """The board listing with this job's exact title, preferring one in the job's own place."""
+    title = _words(job.get("title"))
+    same = [r for r in rows if _words(r["title"]) == title]
+    if not same:
+        return None
+    loc = (job.get("location") or "").lower()
+    city = loc.split(",")[0].strip()
+    for r in same:
+        where = (r.get("location") or "").lower()
+        if (city and city in where) or (_REMOTE_LOC_RE.search(loc) and _REMOTE_LOC_RE.search(where)):
+            return r
+    return same[0] if len(same) == 1 else None
+
+
+def resolve_apply(job):
+    """(apply_url, text, ats) from the company's own public job board, or ("", "", "")."""
+    for slug in board_slugs(job):
+        for ats in ("greenhouse", "lever", "ashby", "workable"):
+            listing = _pick_listing(_board_jobs(ats, slug), job)
+            if listing:
+                return listing["url"], (listing["text"] or "")[:MAX_CHARS], ats
+    return "", "", ""
+
+
+def resolve_apply_links(jobs, only=None, today=None, workers=8, retry_days=3):
+    """Replace aggregator links with the employer's own apply page where its board lists the job.
+
+    Sets apply_url, apply_source and apply_checked on each job tried. A found listing also supplies the
+    posting text when the aggregator page could not be read. A job tried in the last `retry_days` days
+    is skipped. Returns {"found": n, "tried": n}.
+    """
+    import pipeline
+    from datetime import date, timedelta
+
+    today = today or date.today()
+    recent = (today - timedelta(days=retry_days)).isoformat()
+    todo = [
+        j for j in jobs
+        if pipeline._is_aggregator(j)
+        and not j.get("apply_url")
+        and (j.get("apply_checked") or "") <= recent
+        and (only is None or only(j))
+    ]
+
+    def work(job):
+        url, text, ats = resolve_apply(job)
+        job["apply_checked"] = today.isoformat()
+        if not url:
+            return False
+        job["apply_url"], job["apply_source"] = url, ats
+        if text and (job.get("body_status") != "opened" or len(job.get("description") or "") < 1500):
+            job["description"] = text
+            job["body_status"] = "opened"
+        return True
+
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        found = sum(ex.map(work, todo))
+    return {"found": found, "tried": len(todo)}
