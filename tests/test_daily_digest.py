@@ -358,7 +358,7 @@ def test_apply_link_prefers_the_employers_page():
     assert daily_digest.apply_link({}) == ""
 
 
-# --- Unchecked rows: snippet-only board rows whose posting text was never read -------------------
+# --- Unread snippet rows: board rows whose posting text was never read are withheld -------------
 def _row(title, url, fit="medium", minimums="unchecked", **extra):
     return dict({"title": title, "company": "Acme", "location": "Remote (United States)", "url": url, "fit": fit,
                  "minimums": minimums, "found_on": "2026-10-27"}, **extra)
@@ -377,50 +377,30 @@ def test_only_unread_snippet_board_rows_are_unchecked():
     assert not daily_digest.is_unchecked(LOW)
 
 
-def test_unchecked_rows_leave_the_graded_lists_and_the_low_count():
+def test_unread_snippet_rows_are_withheld_and_counted_as_left_out():
     rows = [UNREAD, READ, LOW]
     shown, left_out = daily_digest.presentable_split(rows)
     assert [j["title"] for j in shown] == ["Solutions Engineer"]
     assert left_out == []
     assert [j["title"] for j in daily_digest.fit_jobs(rows)] == ["Solutions Engineer"]
-    assert [j["title"] for j in daily_digest.unchecked_jobs(rows)] == ["Sales Engineer"]
-    assert daily_digest.left_out_count(rows) == 1  # only the low row
+    assert daily_digest.left_out_count(rows) == 2  # the low row and the unread Jooble row
     upper, lows = daily_digest._split_for_doc(rows)
     assert [j["title"] for s in upper for j in s["jobs"]] == ["Solutions Engineer"]
     assert [j["title"] for s in lows for j in s["jobs"]] == ["Solutions Consultant"]
 
 
-def test_docx_lists_unchecked_rows_after_the_graded_ones_without_a_grade(tmp_path):
+def test_word_file_and_dashboard_do_not_list_unread_snippet_rows(tmp_path):
     import zipfile
 
-    path = tmp_path / "unchecked.docx"
-    daily_digest.write_docx(path, "Test", ["Intro"], daily_digest.fit_jobs([UNREAD, READ]), daily_digest.unchecked_jobs([UNREAD, READ]))
-    xml = zipfile.ZipFile(path).read("word/document.xml").decode("utf-8")
-    rels = zipfile.ZipFile(path).read("word/_rels/document.xml.rels").decode("utf-8")
-    assert "Unchecked, open the link (1)" in xml
-    assert 'w:name="unchecked"' in xml
-    assert xml.index("Solutions Engineer") < xml.index('w:name="unchecked"') < xml.rindex("Sales Engineer")
-    assert "UNCHECKED | Sales Engineer" in xml
-    assert "MEDIUM | Sales Engineer" not in xml
-    assert "Meets the posting's stated minimums" not in xml.split('w:name="unchecked"')[1]
-    assert "jooble.org/desc/111" in rels
-
-
-def test_docx_with_only_unchecked_rows_still_writes_the_section(tmp_path):
-    import zipfile
-
-    path = tmp_path / "only_unchecked.docx"
-    daily_digest.write_docx(path, "Test", ["Intro"], [], [UNREAD])
-    xml = zipfile.ZipFile(path).read("word/document.xml").decode("utf-8")
-    assert "No high or medium jobs in this file." in xml
-    assert "Unchecked, open the link (1)" in xml
-
-
-def test_dashboard_shows_unchecked_rows_apart_from_medium():
     import html_report
 
+    path = tmp_path / "withheld.docx"
+    daily_digest.write_docx(path, "Test", ["Intro"], daily_digest.fit_jobs([UNREAD, READ]))
+    xml = zipfile.ZipFile(path).read("word/document.xml").decode("utf-8")
+    assert "Solutions Engineer" in xml
+    assert "Sales Engineer" not in xml
+    assert "jooble.org" not in zipfile.ZipFile(path).read("word/_rels/document.xml.rels").decode("utf-8")
     page = html_report.render_page([UNREAD, READ, LOW], [], [], [], "2026-10-27")
-    assert "Unchecked, open the link (1)" in page
-    assert 'data-fit="unchecked"' in page
-    assert "Medium: 1    Unchecked: 1" in page
-    assert page.count("UNCHECKED | Sales Engineer") == 1
+    assert "Sales Engineer" not in page
+    assert "Unchecked" not in page
+    assert "Medium: 1    Low: 1" in page
