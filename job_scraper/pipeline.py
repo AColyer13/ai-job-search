@@ -447,7 +447,7 @@ NON_ENGLISH_TITLE_RE = re.compile(
 # Sites that repost another employer's job. When the same job is also on the
 # employer's own page or ATS, the employer's link wins.
 AGGREGATOR_HOSTS = (
-    "linkedin.com", "himalayas.app", "adzuna.com", "whatjobs.com", "startup.jobs",
+    "linkedin.com", "himalayas.app", "jobs.workable.com", "themuse.com", "simplify.jobs", "adzuna.com", "whatjobs.com", "startup.jobs",
     "echojobs.io", "wellfound.com", "builtin.com", "indeed.com", "ziprecruiter.com",
     "glassdoor.com", "google.com/search", "governmentjobs.com", "arbeitnow.com",
     "remoteok.com", "weworkremotely.com", "workingnomads.com", "jobicy.com", "remotive.com",
@@ -508,12 +508,34 @@ def _keep_title(title):
     return bool(TECH_TITLE_RE.search(t)) and not NON_ENGLISH_TITLE_RE.search(t)
 
 
+REMOTEOK_TAGS = ("", "sales", "customer-support", "full-stack", "junior", "engineer")
+
+
+def _fail_if_all_failed(name, errors, attempts):
+    """A source that makes several requests must not report success when every one failed.
+
+    Swallowing each error and returning [] looks like "no new jobs" and lets the
+    search be marked finished, which shrinks the next run's posting window.
+    """
+    if attempts and len(errors) >= attempts:
+        raise RuntimeError(f"all {attempts} {name} request(s) failed: {errors[-1]}")
+
+
 def src_remoteok():
-    data = _get_json("https://remoteok.com/api")
+    rows, ids, errors = [], set(), []
+    for tag in REMOTEOK_TAGS:
+        try:
+            batch = _get_json("https://remoteok.com/api" + (f"?tag={tag}" if tag else ""))
+        except Exception as e:
+            errors.append(e)
+            continue
+        for j in batch:
+            if isinstance(j, dict) and "position" in j and str(j.get("id")) not in ids:
+                ids.add(str(j.get("id")))
+                rows.append(j)
+    _fail_if_all_failed("RemoteOK", errors, len(REMOTEOK_TAGS))
     out = []
-    for j in data:
-        if not isinstance(j, dict) or "position" not in j:
-            continue  # first element is a legal notice
+    for j in rows:
         if not _keep_title(j.get("position")):
             continue
         jid = str(j.get("id") or j.get("slug") or "")
@@ -651,35 +673,49 @@ def src_himalayas():
     return out
 
 
+WWR_CATEGORIES = (
+    "remote-programming-jobs", "remote-full-stack-programming-jobs", "remote-front-end-programming-jobs",
+    "remote-back-end-programming-jobs", "remote-sales-and-marketing-jobs", "remote-customer-support-jobs",
+    "remote-devops-sysadmin-jobs",
+)
+
+
 def src_weworkremotely():
-    raw = _get("https://weworkremotely.com/categories/remote-programming-jobs.rss")
-    out = []
-    root = ET.fromstring(raw)
-    for item in root.iter("item"):
-        title = (item.findtext("title") or "").strip()
-        # WWR titles look like "Company: Role"
-        company, _, role = title.partition(":")
-        role = role.strip() or title
-        if not _keep_title(role):
-            continue
-        link = (item.findtext("link") or "").strip()
-        pub = (item.findtext("pubDate") or "").strip()
+    out, seen, errors = [], set(), []
+    for category in WWR_CATEGORIES:
         try:
-            dt = datetime.strptime(pub, "%a, %d %b %Y %H:%M:%S %z").date().isoformat()
-        except ValueError:
-            dt = ""
-        out.append({
-            "title": role,
-            "company": company.strip(),
-            "location": "Remote",
-            "date": dt,
-            "url": link,
-            "id": link.rsplit("-", 1)[-1],
-            "portal": "weworkremotely",
-            "work_mode": "remote",
-            "skills": [],
-            "description": _strip_html(item.findtext("description"))[:2000],
-        })
+            raw = _get(f"https://weworkremotely.com/categories/{category}.rss")
+            root = ET.fromstring(raw)
+        except Exception as e:
+            errors.append(e)
+            continue
+        for item in root.iter("item"):
+            title = (item.findtext("title") or "").strip()
+            # WWR titles look like "Company: Role"
+            company, _, role = title.partition(":")
+            role = role.strip() or title
+            link = (item.findtext("link") or "").strip()
+            if not _keep_title(role) or link in seen:
+                continue
+            seen.add(link)
+            pub = (item.findtext("pubDate") or "").strip()
+            try:
+                dt = datetime.strptime(pub, "%a, %d %b %Y %H:%M:%S %z").date().isoformat()
+            except ValueError:
+                dt = ""
+            out.append({
+                "title": role,
+                "company": company.strip(),
+                "location": "Remote",
+                "date": dt,
+                "url": link,
+                "id": link.rsplit("-", 1)[-1],
+                "portal": "weworkremotely",
+                "work_mode": "remote",
+                "skills": [],
+                "description": _strip_html(item.findtext("description"))[:2000],
+            })
+    _fail_if_all_failed("We Work Remotely", errors, len(WWR_CATEGORIES))
     return out
 
 
@@ -774,8 +810,8 @@ def src_jsearch():
     """Google-for-Jobs results (Indeed, ZipRecruiter, Glassdoor and others) through the JSearch API.
 
     Those sites do not allow scraping, so this goes through a licensed aggregator. It
-    needs a RapidAPI key; the free plan allows about 200 requests a month, so
-    `jsearch.queries` in queries.json is kept short.
+    needs a JSearch key; the plan's monthly request count is the cap, so see
+    `jsearch` in queries.json.
     """
     key = os.environ.get("JSEARCH_API_KEY")
     rapid_key = os.environ.get("RAPIDAPI_KEY")
@@ -783,8 +819,7 @@ def src_jsearch():
         raise SkipSource("set JSEARCH_API_KEY to enable - JSearch on openwebninja.com (covers Indeed, ZipRecruiter, Glassdoor)")
     cfg = json.loads(QUERIES_PATH.read_text(encoding="utf-8")).get("jsearch") or {}
     queries = cfg.get("queries") or ["solutions engineer", "sales engineer", "junior software engineer"]
-    # The free plan is 200 requests a month. Spend it on the first run of each day, and
-    # stop at `monthly_limit` (below 200, to leave room for manual tests).
+    # Every run sends every query; `monthly_limit` stops it below the plan's request count.
     budget_path = SCRAPER_DIR / "jsearch_runs.json"
     try:
         budget = json.loads(budget_path.read_text(encoding="utf-8"))
@@ -793,12 +828,9 @@ def src_jsearch():
     month = TODAY[:7]
     if budget.get("month") != month:
         budget = {"month": month, "requests": 0}
-    if budget.get("date") == TODAY and budget.get("count", 0) >= int(cfg.get("runs_per_day", 1)):
-        raise SkipSource(f"already ran {budget['count']} time(s) today (jsearch.runs_per_day in queries.json)")
     limit = int(cfg.get("monthly_limit", 190))
     if budget["requests"] + len(queries) > limit:
         raise SkipSource(f"monthly request budget used ({budget['requests']} of {limit})")
-    budget.update(date=TODAY, count=budget.get("count", 0) + 1 if budget.get("date") == TODAY else 1)
     budget["requests"] += len(queries)
     budget_path.write_text(json.dumps(budget), encoding="utf-8")
     if key:  # OpenWebNinja, where JSearch is now hosted
@@ -832,6 +864,149 @@ def src_jsearch():
                 "skills": [],
                 "description": (j.get("job_description") or "")[:8000],
             })
+    return out
+
+
+
+def _recent(iso_date, days):
+    """True when an ISO date is within `days` of today. A missing date counts as recent."""
+    if not iso_date:
+        return True
+    return iso_date[:10] >= (date.today() - timedelta(days=days)).isoformat()
+
+
+WORKABLE_QUERIES = (
+    "solutions engineer", "sales engineer", "implementation", "technical account manager",
+    "customer engineer", "junior software engineer", "associate software engineer", "full stack developer",
+)
+
+
+def src_workable():
+    """Workable's public job search (jobs.workable.com): every company on Workable, keyless."""
+    out, seen, errors = [], set(), []
+    for q in WORKABLE_QUERIES:
+        token = None
+        for _page in range(4):
+            url = f"https://jobs.workable.com/api/v1/jobs?query={urllib.parse.quote(q)}&location=United%20States"
+            if token:
+                url += "&pageToken=" + urllib.parse.quote(token)
+            try:
+                data = _get_json(url)
+            except Exception as e:
+                if _page == 0:
+                    errors.append(e)
+                break
+            for j in data.get("jobs") or []:
+                loc = j.get("location") or {}
+                link = j.get("url")
+                if not link or link in seen or loc.get("countryName") not in (None, "United States"):
+                    continue
+                created = (j.get("created") or "")[:10]
+                if not _recent(created, 21) or not _keep_title(j.get("title")):
+                    continue
+                seen.add(link)
+                place = ", ".join(p for p in (loc.get("city"), loc.get("subregion")) if p)
+                remote = j.get("workplace") == "remote"
+                out.append({
+                    "title": j.get("title"),
+                    "company": (j.get("company") or {}).get("title"),
+                    "location": "Remote (United States)" if remote else (place or "United States"),
+                    "date": created,
+                    "url": link,
+                    "id": str(j.get("id") or ""),
+                    "portal": "workable",
+                    "work_mode": "remote" if remote else None,
+                    "skills": [],
+                    "description": _strip_html(
+                        (j.get("description") or "") + " " + (j.get("requirementsSection") or "")
+                    )[:8000],
+                })
+            token = data.get("nextPageToken")
+            if not token:
+                break
+            time.sleep(0.3)
+    _fail_if_all_failed("Workable", errors, len(WORKABLE_QUERIES))
+    return out
+
+
+SIMPLIFY_LISTINGS = (
+    "https://raw.githubusercontent.com/SimplifyJobs/New-Grad-Positions/dev/.github/scripts/listings.json"
+)
+
+
+def src_simplify():
+    """SimplifyJobs' community list of new-grad and entry-level tech roles (a public GitHub file)."""
+    out = []
+    for j in json.loads(_get(SIMPLIFY_LISTINGS, timeout=120)):
+        if not (j.get("active") and j.get("is_visible", True)):
+            continue
+        try:
+            posted = datetime.fromtimestamp(int(j.get("date_posted") or 0)).date().isoformat()
+        except (TypeError, ValueError, OSError):
+            continue
+        if not _recent(posted, 21) or not _keep_title(j.get("title")):
+            continue
+        places = [p for p in (j.get("locations") or []) if p]
+        loc = "; ".join(places)
+        out.append({
+            "title": j.get("title"),
+            "company": j.get("company_name"),
+            "location": loc or "United States",
+            "date": posted,
+            "url": j.get("url"),
+            "id": str(j.get("id") or ""),
+            "portal": "simplify",
+            "work_mode": "remote" if "remote" in loc.lower() else None,
+            "skills": [],
+            "description": "",  # the posting itself is opened later by the text reader
+        })
+    return out
+
+
+MUSE_CATEGORIES = ("Sales", "Software Engineering", "Customer Service", "Data and Analytics")
+MUSE_LOCATIONS = ("Flexible / Remote", "Minneapolis, MN")
+
+
+def src_muse():
+    """The Muse public API: curated listings, entry and mid level, remote and Minneapolis."""
+    out, seen, errors = [], set(), []
+    headers = {"User-Agent": "Mozilla/5.0 (personal-job-search)"}
+    for cat in MUSE_CATEGORIES:
+        for loc in MUSE_LOCATIONS:
+            for page in (1, 2):
+                url = (
+                    "https://www.themuse.com/api/public/jobs?page=%d&category=%s&location=%s"
+                    "&level=Entry%%20Level&level=Mid%%20Level"
+                    % (page, urllib.parse.quote(cat), urllib.parse.quote(loc))
+                )
+                try:
+                    data = _get_json(url, headers=headers)
+                except Exception as e:
+                    if page == 1:
+                        errors.append(e)
+                    break
+                for j in data.get("results") or []:
+                    link = (j.get("refs") or {}).get("landing_page")
+                    if not link or link in seen or not _keep_title(j.get("name")):
+                        continue
+                    seen.add(link)
+                    places = [l.get("name") for l in j.get("locations") or [] if l.get("name")]
+                    remote = any("remote" in p.lower() or "flexible" in p.lower() for p in places)
+                    out.append({
+                        "title": j.get("name"),
+                        "company": (j.get("company") or {}).get("name"),
+                        "location": "Remote (United States)" if remote else "; ".join(places),
+                        "date": (j.get("publication_date") or "")[:10],
+                        "url": link,
+                        "id": str(j.get("id") or ""),
+                        "portal": "muse",
+                        "work_mode": "remote" if remote else None,
+                        "skills": [],
+                        "description": _strip_html(j.get("contents"))[:8000],
+                    })
+                if page >= (data.get("page_count") or 1):
+                    break
+    _fail_if_all_failed("The Muse", errors, len(MUSE_CATEGORIES) * len(MUSE_LOCATIONS))
     return out
 
 
@@ -965,6 +1140,9 @@ HTTP_SOURCES = {
     "arbeitnow": src_arbeitnow,
     "jobicy": src_jobicy,
     "himalayas": src_himalayas,
+    "workable": src_workable,
+    "simplify": src_simplify,
+    "muse": src_muse,
     "weworkremotely": src_weworkremotely,
     "workingnomads": src_workingnomads,
     "hn_hiring": src_hn_hiring,

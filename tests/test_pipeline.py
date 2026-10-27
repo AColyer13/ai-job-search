@@ -683,22 +683,78 @@ def test_collapse_store_prefers_the_employers_link():
     assert set(store) == {"gh", "other"}
 
 
-def test_jsearch_runs_once_a_day_by_default(monkeypatch, tmp_path):
-    monkeypatch.setenv("JSEARCH_API_KEY", "k")
-    monkeypatch.setattr(pipeline, "SCRAPER_DIR", tmp_path)
-    monkeypatch.setattr(pipeline, "_get_json", lambda url, headers=None, timeout=None: {"data": []})
-    assert pipeline.src_jsearch() == []
-    with pytest.raises(pipeline.SkipSource):
-        pipeline.src_jsearch()
-
-
-def test_jsearch_stops_at_the_monthly_limit(monkeypatch, tmp_path):
+def _jsearch_setup(monkeypatch, tmp_path, cfg):
     monkeypatch.setenv("JSEARCH_API_KEY", "k")
     monkeypatch.setattr(pipeline, "SCRAPER_DIR", tmp_path)
     monkeypatch.setattr(pipeline, "TODAY", "2026-10-22")
-    monkeypatch.setattr(pipeline, "_get_json", lambda url, headers=None, timeout=None: {"data": []})
-    (tmp_path / "jsearch_runs.json").write_text(json.dumps({"month": "2026-10", "requests": 188, "date": "2026-10-21", "count": 1}))
+    (tmp_path / "queries.json").write_text(json.dumps({"jsearch": cfg}))
+    monkeypatch.setattr(pipeline, "QUERIES_PATH", tmp_path / "queries.json")
+    seen = []
+    monkeypatch.setattr(pipeline, "_get_json", lambda url, headers=None, timeout=None: seen.append(url) or {"data": []})
+    return seen
+
+
+def test_jsearch_stops_at_the_monthly_limit(monkeypatch, tmp_path):
+    _jsearch_setup(monkeypatch, tmp_path, {"queries": ["a"], "monthly_limit": 10})
+    (tmp_path / "jsearch_runs.json").write_text(json.dumps({"month": "2026-10", "requests": 10}))
     with pytest.raises(pipeline.SkipSource, match="monthly"):
         pipeline.src_jsearch()
-    (tmp_path / "jsearch_runs.json").write_text(json.dumps({"month": "2026-09", "requests": 188}))
+    (tmp_path / "jsearch_runs.json").write_text(json.dumps({"month": "2026-09", "requests": 10}))
     assert pipeline.src_jsearch() == []  # a new month starts a new budget
+
+
+def test_jsearch_sends_every_query_each_run(monkeypatch, tmp_path):
+    seen = _jsearch_setup(monkeypatch, tmp_path, {"queries": ["a", "b", "c"], "monthly_limit": 100})
+    pipeline.src_jsearch()
+    pipeline.src_jsearch()
+    assert len(seen) == 6
+    assert json.loads((tmp_path / "jsearch_runs.json").read_text())["requests"] == 6
+
+
+def test_the_scheduler_owns_the_cadence():
+    assert not hasattr(pipeline, "source_due") and not hasattr(pipeline, "_rotate")
+
+
+def test_workable_keeps_recent_us_jobs(monkeypatch):
+    from datetime import date
+    today = date.today().isoformat()
+    jobs = [
+        {"title": "Solutions Engineer", "url": "https://jobs.workable.com/view/a", "id": "a", "created": today,
+         "workplace": "remote", "location": {"countryName": "United States"}, "company": {"title": "Acme"},
+         "description": "<p>demo</p>", "requirementsSection": ""},
+        {"title": "Solutions Engineer", "url": "https://jobs.workable.com/view/b", "id": "b", "created": today,
+         "location": {"countryName": "Canada"}, "company": {"title": "Maple"}},
+        {"title": "Solutions Engineer", "url": "https://jobs.workable.com/view/c", "id": "c", "created": "2020-01-01",
+         "location": {"countryName": "United States"}, "company": {"title": "Old"}},
+    ]
+    monkeypatch.setattr(pipeline, "_get_json", lambda url, headers=None, timeout=20: {"jobs": jobs})
+    monkeypatch.setattr(pipeline.time, "sleep", lambda s: None)
+    out = pipeline.src_workable()
+    assert [j["company"] for j in out] == ["Acme"] and out[0]["work_mode"] == "remote"
+
+
+def test_simplify_filters_inactive_and_old(monkeypatch):
+    import json, time as _t
+    now = int(_t.time())
+    rows = [
+        {"title": "Software Engineer", "company_name": "A", "url": "https://a.example/1", "locations": ["Remote"],
+         "active": True, "is_visible": True, "date_posted": now},
+        {"title": "Software Engineer", "company_name": "B", "url": "https://b.example/1", "locations": ["NYC"],
+         "active": False, "is_visible": True, "date_posted": now},
+        {"title": "Software Engineer", "company_name": "C", "url": "https://c.example/1", "locations": ["NYC"],
+         "active": True, "is_visible": True, "date_posted": now - 90 * 86400},
+    ]
+    monkeypatch.setattr(pipeline, "_get", lambda url, headers=None, timeout=20: json.dumps(rows))
+    out = pipeline.src_simplify()
+    assert [j["company"] for j in out] == ["A"] and out[0]["work_mode"] == "remote"
+
+
+@pytest.mark.parametrize("source", ["remoteok", "weworkremotely", "workable", "muse"])
+def test_multi_request_source_fails_when_every_request_fails(monkeypatch, source):
+    def boom(*args, **kwargs):
+        raise OSError("network down")
+
+    monkeypatch.setattr(pipeline, "_get_json", boom)
+    monkeypatch.setattr(pipeline, "_get", boom)
+    with pytest.raises(RuntimeError, match="request"):
+        getattr(pipeline, "src_" + source)()

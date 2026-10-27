@@ -14,6 +14,8 @@ per-file diff commands.
 ## [Unreleased]
 
 ### Added
+- JSearch sends every query on each run, against a 9,500 a month cap. The Windows scheduled task runs the search hourly from 6 AM to 5 PM; the code has no schedule of its own.
+- More free sources: Workable global search, SimplifyJobs new-grad list, The Muse, all seven We Work Remotely categories, and six RemoteOK tags.
 - Cross-site duplicate handling: one job on LinkedIn, an aggregator and the employer page is one row, with the employer link kept. JSearch source (needs `JSEARCH_API_KEY`) for Indeed, ZipRecruiter and Glassdoor results. FreeHire page cap is now 20.
 - `daily_digest.py --backfill N` searches the last N days and files each job under the day it was posted, rewriting those days' Word files. `pipeline.py search --window-days N` sets the window by hand. Search caps are now 5 pages for LinkedIn and 10 for FreeHire.
 - **Himalayas source** (`src_himalayas`), a remote US search API that returns full posting text. Workday postings are now read through their public JSON endpoint.

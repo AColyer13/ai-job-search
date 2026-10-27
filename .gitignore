@@ -102,3 +102,4 @@ upskill/*.md
 .superpowers/
 job_scraper/last_run.json
 job_scraper/jsearch_runs.json
+job_scraper/source_runs.json

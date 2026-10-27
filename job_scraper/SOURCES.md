@@ -5,6 +5,10 @@ considered and rejected. Queries for the CLI portals live in `queries.json`;
 HTTP sources are enabled/disabled via the `http_sources` list there (or
 `--only` / `--skip` on the command line).
 
+## Run schedule
+
+The Windows task "Adam daily job search" runs `run_daily.cmd` hourly from 6 AM to 5 PM, and every run searches every source. The daily Word files are rewritten on each run from the jobs found so far.
+
 ## Tier 1 — CLI portals (`.agents/skills/`, run via `bun`)
 
 | Portal | Coverage | Notes |
@@ -20,6 +24,9 @@ HTTP sources are enabled/disabled via the `http_sources` list there (or
 | Remotive | `remotive.com/api/remote-jobs` | Remote tech (the public API now returns about 10 jobs per call); `candidate_required_location` used for US filtering |
 | Arbeitnow | `arbeitnow.com/api/job-board-api` | EU-heavy; only `remote: true` jobs kept |
 | Jobicy | `jobicy.com/api/v2/remote-jobs?geo=usa` | Remote, geo-filtered to USA |
+| Workable | `jobs.workable.com/api/v1/jobs` (8 queries, 4 pages, US, 21 days) | Every company on Workable; full text. |
+| SimplifyJobs | public `listings.json` on GitHub | Entry-level tech roles, active and posted in 21 days; no text, so the reader opens each. |
+| The Muse | `themuse.com/api/public/jobs` (4 categories, remote and Minneapolis) | Curated; may rate-limit, failures are skipped. |
 | Himalayas | `himalayas.app/jobs/api/search` (12 queries, 2 pages) | Remote, US; returns the full posting text. Its job pages return 403 to scripts, so this API is the only way to read them. |
 | WeWorkRemotely | RSS (`/categories/remote-programming-jobs.rss`) | Remote programming |
 | Working Nomads | `workingnomads.com/api/exposed_jobs/` | Remote tech |
@@ -37,7 +44,7 @@ These are skipped silently until the env vars are set:
 |---|---|---|
 | Adzuna (US) | `ADZUNA_APP_ID`, `ADZUNA_APP_KEY` | https://developer.adzuna.com/ |
 | USAJobs (federal) | `USAJOBS_API_KEY`, `USAJOBS_EMAIL` | https://developer.usajobs.gov/ |
-| JSearch (OpenWebNinja) | `JSEARCH_API_KEY` (a RapidAPI key in `RAPIDAPI_KEY` also works) | https://www.openwebninja.com/api/jsearch. Google for Jobs results: Indeed, ZipRecruiter, Glassdoor and others, through a licensed API. Free plan is 200 requests a month. It runs once a day (first run), 5 queries, and stops at `monthly_limit` (190); the count is kept in `job_scraper/jsearch_runs.json`. Queries are in `queries.json` under `jsearch`. |
+| JSearch (OpenWebNinja) | `JSEARCH_API_KEY` (a RapidAPI key in `RAPIDAPI_KEY` also works) | https://www.openwebninja.com/api/jsearch. Google for Jobs results: Indeed, ZipRecruiter, Glassdoor and others, through a licensed API. The plan allows 10,000 requests a month. Each run sends every query (5), so 12 runs a day is about 1,800 requests a month, and it stops at `monthly_limit` (9,500). The count is kept in `job_scraper/jsearch_runs.json`. Queries are in `queries.json` under `jsearch`. |
 
 ## Tier 4 — Free key, not yet implemented
 

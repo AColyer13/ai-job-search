@@ -1,6 +1,6 @@
 """Run the daily scrape and write Word documents of that day's new jobs.
 
-The 8:00 AM task calls this with no arguments. It runs `pipeline.py all`, then
+The scheduled task (hourly, 6 AM to 5 PM) calls this with no arguments. It runs `pipeline.py all`, then
 writes:
 
     daily/YYYY-MM-DD.docx   jobs first found on that date
@@ -1096,7 +1096,7 @@ def _publish(day, store, log_text):
     save_store(store, sources)
     day_jobs = listable(jobs_found_on(store, day))
     day_intro = [
-        f"Date: {day}",
+        f"Date: {day}    Updated: {datetime.now():%H:%M} (an older time means a newer write was skipped because the file was open)",
         f"New jobs: {len(day_jobs)}    High: {_counts(day_jobs)['high']}    Medium: {_counts(day_jobs)['medium']}    Low: {_counts(day_jobs)['low']}",
         "Each job is written into one date file only. The same posting is not repeated on a later day.",
         f"Each job also stays in latest.docx for {WINDOW_DAYS} days from the day it was found, then it is removed.",
@@ -1108,7 +1108,7 @@ def _publish(day, store, log_text):
             day_intro.append(line.strip())
     latest_jobs = listable(list(store.values()))
     latest_intro = [
-        f"Latest jobs as of {day}",
+        f"Latest jobs as of {day}    Updated: {datetime.now():%H:%M} (an older time means a newer write was skipped because the file was open)",
         f"Jobs: {len(latest_jobs)}    High: {_counts(latest_jobs)['high']}    Medium: {_counts(latest_jobs)['medium']}    Low: {_counts(latest_jobs)['low']}",
         f"A job stays in this file for {WINDOW_DAYS} days from the day it was found, then it is removed.",
         "The first days after a posting goes up are when applications get read. A week is still worth acting on. At 14 days the listing is past the usual first review, and that is also as far back as the scraper looks.",
