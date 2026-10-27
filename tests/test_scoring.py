@@ -448,6 +448,13 @@ class ReportedHighs(unittest.TestCase):
         self.assertEqual(scoring.title_states("Engineer, Washington Post"), [])
         self.assertEqual(grade("Solutions Engineer, New York (Enterprise)"), "low")
 
+    def test_title_state_codes_may_carry_a_compass_letter(self):
+        self.assertTrue(scoring.territory_excludes_him("Sales Engineer (KY, W TN)"))
+        self.assertTrue(scoring.territory_excludes_him("Territory Sales Engineer (NM/CO)"))
+        self.assertFalse(scoring.territory_excludes_him("Sales Engineer (W TN, MS)"))
+        self.assertFalse(scoring.territory_excludes_him("Sales Engineer (S TX, OK)"))
+        self.assertFalse(scoring.territory_excludes_him("Sales Engineer (NE/SE)"))
+
 
 class RequiredDegreeWording(unittest.TestCase):
     def grade_with(self, line):
@@ -604,6 +611,30 @@ class SnippetGates(unittest.TestCase):
                          title="Junior Software Engineer")
         self.assertGated("Join our placement program and our client network.", title="Junior Software Engineer")
         self.assertGated("Entry-level developers wanted.", title="Junior Software Engineer", company="SynergisticIT")
+
+    def test_must_be_based_in_a_place_rules_the_job_out_even_when_remote(self):
+        out = self.assertGated("Security Sales Engineer – Cybersecurity Chicago, Illinois (Remote) - MUST BE BASED IN CHICAGO")
+        self.assertIn("CHICAGO", out["blockers"][-1])
+        self.assertGated("Remote sales engineer. Candidates must reside in Toledo, OH and travel to accounts.")
+        self.assertGated("Hybrid role; applicants must be located in the Greater Boston Area.")
+
+    def test_must_be_based_in_a_place_he_can_work_from_is_kept(self):
+        self.assertKept("Remote. Must be based in the United States and able to demo the platform.")
+        self.assertKept("Must be based in the US. Partner with account executives on technical demos.")
+        self.assertKept("Sales engineer role. Must be located in the Midwest or Southeast.")
+        self.assertKept("Must be based in Minneapolis, MN and travel to accounts.")
+        self.assertKept("Must live in Dallas, TX to cover the territory.")
+        self.assertKept("Must be based in Georgia. Partner with account executives on technical demos.")
+        self.assertKept("We are based in Chicago and hire remote sales engineers across the country.")
+        self.assertKept("Applicants must be based in one of our hub states and run technical demos.")
+        # Eastern holds Georgia and Florida, and a short region acronym does not say which states it covers.
+        self.assertKept("Must be based in the Eastern Standard Time (EST) time zone. Partner with account executives on demos.")
+        self.assertKept("Pre-sales engineers are required to reside in the TOLA region of the US as required for business needs.")
+
+    def test_must_be_based_in_a_zone_or_state_that_leaves_him_out_is_ruled_out(self):
+        self.assertGated("Must be located in the PST/MST timezone. Partner with account executives on demos.")
+        self.assertGated("Must live in or near Chicago. Fully remote. Run technical demos for mid-market buyers.")
+        self.assertGated("Must reside in NY. Partner with account executives on technical demos.")
 
     def test_remote_wording_or_a_home_place_switches_the_place_gates_off(self):
         self.assertKept("Fully remote role. Some on-site customer demos. /On-site visits quarterly.")
