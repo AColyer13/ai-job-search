@@ -293,12 +293,24 @@ def test_skip_and_i_will_do_it(env):
     assert job2["status"] == "handed_off" and env.logged[0][0] == "recommended"
 
 
-def test_only_one_job_is_worked_at_a_time(env):
+def test_a_summary_waiting_for_submit_does_not_hold_up_the_next_job(env):
     agent, tg, forms, job = make_agent(env, BASIC)
     second = dict(job, id="j2", url=URL + "4", status="queued", answers={}, fields={}, drafts={}, pending=[])
     agent.jobs["j2"] = second
-    assert agent.advance() is True and second["status"] == "queued"
-    assert agent.advance() is False
+    assert agent.advance() is True and job["status"] == "ready" and second["status"] == "queued"
+    assert agent.advance() is True and second["status"] == "ready"
+    first_submit = [d for l, d in tg.last_buttons() if l == "Submit"]
+    assert first_submit and first_submit[0].startswith("s:j2:")
+
+
+def test_an_unanswered_question_holds_the_line_so_replies_match_one_question(env):
+    agent, tg, forms, job = make_agent(env, BASIC + [field("desired salary", "text", "Desired salary")])
+    second = dict(job, id="j2", url=URL + "4", status="queued", answers={}, fields={}, drafts={}, pending=[])
+    agent.jobs["j2"] = second
+    assert agent.advance() is True and job["status"] == "asking"
+    assert agent.advance() is False and second["status"] == "queued"
+    agent.on_text("120000")
+    assert job["status"] == "ready" and agent.advance() is True
 
 
 def test_waiting_too_long_hands_the_job_back(env):

@@ -226,8 +226,14 @@ class Agent:
     def open_jobs(self):
         return [j for j in self.jobs.values() if j["status"] in OPEN]
 
+    def asking(self):
+        """The job whose question is out. Only one at a time, because a typed reply must belong to one question."""
+        return next((j for j in self.jobs.values() if j["status"] == "asking"), None)
+
     def active(self):
-        return next((j for j in self.jobs.values() if j["status"] in WAITING), None)
+        """Who a typed reply is for: the job with a question out, else the newest summary waiting for Submit."""
+        ready = [j for j in self.jobs.values() if j["status"] == "ready"]
+        return self.asking() or (max(ready, key=lambda j: j["updated"]) if ready else None)
 
     def set_status(self, job, status):
         job["status"], job["updated"] = status, self.now()
@@ -537,8 +543,12 @@ class Agent:
                 self.save()
 
     def advance(self):
-        """Start the next queued job when nobody is waiting on an answer. True if it did something."""
-        if self.active():
+        """Start the next queued job unless a question of mine is still unanswered. True if it did something.
+
+        A finished summary waiting for your Submit tap does not hold the line up: every Submit button
+        carries its own job, so any number of summaries can wait while the rest keep being prepared.
+        """
+        if self.asking():
             return False
         queued = next((j for j in self.jobs.values() if j["status"] == "queued"), None)
         if not queued:
