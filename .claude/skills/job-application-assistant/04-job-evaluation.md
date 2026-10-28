@@ -4,7 +4,6 @@ framework_version: 1.1.0
 
 # Job Evaluation Framework
 
-<!-- SETUP: Skill match areas and career goals are personalized by running /setup -->
 
 ## Eligibility Gate — run before scoring
 
@@ -26,7 +25,7 @@ Read the posting's eligibility / work rights / "who can apply" section **verbati
 
 **Report an eligibility failure to the user with the quoted source** rather than silently dropping the role. They may know something about their own status that the profile does not record.
 
-If the candidate's permit also constrains *hours* or *start date* (a student visa with a term-time cap, a permit that begins on graduation), record that as a second gate under this section during `/setup`, with the specific dates. Do not merge it with the eligibility question above — they fail for different reasons and need different answers.
+If the candidate's permit also constrains *hours* or *start date* (a student visa with a term-time cap, a permit that begins on graduation), record that as a second gate under this section, with the specific dates. Do not merge it with the eligibility question above — they fail for different reasons and need different answers.
 
 A role that fails this gate is not scored and not drafted. Everything below applies only to roles that pass it.
 
@@ -107,27 +106,9 @@ Does this role advance career goals and contain tasks that energize?
 - **Flexibility**: Prefers remote/hybrid; see location tiers in `01-candidate-profile.md` / CLAUDE.md Deal-breakers section for the acceptable commute/relocation radius
 - **Professional development**: Actively building a production-engineering track record post-bootcamp to support the sales-to-engineering transition narrative
 
-### 6. Salary Benchmark (Optional)
+### 6. Pay
 
-If the salary lookup tool is configured (`salary_data.json` exists), look up the company:
-```
-python salary_lookup.py "<Company Name>" --json
-```
-
-If a city is known from the posting, add `--city "<City>"` to narrow results.
-
-Present findings as:
-```
-### Salary Benchmark
-| Metric | Value |
-|--------|-------|
-| [Category] index | XX.X (+/-X.X% vs baseline) |
-| Overall index | XX.X (+/-X.X% vs baseline) |
-```
-
-Interpret results relative to the baseline defined in the data file's metadata. For index-based data, higher typically means above-market compensation.
-
-If the salary tool is not configured, skip this section.
+Use the pay stated in the posting (the daily list shows it as "Pay on the card"). If none is stated, say so; do not guess a figure.
 
 ## Output Format
 

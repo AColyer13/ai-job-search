@@ -4,8 +4,6 @@ framework_version: 1.0.0
 
 # Candidate Profile
 
-<!-- SETUP: This file is populated by running /setup -->
-<!-- After running /setup, all sections will be filled with your actual information -->
 
 ## Identity
 - **Name:** Adam Colyer

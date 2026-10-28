@@ -324,80 +324,12 @@ def _counts(jobs):
     return {k: sum(1 for j in jobs if j.get("fit") == k) for k in ("high", "medium", "low")}
 
 
-def _blocks(jobs):
-    lines = []
-    ordered = sorted(
-        jobs,
-        key=_rank_key,
-    )
-    for i, job in enumerate(ordered, 1):
-        fit = (job.get("fit") or "low").upper()
-        title = job.get("title") or "Untitled"
-        company = job.get("company") or "Company not listed"
-        found = job.get("found_on")
-        lines.append(f"{i}. {fit} | {title}")
-        lines.append(f"    {company} | {_where(job)}")
-        if found:
-            lines.append(f"    Found: {found}")
-        if job.get("salary"):
-            lines.append(f"    Pay on the card: {job.get('salary')}")
-        lines.append(f"    {_why(job)}")
-        lines.append(f"    {job.get('url') or 'No link on the card'}")
-        lines.append("")
-    return lines
-
-
 def _date_key(value):
     """Sort key so a missing or newer date comes first inside a fit band."""
     try:
         return -date.fromisoformat(value).toordinal()
     except (TypeError, ValueError):
         return 0
-
-
-def render(day, jobs, log_text, from_existing=False):
-    counts = _counts(jobs)
-    lines = [
-        "Adam Colyer job search",
-        f"Date: {day}",
-        f"New jobs: {len(jobs)}    High: {counts['high']}    Medium: {counts['medium']}    Low: {counts['low']}",
-        "Fit comes from the posting text. The why says what held the grade down.",
-        f"These jobs are in this date file only. Each one also stays in daily/latest.docx for {WINDOW_DAYS} days from the day it was found, then it is removed.",
-        "",
-    ]
-    if from_existing:
-        lines.append("This file was written from the scrape already on disk. It is not a new search.")
-        lines.append("")
-    notes = _pipeline_notes(log_text)
-    if notes:
-        lines.append("Pipeline")
-        lines.extend(notes)
-        lines.append("")
-    if not jobs:
-        lines.append("No new jobs today.")
-        lines.append("")
-    else:
-        lines.extend(_blocks(jobs))
-    return "\n".join(lines).rstrip() + "\n"
-
-
-def render_latest(day, jobs):
-    counts = _counts(jobs)
-    lines = [
-        "Adam Colyer job search",
-        f"Latest jobs as of {day}",
-        f"Jobs: {len(jobs)}    High: {counts['high']}    Medium: {counts['medium']}    Low: {counts['low']}",
-        f"A job stays in this file for {WINDOW_DAYS} days from the day it was found, then it is removed.",
-        "The first days after a posting goes up are when applications get read. A week is still worth acting on. At 14 days the listing is past the usual first review, and that is also as far back as the scraper looks.",
-        "Fit comes from the posting text. The why says what held the grade down.",
-        "",
-    ]
-    if not jobs:
-        lines.append("No jobs in the last 14 days.")
-        lines.append("")
-    else:
-        lines.extend(_blocks(jobs))
-    return "\n".join(lines).rstrip() + "\n"
 
 
 def _read_store_doc():
@@ -890,14 +822,6 @@ def left_out_count(jobs):
     return len(listable(jobs)) - len(fit_jobs(jobs))
 
 
-def _split_for_doc(jobs):
-    """(high and medium sections, low sections). The Word files use only the first."""
-    listed = listable(jobs)
-    upper = [job for job in listed if (job.get("fit") or "low") != "low" and not is_unchecked(job)]
-    lows = [job for job in listed if (job.get("fit") or "low") == "low"]
-    return type_sections(upper), type_sections(lows)
-
-
 def _p(text, bold=False, size=22, space_after=80):
     """One Word paragraph. size is half-points (22 = 11pt)."""
     run = (
@@ -997,7 +921,7 @@ def write_docx(path, title, intro, jobs):
     body = [_p(title, bold=True, size=32, space_after=120)]
     for line in intro:
         body.append(_p(line, size=22, space_after=60))
-    upper, _lows = _split_for_doc(jobs)
+    upper = type_sections(fit_jobs(jobs))
     link_n = 10
     bookmark_id = 1
 
@@ -1219,7 +1143,7 @@ def _source_lines(sources):
 
 
 def _publish(day, store, log_text):
-    """Write the date file, latest.docx, and the HTML page. The date file is one day only."""
+    """Write the date file and latest.docx. The date file is one day only."""
     regrade_store(list(store.values()))
     apply_location_caps(list(store.values()))
     apply_board_shells(list(store.values()))
@@ -1251,14 +1175,7 @@ def _publish(day, store, log_text):
     latest_intro.extend(_source_lines(sources))
     dated = write_docx(DAILY / f"{day}.docx", "Adam Colyer job search", day_intro, day_jobs)
     latest = write_docx(DAILY / "latest.docx", "Adam Colyer job search", latest_intro, latest_jobs)
-    html_path = None
-    try:
-        import html_report
-
-        html_path = html_report.write_dashboard(store, sources, day)
-    except Exception as exc:
-        print(f"Dashboard was not written: {exc}")
-    return dated, latest, html_path
+    return dated, latest
 
 
 def write_backfill_files(store):
@@ -1319,21 +1236,17 @@ def main():
     if not args.from_existing:
         code, log_text = run_pipeline(["--window-days", str(args.backfill + 1)] if args.backfill else [])
         if code != 0 and not cand_path.exists():
-            dated, latest, html_path = _publish(day, store, log_text + f"\nThe scrape exited {code}. See daily/run.log.")
+            dated, latest = _publish(day, store, log_text + f"\nThe scrape exited {code}. See daily/run.log.")
             print(dated)
             print(latest)
-            if html_path:
-                print(html_path)
             return code
     if cand_path.exists():
         doc = json.loads(cand_path.read_text(encoding="utf-8"))
         merge_jobs(store, doc.get("new") or [], day)
     elif not store:
-        dated, latest, html_path = _publish(day, store, log_text + f"\nNo candidates file at {cand_path}.")
+        dated, latest = _publish(day, store, log_text + f"\nNo candidates file at {cand_path}.")
         print(dated)
         print(latest)
-        if html_path:
-            print(html_path)
         return 1
     store, _removed = prune_jobs(store, today)
     print(f"duplicate jobs removed from the store: {collapse_store(store)}")
@@ -1345,13 +1258,11 @@ def main():
                     row["date"] = (job.get("date") or "")[:10]
         moved = backfill_found_on(store, today, args.backfill)
         print("backfilled by posting date:", dict(sorted(moved.items())))
-    dated, latest, html_path = _publish(day, store, log_text)
+    dated, latest = _publish(day, store, log_text)
     if args.backfill:
         write_backfill_files(store)
     print(dated)
     print(latest)
-    if html_path:
-        print(html_path)
     return 0
 
 

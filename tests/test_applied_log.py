@@ -190,3 +190,35 @@ def test_submitted_files_go_into_the_tracker_columns(tmp_path):
     applied_log.append_tracker_row(_applied_entry(company="Other", url="https://jobs.other.com/1"), path)
     rows = list(_csv.DictReader(path.open(encoding="utf-8", newline="")))
     assert rows[1]["cv_file"] == "" and "CV, cover letter not recorded" in rows[1]["notes"]
+
+
+def test_migrate_adds_yield_columns_and_leaves_existing_cells(tmp_path):
+    path = tmp_path / "job_search_tracker.csv"
+    old = applied_log.TRACKER_HEADER[:13]
+    path.write_text(
+        ",".join(old) + "\n"
+        "2026-10-27,Acme,,Sales Engineer,sales engineering,ashby form,applied,,high,"
+        "Applied by AI on 2026-10-27 via Ashby form.,Resume_v2.pdf,,https://jobs.example.com/1\n",
+        encoding="utf-8",
+    )
+    assert applied_log.migrate_tracker(path) == 1
+    first, row = path.read_text(encoding="utf-8").splitlines()
+    assert first == ",".join(applied_log.TRACKER_HEADER)
+    cells = dict(zip(applied_log.TRACKER_HEADER, row.split(",")))
+    assert cells["company"] == "Acme" and cells["cv_file"] == "Resume_v2.pdf"
+    assert cells["apply_mode"] == "ai"
+    assert cells["resume_version"].startswith("Resume_v2")
+    assert cells["first_response_date"] == ""
+    assert applied_log.migrate_tracker(path) == 0  # second run changes nothing
+
+
+def test_new_tracker_rows_carry_score_source_and_mode(tmp_path):
+    import csv
+
+    path = tmp_path / "job_search_tracker.csv"
+    entry = _applied_entry(fit_score=0, discovery_source="himalayas.app", score_version="abc1234", applied_by="Adam")
+    applied_log.append_tracker_row(entry, path)
+    applied_log.append_tracker_row(_applied_entry(company="Other", url="https://jobs.other.com/2", fit_score=None), path)
+    first, second = csv.DictReader(path.open(encoding="utf-8", newline=""))
+    assert (first["score"], first["discovery_source"], first["score_version"], first["apply_mode"]) == ("0", "himalayas.app", "abc1234", "hand")
+    assert second["score"] == "" and second["apply_mode"] == "ai"

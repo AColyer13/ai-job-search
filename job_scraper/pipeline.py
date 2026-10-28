@@ -337,7 +337,6 @@ YEARS_EXPERIENCE_RE = re.compile(
 CLEARANCE_RE = re.compile(
     r"\b(security clearance|active clearance|top secret|ts/sci|polygraph)\b", re.I
 )
-_DEMOTE = {"high": "medium", "medium": "low", "low": "low"}
 
 
 def _fit_from_title(title, skills=None):
@@ -1055,7 +1054,6 @@ def src_jsearch():
     return out
 
 
-
 def _recent(iso_date, days):
     """True when an ISO date is within `days` of today. A missing date counts as recent."""
     if not iso_date:
@@ -1196,7 +1194,6 @@ def src_muse():
                     break
     _fail_if_all_failed("The Muse", errors, len(MUSE_CATEGORIES) * len(MUSE_LOCATIONS))
     return out
-
 
 
 def src_usajobs():

@@ -52,13 +52,6 @@ TECH_YEARS = 1           # shipped projects + AI contracts, no engineering title
 MAX_ENTRY_TECH_YEARS = 2  # engineering roles asking more than this are a stretch
 
 _HIGH, _MED, _LOW = "high", "medium", "low"
-_RANK = {_LOW: 0, _MED: 1, _HIGH: 2}
-
-
-def _min_grade(a, b):
-    return a if _RANK[a] <= _RANK[b] else b
-
-
 # --- Title classification ---------------------------------------------------
 SENIOR_RE = re.compile(
     r"\b(senior|sr\.?|experienced|staff|principal|lead|director|vice president|head of|vp\b|chief |"
@@ -1419,11 +1412,6 @@ def worth_reading(job):
     """
     result = score({"title": job.get("title"), "company": job.get("company")})
     return result["grade"] != _LOW or any("could not be read" in b for b in result["blockers"])
-
-
-def blockers_hold(blockers, ignore=("does not say junior or entry",)):
-    """True when a blocker other than the ignorable notes is present."""
-    return any(not any(i in b for i in ignore) for b in blockers)
 
 
 def grade_job(job):
