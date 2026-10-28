@@ -65,7 +65,7 @@ Enter this branch from the `followup` argument (Step 0) or from the offer under 
 
 **Candidates.** An application qualifies when its status is not final, the threshold has passed since its `date` (or since the last `followed up` marker in `notes`, if any), and it has fewer than **two** logged follow-ups. Parse dates defensively - skip rows whose dates do not parse and say so rather than guessing. Present qualifying applications as a table (company, role, days quiet, follow-ups sent, channel, contact person) and draft only for the ones the user picks.
 
-**Threshold.** The 10-day default is deliberately earlier than `/gmail-sync`'s 30-day staleness flag (its Step 9): that check is a read-only alarm that a row has been forgotten entirely; this branch is the proactive nudge while a reply is still plausible. The two numbers serve different moments, which is why they differ.
+**Threshold.** The 10-day default is deliberately earlier than `/gmail-sync`'s 21-day silent-application check (its Step 9, which proposes closing the row as `no response` and writes only on approval): that check is about giving up on a row; this branch is the proactive nudge while a reply is still plausible. The two numbers serve different moments, which is why they differ.
 
 **Drafting.** For each selected application:
 
@@ -120,6 +120,8 @@ Update rules: tick stage checkboxes as they are reached (add the date in parenth
 ---
 
 ## Step 4: Update the Tracker
+
+Set `first_response_date` (yyyy-mm-dd) when the status moves off `applied` to a real reply (`interview`, `offer`, `rejected`) and the cell is empty: use the date of the reply the user gives, or leave it blank and say so rather than guessing; never overwrite one that is there, and never set it for `no response`. The yield report (`python job_scraper/yield_report.py`) reads it.
 
 Update the matched row's `status` column (e.g. `applied` → `interview` → `offer` → `hired` / `rejected` / `no response` / `offer declined` / `withdrawn`) and append a short dated note to the `notes` column. Never restructure the CSV, reorder rows, or touch other rows.
 

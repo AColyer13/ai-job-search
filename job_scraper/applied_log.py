@@ -22,6 +22,10 @@ different link (matched on company, title and place) updates the same entry,
 so a job is never logged or applied to twice. An applied entry is never moved
 back to recommended.
 
+Applied jobs also record what yield_report.py groups by: the fit score, the scoring.py revision, the board
+the job was found on, who submitted it and the resume version. `migrate-tracker` adds those columns to an older
+tracker.
+
 Applied jobs (by the AI or by Adam) also get a row in job_search_tracker.csv, the
 file /rank, /scrape and /gmail-sync read as the record of applications. Recommended
 jobs do not, so they stay visible to the next search. Pass --no-tracker to skip it.
@@ -34,9 +38,11 @@ import csv
 import io
 import json
 import os
+import subprocess
 import sys
 from datetime import date
 from pathlib import Path
+from urllib.parse import urlparse
 from xml.sax.saxutils import escape as xml_escape
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -49,6 +55,8 @@ TRACKER_PATH = daily_digest.ROOT / "job_search_tracker.csv"
 TRACKER_HEADER = [
     "date", "company", "sector", "role", "role_type", "channel", "status", "contact_person",
     "fit_rating", "notes", "cv_file", "cover_letter_file", "source",
+    # Yield columns: what yield_report.py groups by. Blank means unknown, never a guess.
+    "score", "score_version", "discovery_source", "apply_mode", "resume_version", "first_response_date",
 ]
 ROLE_TYPES = {
     "engineering": "software engineering",
@@ -153,6 +161,7 @@ def add_entry(entries, *, url, status, day, by="AI", store=None, **fields):
         entry = {k: v for k, v in card.items() if k != "work_mode"}
         entry["url"] = daily_digest.apply_link(job) if job else url
         entry["work_mode"] = card["work_mode"]
+        entry["discovery_source"] = discovery_source(job)
         entry["status"] = "recommended"  # the branches below move it on to `status`
         entry["date_recommended"] = ""
         entry["date_applied"] = ""
@@ -164,6 +173,7 @@ def add_entry(entries, *, url, status, day, by="AI", store=None, **fields):
             _merge_notes(entry, fields)
             return key, message
         entry["status"] = "applied"
+        entry["score_version"] = _git_rev("job_scraper/scoring.py")
         entry["applied_by"] = by
         entry["date_applied"] = day
         entry["reason"] = ""
@@ -181,6 +191,97 @@ def add_entry(entries, *, url, status, day, by="AI", store=None, **fields):
     return key, message
 
 
+def _git_rev(relative_path):
+    """Short hash of the last commit that touched this file, plus '+edited' when it has uncommitted changes.
+    Empty when git is unavailable, so a missing git never blocks a log entry."""
+
+    def run(*args):
+        result = subprocess.run(
+            ["git", *args], cwd=daily_digest.ROOT, capture_output=True, text=True, timeout=10, check=True,
+        )
+        return result.stdout.strip()
+
+    try:
+        rev = run("log", "-1", "--format=%h", "--", relative_path)
+        if rev and run("status", "--porcelain", "--", relative_path):
+            rev += "+edited"
+        return rev
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def discovery_source(job):
+    """Where the search found the job: the host of the card's own link ('himalayas.app', 'linkedin.com',
+    'job-boards.greenhouse.io'), not the employer page it was applied on. Empty when the job is not on the list."""
+    host = urlparse((job or {}).get("url") or "").netloc.lower()
+    return host[4:] if host.startswith("www.") else host
+
+
+def resume_version(resume):
+    """File name without folder or extension, plus the git revision of documents/cv/resume.md it is built from."""
+    if not resume:
+        return ""
+    stem = Path(str(resume).replace("\\", "/")).stem
+    rev = _git_rev("documents/cv/resume.md")
+    return f"{stem}@{rev}" if rev else stem
+
+
+def _applied_by_note(notes):
+    for who, mode in (("AI", "ai"), ("Adam", "hand")):
+        if f"Applied by {who} " in (notes or ""):
+            return mode
+    return ""
+
+
+def _tracker_extras(entry):
+    """Values for the yield columns. The score stays blank when the job was not on the list (None); a 0 is a
+    real grade (a Low gate), so it is kept."""
+    score = entry.get("fit_score")
+    return [
+        "" if score is None else score,
+        entry.get("score_version") or "",
+        entry.get("discovery_source") or "",
+        {"AI": "ai", "Adam": "hand"}.get(entry.get("applied_by"), ""),
+        entry.get("resume_version") or resume_version(entry.get("resume")),
+        "",
+    ]
+
+
+def migrate_tracker(path=None, entries=None, store=None):
+    """Bring job_search_tracker.csv up to TRACKER_HEADER: append the yield columns, pad every row, fill what the
+    apply log and the daily list know. Existing cells are never changed. Safe to run again. Returns the number of rows brought up
+    to date."""
+    path = path or TRACKER_PATH
+    raw = path.read_bytes().decode("utf-8-sig") if path.exists() else ""
+    rows = list(csv.reader(io.StringIO(raw))) if raw.strip() else []
+    if not rows or rows[0] == TRACKER_HEADER:
+        return 0
+    old = rows[0]
+    if old != TRACKER_HEADER[:len(old)]:
+        raise LogError(f"{path} has columns this script does not know ({','.join(old)}); not migrating")
+    by_url = {daily_digest._key(e.get("url")): e for e in (entries or {}).values() if e.get("url")}
+    out = [TRACKER_HEADER]
+    for row in rows[1:]:
+        row = row + [""] * (len(old) - len(row))
+        cells = dict(zip(old, row))
+        entry = by_url.get(daily_digest._key(cells.get("source")), {})
+        card = _lookup_job(cells.get("source") or "", store or {}) or {}
+        extras = _tracker_extras({
+            "discovery_source": discovery_source(card), **entry,
+            "resume": entry.get("resume") or cells.get("cv_file"),
+        })
+        if not entry:  # not in the apply log: who applied is only known when the note says so
+            extras[3] = _applied_by_note(cells.get("notes"))
+        out.append(row + extras)
+    eol = "\r\n" if "\r\n" in raw else "\n"
+    buf = io.StringIO()
+    csv.writer(buf, lineterminator=eol).writerows(out)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_bytes(buf.getvalue().encode("utf-8"))
+    os.replace(tmp, path)
+    return len(rows) - 1
+
+
 def append_tracker_row(entry, path=None):
     """Add an applied entry to job_search_tracker.csv, the file /rank, /scrape and /gmail-sync read as the
     record of applications. Returns "added", or "already in the tracker" when the company and role are there.
@@ -191,6 +292,7 @@ def append_tracker_row(entry, path=None):
     import pipeline
 
     path = path or TRACKER_PATH
+    migrate_tracker(path, load_log() if path == TRACKER_PATH else None)
     raw = path.read_bytes().decode("utf-8-sig") if path.exists() else ""
     if raw.strip():
         rows = list(csv.DictReader(io.StringIO(raw)))
@@ -217,6 +319,7 @@ def append_tracker_row(entry, path=None):
         ROLE_TYPES.get(daily_digest.position_type(entry.get("title")), "other"),
         method.lower() or "unknown", "applied", "", entry.get("fit") or "", note,
         entry.get("resume") or "", entry.get("cover_letter") or "", entry.get("url") or "",
+        *_tracker_extras(entry),
     ])
     prefix = "" if (not raw or raw.endswith("\n")) else eol
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -386,6 +489,7 @@ def main(argv=None):
     add.add_argument("--cover-letter", dest="cover_letter", help="applied only: path of the cover letter that was submitted")
     add.add_argument("--note")
     add.add_argument("--no-tracker", action="store_true", help="do not add an applied job to job_search_tracker.csv")
+    sub.add_parser("migrate-tracker", help="add the yield columns to job_search_tracker.csv (safe to repeat)")
     lst = sub.add_parser("list", help="print what is logged")
     lst.add_argument("--open", action="store_true", help="only recommended jobs not yet applied to")
     sub.add_parser("render", help="rewrite the Word file from the log")
@@ -407,6 +511,9 @@ def main(argv=None):
             print(f"{e['title']} | {e['company']}: {message}")
             if e["status"] == "applied" and not args.no_tracker:
                 print(f"job_search_tracker.csv: {append_tracker_row(e)}")
+        elif args.cmd == "migrate-tracker":
+            print(f"job_search_tracker.csv: {migrate_tracker(entries=entries, store=daily_digest.load_store())} rows brought up to date")
+            return 0
         elif args.cmd == "list":
             _print_entries(entries, only_open=args.open)
             return 0

@@ -72,6 +72,8 @@ For a matched message, classify by content (require the signal phrase in the sub
 | Offer extended | "pleased to offer", "extend an offer", "offer letter" | `offer` | Tick "Offer received" checkbox. **Never propose `hired` or `offer_declined` from an email** - accepting or declining is the user's decision, not something to infer. Flag prominently in the Step 6 summary as needing the user's decision, separate from the plain approve/skip table. |
 | Rejection | "moving forward with other candidates", "not selected", "unable to proceed", "decided not to continue" | `rejected` | Set `Status: rejected`, `Date resolved:` to the email's date |
 
+**First reply date.** The tracker has a `first_response_date` column (yyyy-mm-dd) that the yield report (`python job_scraper/yield_report.py`) reads. Any signal above except "Application ack" is a reply: when the row's `first_response_date` is empty, the proposed change also sets it to the email's date. An ack is not a reply and never sets it. Never overwrite a date that is already there.
+
 **Conflict rule:** if the classified signal contradicts the application's current final-ness (e.g. a "moving forward" email arrives for a company whose tracker row briefly shows a `rejected`-adjacent recent write already, or a rejection arrives after an offer was already proposed this run) - do not propose overwriting it. Record it as a conflict in Step 6 for manual `/outcome` resolution instead.
 
 ---
@@ -97,8 +99,8 @@ Scanned N threads (M new messages) since <lookback date>.
 ### Unmatched Emails (no change proposed)
 - "<subject>" from <sender> - looked job-related but couldn't be confidently linked to a tracked application.
 
-### Stale Applications (30+ days, no activity)
-- **<Company>** - last activity YYYY-MM-DD, still `<status>`.
+### Silent for 21+ days (proposed: close as no response, Step 9)
+- **<Company>** - last activity YYYY-MM-DD, still `applied`. Reply "close all" or name which to close.
 ```
 
 If the Proposed Changes table would be empty, say so briefly and skip straight to Step 8 (Update State) - there is nothing to approve. Offers still land in the Proposed Changes table (the tracker moves to `offer`); it's only `hired`/`offer_declined` that are never proposed.
@@ -119,7 +121,7 @@ Approving the whole batch in one reply is expected UX - the requirement is that 
 
 For every row the user approved:
 
-1. **Tracker (`job_search_tracker.csv`):** update the matched row's `status` column per the Step 5 table, and append to `notes`: `<date> gmail-sync: <signal> ("<email subject>")`. Never restructure the CSV, reorder rows, or touch unrelated rows - same rule `/outcome` follows.
+1. **Tracker (`job_search_tracker.csv`):** update the matched row's `status` column per the Step 5 table, set `first_response_date` if it is empty (Step 5), and append to `notes`: `<date> gmail-sync: <signal> ("<email subject>")`. Never restructure the CSV, reorder rows, or touch unrelated rows - same rule `/outcome` follows.
 2. **`outcome.md`:** tick the relevant stage checkbox (adding the date in parentheses) or update `Status`/`Date resolved` per the table. Append a dated entry to `## Notes`, never overwrite existing Notes history:
    ```
    YYYY-MM-DD (via /gmail-sync): <one-line summary of what the email said>. Source: "<subject>" from <sender>, <email date>.
@@ -136,9 +138,11 @@ Add every message ID processed this run - approved, skipped, unmatched, or filte
 
 ---
 
-## Step 9: Staleness Check
+## Step 9: Silent Applications (close as no response, only on approval)
 
-For open applications with **no** matching activity found this run, check the tracker's `date` column and the most recent dated Notes entry in their `outcome.md`. If the most recent of those is 30+ days old, flag the application as "needs follow-up" in the closing summary below. This is surfaced only - never write anything for staleness.
+For open applications with status `applied` and **no** matching activity found this run, check the tracker's `date` column and the most recent dated Notes entry in their `outcome.md`. If the most recent of those is **21+ days** old, list the application in the closing summary and ask whether to close it as `no response`. This is the same 21 days the yield report uses to decide an application is old enough to count as unanswered, so closing here keeps its numbers honest.
+
+Writing happens only after the user answers, as in Step 7: set the tracker `status` to `no response`, leave `first_response_date` empty (nothing replied), and append `<date> gmail-sync: closed after 21+ days with no reply` to `notes`; set `outcome.md` to `Status: no_response` with `Date resolved:` today if the archive exists. Rows the user does not name stay open. Never close a row on your own, and never close one that has any reply (`interview`, `offer`, `rejected`).
 
 ---
 
@@ -160,8 +164,8 @@ Confirm what actually happened, distinct from the Step 6 proposal:
 ### Offers Requiring Your Decision
 - **<Company>** - offer written 2026-07-12 ("<subject>"). Tracker set to `offer`; run `/outcome <company>` to record accept/decline once you decide.
 
-### Stale Applications (30+ days, no activity)
-- **<Company>** - last activity YYYY-MM-DD, still `<status>`.
+### Silent for 21+ days (proposed: close as no response)
+- **<Company>** - last activity YYYY-MM-DD, still `<status>`. Reply "close all" or name which to close.
 ```
 
 If nothing was proposed this run, a brief note is enough instead of an empty summary.

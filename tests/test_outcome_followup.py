@@ -67,9 +67,9 @@ class OutcomeFollowupBranchSpec(unittest.TestCase):
     def test_threshold_contrast_with_gmail_sync_documented(self):
         text = COMMAND.read_text(encoding="utf-8")
         self.assertIn(
-            "30-day staleness flag",
+            "21-day silent-application check",
             text,
-            "spec lost the rationale for the 10-day nudge vs /gmail-sync's 30-day alarm",
+            "spec lost the rationale for the 10-day nudge vs /gmail-sync's 21-day close-as-no-response check",
         )
 
     @unittest.skipUnless(
