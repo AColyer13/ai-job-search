@@ -493,11 +493,21 @@ _COMPANY_NOISE_RE = re.compile(
 )
 
 
+# One employer posting under its short name. Seen on 10 HPE pairs in the store.
+_COMPANY_ALIASES = {"hpe": "hewlett packard enterprise"}
+
+
 def company_key(name):
-    """Company name without legal suffixes or board labels, so "Rithum" and "Rithum LinkedIn Board" match."""
+    """Company name without legal suffixes or board labels, so "Rithum" and "Rithum LinkedIn Board" match.
+
+    A trailing "International" goes too ("Flextronics International" is "Flextronics"), but not a
+    leading one ("International Paper" keeps its name).
+    """
     words = _norm_words(name)
     stripped = " ".join(_COMPANY_NOISE_RE.sub(" ", words).split())
-    return stripped or words
+    stripped = re.sub(r"(?<=\s)international$", "", stripped).strip()
+    key = stripped or words
+    return _COMPANY_ALIASES.get(key, key)
 
 
 def dedupe_key(job):
@@ -532,33 +542,64 @@ def _copy_earliest_found(dest, src):
             dest["found_at"] = src.get("found_at")
 
 
+# Better places first: Minnesota, then a remote seat, then the Gulf Coast. Anything else ranks last.
+_TIER_RANK = {"mn": 0, "remote": 1, "ms": 2}
+
+
+def _text_fingerprint(job):
+    """Start of the posting text, or '' when there is too little of it to tell postings apart."""
+    text = _norm_words(job.get("description"))
+    return text[:300] if len(text) >= 150 else ""
+
+
 def collapse_duplicates(jobs):
     """One row per job across sites. Keeps the employer's own link over a repost.
+
+    Same company, title and place is one job. So is the same company and title with the same
+    posting text under two place labels (one posting listed for Chicago and for Minneapolis); the
+    row with the better place survives and the other place goes in `also_places`.
 
     Returns (kept, dropped_count). Each kept job lists the other portals that
     carried it in `also_on`.
     """
-    best, order = {}, []
+    best, loose, order = {}, {}, []
     for job in jobs:
         key = dedupe_key(job)
         if key is None:
             order.append(job)
             continue
+        fp = _text_fingerprint(job)
+        loose_key = (key[0], key[1], fp) if fp else None
         cur = best.get(key)
+        if cur is None and loose_key:
+            cur = loose.get(loose_key)
         if cur is None:
             best[key] = job
+            if loose_key:
+                loose[loose_key] = job
             order.append(job)
             continue
-        if _is_aggregator(cur) and not _is_aggregator(job):
-            _copy_longer_description(job, cur)
-            _copy_earliest_found(job, cur)
-            job.setdefault("also_on", []).extend(cur.get("also_on", []) + [cur.get("portal")])
-            order[order.index(cur)] = job
-            best[key] = job
+        cur_key = dedupe_key(cur)
+        employer_wins = _is_aggregator(cur) and not _is_aggregator(job)
+        if cur_key == key:
+            job_wins = employer_wins
         else:
-            _copy_longer_description(cur, job)
-            _copy_earliest_found(cur, job)
-            cur.setdefault("also_on", []).append(job.get("portal"))
+            gap = _TIER_RANK.get(cur.get("tier"), 9) - _TIER_RANK.get(job.get("tier"), 9)
+            job_wins = gap > 0 or (gap == 0 and employer_wins)
+        winner, loser = (job, cur) if job_wins else (cur, job)
+        _copy_longer_description(winner, loser)
+        _copy_earliest_found(winner, loser)
+        winner.setdefault("also_on", [])
+        if job_wins:
+            winner["also_on"].extend(loser.get("also_on", []) + [loser.get("portal")])
+            order[order.index(cur)] = job
+        else:
+            winner["also_on"].append(loser.get("portal"))
+        if cur_key != key:
+            winner.setdefault("also_places", []).extend(loser.get("also_places", []) + [loser.get("location")])
+        best[key] = best[cur_key] = winner
+        if loose_key:
+            loose[loose_key] = winner
     return order, len(jobs) - len(order)
 
 
@@ -1747,11 +1788,6 @@ def cmd_process(args):
         salary_suffix = f" | {j['salary']}" if j.get("salary") else ""
         print(f"    {j.get('company')} | {j.get('location')} | {j.get('date')}{salary_suffix}")
         print(f"    {j.get('url')}")
-    unchecked = daily_digest.unchecked_jobs(new)
-    if unchecked:
-        print(f"\n=== UNCHECKED, NOT GRADED ({len(unchecked)}) ===")
-        for j in unchecked:
-            print(f"  {j.get('title')} | {j.get('company')} | {j.get('url')}")
     if left_out:
         print(f"\n=== LEFT OUT ({len(left_out)}) ===")
         for j, reason in left_out:

@@ -826,8 +826,8 @@ SNIPPET_ONLY_HOSTS = ("jooble.org",)
 def is_unchecked(job):
     """True for a snippet-only board row whose posting text was never read.
 
-    The grade on such a row comes from the title alone. A hand check of ten of them found none
-    that clearly fit, so they are listed as "Unchecked, open the link" and not as medium.
+    The grade on such a row comes from the title alone. Hand checks of 16 of them found no Fit and
+    5 Stretch, so they are kept out of the lists and counted as left out. The store keeps them.
     """
     if (job.get("fit") or "").lower() not in ("high", "medium"):
         return False
@@ -841,8 +841,7 @@ def presentable_split(jobs):
 
     A location cap stays in the shown list at its capped grade. Engineering
     level and an exclusive degree requirement go to the left-out list. Rows
-    that were never read (see is_unchecked) are in neither list: unchecked_jobs
-    returns them.
+    that were never read (see is_unchecked) are in neither list.
     """
     shown = []
     left_out = []
@@ -856,11 +855,6 @@ def presentable_split(jobs):
         if fit in ("high", "medium") and not is_unchecked(job):
             shown.append(job)
     return collapse_same_requisition(shown), left_out
-
-
-def unchecked_jobs(jobs):
-    """Listable rows that were never read, best title match first."""
-    return _ordered(collapse_same_requisition([job for job in jobs if omit_reason(job) is None and is_unchecked(job)]))
 
 
 def type_sections(jobs):
@@ -887,13 +881,13 @@ def _type_heading(label, jobs):
 
 
 def fit_jobs(jobs):
-    """Jobs worth showing: listable, read, and graded high or medium. Low fits and unchecked rows stay out."""
+    """Jobs worth showing: listable, read, and graded high or medium. Low fits and snippet-only rows stay out."""
     return [job for job in listable(jobs) if (job.get("fit") or "low") != "low" and not is_unchecked(job)]
 
 
 def left_out_count(jobs):
-    """How many listable jobs the Word files skip because they grade low."""
-    return len(listable(jobs)) - len(fit_jobs(jobs)) - len(unchecked_jobs(jobs))
+    """How many listable jobs the Word files skip: graded low, or a snippet-only row that was never read."""
+    return len(listable(jobs)) - len(fit_jobs(jobs))
 
 
 def _split_for_doc(jobs):
@@ -958,23 +952,10 @@ def _section_heading(bookmark_id, anchor, text):
     )
 
 
-UNCHECKED_HEADING = "Unchecked, open the link"
-UNCHECKED_NOTE = (
-    "These postings come from a job board that gives only a short snippet and blocks the page. "
-    "The title fits a target role, and the snippet shows no clearance, on-site, fixed-territory or staffing-firm wording, "
-    "but nobody has read the requirements. They are not graded. Open the link and check the years asked, the remote option and the stack "
-    "before you spend time on one."
-)
-
-
-def _unchecked_why(job):
-    return "Not graded. Only the job board's snippet was read. Check the requirements, the remote option and any clearance on the posting."
-
-
-def _job_blocks(job, rel_id, number, unchecked=False):
+def _job_blocks(job, rel_id, number):
     """Paragraphs for one posting. rel_id is None when the card has no URL."""
-    fit = "UNCHECKED" if unchecked else (job.get("fit") or "low").upper()
-    hits = [] if unchecked else (job.get("star_notes") or resume_hits(job.get("description") or ""))
+    fit = (job.get("fit") or "low").upper()
+    hits = job.get("star_notes") or resume_hits(job.get("description") or "")
     star = "★ " if hits else ""
     heading = f"{star}{number}. {fit} | {job.get('title') or 'Untitled'}"
     blocks = [
@@ -993,8 +974,8 @@ def _job_blocks(job, rel_id, number, unchecked=False):
         blocks.append(_p(f"Found: {when}", size=22, space_after=40))
     if job.get("salary"):
         blocks.append(_p(f"Pay on the card: {job['salary']}", size=22, space_after=40))
-    blocks.append(_p(_unchecked_why(job) if unchecked else _why(job), size=22, space_after=40))
-    minimums = "" if unchecked else _minimums_line(job)
+    blocks.append(_p(_why(job), size=22, space_after=40))
+    minimums = _minimums_line(job)
     if minimums:
         blocks.append(_p(minimums, size=22, space_after=40))
     url = apply_link(job)
@@ -1005,15 +986,13 @@ def _job_blocks(job, rel_id, number, unchecked=False):
     return blocks
 
 
-def write_docx(path, title, intro, jobs, unchecked=()):
+def write_docx(path, title, intro, jobs):
     """Write a US Letter .docx grouped by position type.
 
     Each posting link is an external hyperlink. Each type heading is a
-    bookmark, and the list under the intro jumps to those bookmarks. `unchecked`
-    rows (never read, see is_unchecked) follow the graded sections under their own heading.
+    bookmark, and the list under the intro jumps to those bookmarks.
     """
     apply_location_caps(jobs)
-    unchecked = list(unchecked)
     rels = []
     body = [_p(title, bold=True, size=32, space_after=120)]
     for line in intro:
@@ -1022,12 +1001,10 @@ def write_docx(path, title, intro, jobs, unchecked=()):
     link_n = 10
     bookmark_id = 1
 
-    def _emit(jobs_here, anchor, heading, is_unchecked_section=False, note=None):
+    def _emit(jobs_here, anchor, heading):
         nonlocal link_n, bookmark_id
         body.append(_section_heading(bookmark_id, anchor, heading))
         bookmark_id += 1
-        if note:
-            body.append(_p(note, size=22, space_after=80))
         for number, job in enumerate(jobs_here, 1):
             url = apply_link(job)
             rel_id = None
@@ -1035,7 +1012,7 @@ def write_docx(path, title, intro, jobs, unchecked=()):
                 rel_id = f"rId{link_n}"
                 link_n += 1
                 rels.append((rel_id, url))
-            body.extend(_job_blocks(job, rel_id, number, unchecked=is_unchecked_section))
+            body.extend(_job_blocks(job, rel_id, number))
 
     if not upper:
         body.append(_p("No high or medium jobs in this file.", size=22))
@@ -1044,12 +1021,16 @@ def write_docx(path, title, intro, jobs, unchecked=()):
         for section in upper:
             anchor = "type_" + section["key"]
             body.append(_anchor_p(anchor, _type_heading(section["label"], section["jobs"])))
-    if unchecked:
-        body.append(_anchor_p("unchecked", f"{UNCHECKED_HEADING} ({len(unchecked)})"))
     for section in upper:
         _emit(section["jobs"], "type_" + section["key"], _type_heading(section["label"], section["jobs"]))
-    if unchecked:
-        _emit(unchecked, "unchecked", f"{UNCHECKED_HEADING} ({len(unchecked)})", True, UNCHECKED_NOTE)
+    return write_docx_package(path, body, rels)
+
+
+def write_docx_package(path, body, rels):
+    """Zip `body` (a list of w:p / w:tbl strings) and its hyperlink `rels` into a US Letter .docx.
+
+    rels is a list of (relationship id, url). Returns the path, or None when the file is open elsewhere.
+    """
     sect = (
         "<w:sectPr>"
         '<w:pgSz w:w="12240" w:h="15840"/>'
@@ -1220,7 +1201,7 @@ def _rule_lines():
     return [
         "Each job gets a fit score out of 100 from its posting text, on the four dimensions in the job evaluation framework: career alignment 30, technical match 30, experience asked 25, work style 15. High is 70 or more, medium is 50 to 69, and low is under 50. Inside each section the best score is listed first. The scale and its reasons are in job_scraper/FIT_SCALE.md.",
         "Target roles: entry full-stack and AI engineering, technical sales, sales and solutions engineering, pre-sales and solutions architecture. Technical account management, technical implementation, QA, AI evaluation, developer relations, support and integration engineering, Salesforce and RevOps seats, and technical writing sit next to those and top out at medium. Forward-deployed engineering and architect seats can be high when the posting shows they are open to your background. Implementation, onboarding and customer-success service seats are left out.",
-        "High means nothing in the posting asks for more than you have. A stated shortfall (two or more years of engineering, three or more years of pre-sales, five or more years of sales) keeps a job at medium. A job whose text could not be read is medium when the title fits a target role, and the card says the requirements are unchecked. The exception is a Jooble job: Jooble gives only a short snippet, so a Jooble job that was never read is not graded and sits under \"Unchecked, open the link\" at the end. A snippet that names a security clearance, an on-site seat, a fixed territory or a staffing or training firm is low and left out.",
+        "High means nothing in the posting asks for more than you have. A stated shortfall (two or more years of engineering, three or more years of pre-sales, five or more years of sales) keeps a job at medium. A job whose text could not be read is medium when the title fits a target role, and the card says the requirements are unchecked. The exception is a Jooble job: Jooble gives only a short snippet, so a Jooble job that was never read is not listed and counts as left out. A snippet that names a security clearance, an on-site seat, a fixed territory or a staffing or training firm is low and left out.",
         "A posting is left out when its qualifications require a degree in engineering or computer science and do not accept another degree or equivalent experience.",
         "A star means the posting names a business or marketing degree, a bootcamp or coding certificate, or a business analytics certificate. The sentence from the posting is on the card.",
         "High and medium jobs are grouped by position type. Low-fit jobs (managers, senior levels, another region or language, hardware or trade engineering sales, jobs that require a degree or years you do not have) are left out.",
@@ -1249,7 +1230,7 @@ def _publish(day, store, log_text):
     day_jobs = fit_jobs(day_all)
     day_intro = [
         f"Date: {day}    Updated: {datetime.now():%H:%M} (an older time means a newer write was skipped because the file was open)",
-        f"New jobs: {len(day_jobs)}    High: {_counts(day_jobs)['high']}    Medium: {_counts(day_jobs)['medium']}    Unchecked: {len(unchecked_jobs(day_all))}    Low-fit jobs left out: {left_out_count(day_all)}",
+        f"New jobs: {len(day_jobs)}    High: {_counts(day_jobs)['high']}    Medium: {_counts(day_jobs)['medium']}    Jobs left out (low fit or never read): {left_out_count(day_all)}",
         "Each job is written into one date file only. The same posting is not repeated on a later day.",
         f"Each job also stays in latest.docx for {WINDOW_DAYS} days from the day it was found, then it is removed.",
     ]
@@ -1262,14 +1243,14 @@ def _publish(day, store, log_text):
     latest_jobs = fit_jobs(latest_all)
     latest_intro = [
         f"Latest jobs as of {day}    Updated: {datetime.now():%H:%M} (an older time means a newer write was skipped because the file was open)",
-        f"Jobs: {len(latest_jobs)}    High: {_counts(latest_jobs)['high']}    Medium: {_counts(latest_jobs)['medium']}    Unchecked: {len(unchecked_jobs(latest_all))}    Low-fit jobs left out: {left_out_count(latest_all)}",
+        f"Jobs: {len(latest_jobs)}    High: {_counts(latest_jobs)['high']}    Medium: {_counts(latest_jobs)['medium']}    Jobs left out (low fit or never read): {left_out_count(latest_all)}",
         f"A job stays in this file for {WINDOW_DAYS} days from the day it was found, then it is removed.",
         "The first days after a posting goes up are when applications get read. A week is still worth acting on. At 14 days the listing is past the usual first review, and that is also as far back as the scraper looks.",
     ]
     latest_intro.extend(_rule_lines())
     latest_intro.extend(_source_lines(sources))
-    dated = write_docx(DAILY / f"{day}.docx", "Adam Colyer job search", day_intro, day_jobs, unchecked_jobs(day_all))
-    latest = write_docx(DAILY / "latest.docx", "Adam Colyer job search", latest_intro, latest_jobs, unchecked_jobs(latest_all))
+    dated = write_docx(DAILY / f"{day}.docx", "Adam Colyer job search", day_intro, day_jobs)
+    latest = write_docx(DAILY / "latest.docx", "Adam Colyer job search", latest_intro, latest_jobs)
     html_path = None
     try:
         import html_report
@@ -1296,9 +1277,9 @@ def write_backfill_files(store):
         past_jobs = fit_jobs(past_all)
         result = write_docx(path, "Adam Colyer job search", [
             f"Date: {past}",
-            f"Jobs: {len(past_jobs)}    High: {_counts(past_jobs)['high']}    Medium: {_counts(past_jobs)['medium']}    Unchecked: {len(unchecked_jobs(past_all))}    Low-fit jobs left out: {left_out_count(past_all)}",
+            f"Jobs: {len(past_jobs)}    High: {_counts(past_jobs)['high']}    Medium: {_counts(past_jobs)['medium']}    Jobs left out (low fit or never read): {left_out_count(past_all)}",
             "Rebuilt by a backfill search: includes jobs posted this day that the daily runs had missed.",
-        ] + _rule_lines(), past_jobs, unchecked_jobs(past_all))
+        ] + _rule_lines(), past_jobs)
         if result:
             written.append(result)
     return written

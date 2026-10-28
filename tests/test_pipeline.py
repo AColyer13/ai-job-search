@@ -668,6 +668,45 @@ def test_same_job_on_two_sites_keeps_the_employers_link():
     assert employer["also_on"] == ["linkedin-search"]
 
 
+POSTING = ("Industry Solutions Engineer. You will partner with account executives to run technical discovery, "
+           "design solutions for enterprise customers and present them to executives. " * 2)
+
+
+def test_same_posting_under_two_place_labels_is_one_job_and_keeps_the_better_place():
+    chicago = {"title": "Industry Solutions Engineer", "company": "CISCO Systems", "location": "Chicago, IL", "tier": "exclude-east",
+               "url": "https://jooble.org/desc/1", "portal": "jooble", "description": POSTING}
+    minneapolis = {**chicago, "location": "Minneapolis, MN", "tier": "mn", "url": "https://jooble.org/desc/2"}
+    kept, dropped = pipeline.collapse_duplicates([chicago, minneapolis])
+    assert dropped == 1 and kept[0]["location"] == "Minneapolis, MN"
+    assert kept[0]["also_places"] == ["Chicago, IL"]
+    kept, dropped = pipeline.collapse_duplicates([  # order does not matter
+        {**minneapolis, "also_places": []}, {**chicago}])
+    assert dropped == 1 and kept[0]["location"] == "Minneapolis, MN"
+    assert kept[0]["also_places"] == ["Chicago, IL"]
+
+
+def test_two_place_labels_stay_apart_without_the_same_posting_text():
+    a = {"title": "Sales Engineer", "company": "Acme", "location": "Chicago, IL", "tier": "unknown", "url": "https://x.com/1", "description": POSTING}
+    b = {**a, "location": "Minneapolis, MN", "tier": "mn", "url": "https://x.com/2", "description": "A different posting. " * 20}
+    c = {**a, "location": "Austin, TX", "url": "https://x.com/3", "description": "short"}
+    d = {**a, "location": "Denver, CO", "url": "https://x.com/4", "description": "short"}
+    kept, dropped = pipeline.collapse_duplicates([a, b, c, d])
+    assert dropped == 0 and len(kept) == 4
+
+
+def test_a_shared_template_at_two_companies_is_not_one_job():
+    a = {"title": "Junior Backend Developer", "company": "MENA Alliances", "location": "Remote", "tier": "remote", "url": "https://x.com/1", "description": POSTING}
+    b = {**a, "company": "Alliants Limited", "url": "https://x.com/2"}
+    kept, dropped = pipeline.collapse_duplicates([a, b])
+    assert dropped == 0 and len(kept) == 2
+
+
+def test_company_key_joins_known_spellings_of_one_employer():
+    assert pipeline.company_key("Flextronics International") == pipeline.company_key("flextronics")
+    assert pipeline.company_key("hpe") == pipeline.company_key("Hewlett Packard Enterprise")
+    assert pipeline.company_key("International Paper") != pipeline.company_key("Paper")
+
+
 def test_store_skips_a_job_it_already_holds_from_another_site():
     import daily_digest
     store = {}
