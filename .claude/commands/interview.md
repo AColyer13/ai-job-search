@@ -23,9 +23,9 @@ v1 preps for a **specific application**. Generic no-target practice is out of sc
 
 1. **The archive** (maintained by `/outcome`): `documents/applications/<company>_<role>/`
    - `job_posting.md` - the exact posting the user applied to
-   - `cv_draft.tex` and `cover_letter.tex` - what was actually submitted. **These are what the interviewer read**; every talking point must be consistent with their claims.
+   - The archived resume - what was actually submitted. **This is what the interviewer read**; every talking point must be consistent with its claims.
    - `outcome.md` - the stage reached so far and any recorded feedback from earlier stages. Feedback from stage N is the highest-value input for stage N+1 prep.
-2. **Fallbacks** (the application may predate `/outcome`): posting via WebFetch on the tracker row's `source` URL, or ask the user to paste it; CV via `cv/main_<company>*.tex` and cover letter via `cover_letters/cover_<company>_*.tex`. State plainly which context is missing rather than guessing - and suggest `/outcome <company>` to build the archive for next time.
+2. **Fallbacks** (the application may predate `/outcome`): posting via WebFetch on the tracker row's `source` URL, or ask the user to paste it; the resume via the tracker row's `cv_file`. State plainly which context is missing rather than guessing - and suggest `/outcome <company>` to build the archive for next time.
 3. **Ask the user what this interview is** (skip anything `outcome.md` already records): stage (phone screen / technical / case / final round), date, format (phone, video, onsite), and who is interviewing (names and titles, if known).
 4. **Read the frameworks once** - do not re-read them in later steps:
    - `.claude/skills/job-application-assistant/07-interview-prep.md`
@@ -65,7 +65,7 @@ Match the ready-made STAR examples in `07-interview-prep.md` to the likely quest
 - If incomplete STAR stubs are relevant to this role, surface them: the user should fill in the details before the interview.
 
 ### 3. Consistency brief
-A short list of the specific claims the submitted CV and cover letter make (achievements, numbers, skills emphasized) that the interviewer is most likely to probe. The rule stated plainly: **no claim in the room that isn't on the paper, and every claim on the paper must be defensible in depth.**
+A short list of the specific claims the submitted CV makes (achievements, numbers, skills emphasized) that the interviewer is most likely to probe. The rule stated plainly: **no claim in the room that isn't on the paper, and every claim on the paper must be defensible in depth.**
 
 ### 4. Tough questions, customized
 The relevant entries from `07`'s tough-question list with per-application answers - "Why this company specifically?" must use the verified hooks from Step 2, never a generic line.
@@ -100,7 +100,7 @@ If Step 3 drafted new STAR answers the user approved for keeps, remind them thos
 
 ## Important Rules
 
-1. **Consistency with the submitted documents.** The interviewer read the archived CV and cover letter; prep must never contradict them or coach claims beyond them.
+1. **Consistency with the submitted documents.** The interviewer read the archived CV; prep must never contradict them or coach claims beyond them.
 2. **Honesty on gaps.** Weak matches get bridge answers (acknowledge → adjacent experience → learning path), never invented experience. Same rule as everywhere else in this repo.
 3. **Verified research only.** Company specifics go in the pack only after independent confirmation. Interviewer notes stick to public professional information.
 4. **Stage-appropriate prep.** A phone screen pack and a final-round pack are different documents; recorded feedback from earlier stages takes priority over generic question lists.

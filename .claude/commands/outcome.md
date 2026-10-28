@@ -45,7 +45,7 @@ Ask the user what happened, then classify:
 - Interview invitation / stage scheduled or completed (phone screen, technical, case, final round)
 - Offer received (not yet accepted or declined)
 
-**Resolutions** (application closed) - these map to the status enum in `documents/README.md` that `/setup` parses:
+**Resolutions** (application closed) - these map to the status enum in `documents/README.md`:
 - `hired` - accepted an offer
 - `offer_declined` - received an offer, turned it down
 - `rejected` - explicit rejection at any stage
@@ -55,7 +55,7 @@ Ask the user what happened, then classify:
 Also collect, without interrogating - one or two open questions are enough:
 - Dates for the stages reached
 - Any feedback received, verbatim where the user remembers it
-- What they'd do differently, and any signal about what the company valued (these feed `/setup`'s calibration and STAR-candidate mining, so concrete beats polished)
+- What they'd do differently, and any signal about what the company valued (concrete beats polished)
 
 ---
 
@@ -69,8 +69,8 @@ Enter this branch from the `followup` argument (Step 0) or from the offer under 
 
 **Drafting.** For each selected application:
 
-1. Read the archive folder: the `job_posting.md`, `cv_draft.tex`, and `cover_letter.tex` that Step 3 maintains are the source of **every claim** the note may make - this is Rule 3 (never fabricate) widened to "no new claims": a follow-up that introduces skills or experience the submitted materials don't contain is a fabrication vector.
-2. Apply the writing style rules from `03-writing-style.md` (no cliches, no em-dashes, warm but direct), and match the application's language - draw the register from the archived cover letter.
+1. Read the archive folder: the `job_posting.md` and the archived resume that Step 3 maintains are the source of **every claim** the note may make - this is Rule 3 (never fabricate) widened to "no new claims": a follow-up that introduces skills or experience the submitted materials don't contain is a fabrication vector.
+2. Apply the writing style rules from `03-writing-style.md` (no cliches, no em-dashes, warm but direct), and match the application's language.
 3. Write roughly **60 to 120 words**: address the `contact_person` from the tracker if present (otherwise the team, in the application's language); one sentence restating interest in the specific role; one concrete value-reminder drawn from the submitted materials; one polite question about the timeline. No pressure, no "just checking in" filler.
 4. Shape it for the `channel` column: email (with a subject line reusing the application's headline), LinkedIn message (shorter, no subject), or portal message (plain text).
 5. Present the draft and iterate until the user is happy.
@@ -78,7 +78,7 @@ Enter this branch from the `followup` argument (Step 0) or from the offer under 
 **Logging.** Once the user confirms they will send it (or have sent it), log it in the same turn - an unlogged follow-up breaks the next run's quiet-days math:
 
 - Append `followed up YYYY-MM-DD` to the row's `notes` column (Step 4's rule applies: append a dated note, never restructure the CSV).
-- Save the final note as `followup_YYYY-MM-DD.md` in the application's archive folder. Safe by documented convention: `/setup` reads only the four named archive files and ignores extras (the same rule that covers `/interview`'s prep files), and `documents/applications/**` is gitignored personal data.
+- Save the final note as `followup_YYYY-MM-DD.md` in the application's archive folder. Safe by documented convention: extra files in the archive are ignored by other commands, and `documents/applications/**` is gitignored personal data.
 
 If the user decides not to send, log nothing.
 
@@ -139,7 +139,7 @@ Summarize what was recorded:
 > **Outcome recorded for <Role> at <Company>.**
 >
 > - `documents/applications/<company>_<role>/outcome.md` - status: <status>, <what changed>
-> - Archived: <which of cv_draft.tex / cover_letter.tex / job_posting.md were copied or fetched, and which were skipped and why>
+> - Archived: <which of the resume / job_posting.md were copied or fetched, and which were skipped and why>
 > - Tracker: status → <new status>
 >
 > [Calibration suggestion from Step 5, if triggered]

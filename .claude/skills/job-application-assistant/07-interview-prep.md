@@ -4,7 +4,6 @@ framework_version: 1.0.0
 
 # Interview Preparation Guide
 
-<!-- SETUP: STAR examples are personalized by running /setup based on your actual experience -->
 
 ## STAR Format
 
@@ -14,7 +13,6 @@ Keep answers to 1-2 minutes. Be specific. End with what you learned or would do 
 
 ## STAR Candidates (Complete Manually)
 
-<!-- Added by /setup Path A from resume/portfolio highlights. Fill in S/T/A/R details before relying on these in an interview. -->
 
 ### Epicor: $3.7M qualified + CEO Excellence Award
 **Source:** CV/portfolio - Business Development Representative, Epicor Software (May 2019 - Jun 2020)

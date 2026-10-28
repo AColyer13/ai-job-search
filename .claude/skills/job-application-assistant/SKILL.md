@@ -27,8 +27,8 @@ When the user provides a job posting (URL or text), follow this workflow:
 
 ### Step 2: Tailor CV
 - Read the most relevant existing CV variant from `cv/` as a starting point
-- Follow the guidelines in `05-cv-templates.md`
-- Create `cv/main_<company>_<role>.tex` with tailored content
+- Follow the guidelines in `05-cv-tailoring.md`
+- Tailor the resume from `documents/cv/resume.md`
 - Adjust: profile statement, skills section, experience bullet emphasis, section order
 
 ### Step 3: Interview Preparation
@@ -47,7 +47,7 @@ When the user provides a job posting (URL or text), follow this workflow:
 | `02-behavioral-profile.md` | Behavioral assessment, strengths, ideal environments |
 | `03-writing-style.md` | Tone, structure, do's and don'ts |
 | `04-job-evaluation.md` | Scoring framework for job fit |
-| `05-cv-templates.md` | LaTeX CV structure and tailoring rules |
+| `05-cv-tailoring.md` | CV tailoring rules, page budget, ATS checks |
 | `07-interview-prep.md` | STAR examples, tough questions, roleplay guidelines |
 
 ---

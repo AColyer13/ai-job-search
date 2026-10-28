@@ -4,7 +4,6 @@ framework_version: 1.1.0
 
 # Job Evaluation Framework
 
-<!-- SETUP: Skill match areas and career goals are personalized by running /setup -->
 
 ## Eligibility Gate — run before scoring
 
@@ -26,7 +25,7 @@ Read the posting's eligibility / work rights / "who can apply" section **verbati
 
 **Report an eligibility failure to the user with the quoted source** rather than silently dropping the role. They may know something about their own status that the profile does not record.
 
-If the candidate's permit also constrains *hours* or *start date* (a student visa with a term-time cap, a permit that begins on graduation), record that as a second gate under this section during `/setup`, with the specific dates. Do not merge it with the eligibility question above — they fail for different reasons and need different answers.
+If the candidate's permit also constrains *hours* or *start date* (a student visa with a term-time cap, a permit that begins on graduation), record that as a second gate under this section, with the specific dates. Do not merge it with the eligibility question above — they fail for different reasons and need different answers.
 
 A role that fails this gate is not scored and not drafted. Everything below applies only to roles that pass it.
 
