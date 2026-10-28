@@ -35,6 +35,7 @@ month it was applied for, or the month it was recommended while still open.
 """
 import argparse
 import csv
+import hashlib
 import io
 import json
 import os
@@ -217,13 +218,20 @@ def discovery_source(job):
     return host[4:] if host.startswith("www.") else host
 
 
-def resume_version(resume):
-    """File name without folder or extension, plus the git revision of documents/cv/resume.md it is built from."""
+def resume_version(resume, hash_file=True):
+    """File name without folder or extension, plus the first 7 characters of a hash of the file's bytes, so a
+    rebuilt PDF under the same name counts as a new version. documents/cv is gitignored, so git cannot say.
+    The hash is left off when the file cannot be read or when hash_file is False (old rows: the file on disk
+    may no longer be the one that was submitted)."""
     if not resume:
         return ""
-    stem = Path(str(resume).replace("\\", "/")).stem
-    rev = _git_rev("documents/cv/resume.md")
-    return f"{stem}@{rev}" if rev else stem
+    path = Path(str(resume).replace("\\", "/"))
+    if hash_file:
+        try:
+            return f"{path.stem}@{hashlib.sha256(path.read_bytes()).hexdigest()[:7]}"
+        except OSError:
+            pass
+    return path.stem
 
 
 def _applied_by_note(notes):
@@ -233,7 +241,7 @@ def _applied_by_note(notes):
     return ""
 
 
-def _tracker_extras(entry):
+def _tracker_extras(entry, hash_resume=True):
     """Values for the yield columns. The score stays blank when the job was not on the list (None); a 0 is a
     real grade (a Low gate), so it is kept."""
     score = entry.get("fit_score")
@@ -242,7 +250,7 @@ def _tracker_extras(entry):
         entry.get("score_version") or "",
         entry.get("discovery_source") or "",
         {"AI": "ai", "Adam": "hand"}.get(entry.get("applied_by"), ""),
-        entry.get("resume_version") or resume_version(entry.get("resume")),
+        entry.get("resume_version") or resume_version(entry.get("resume"), hash_file=hash_resume),
         "",
     ]
 
@@ -269,7 +277,7 @@ def migrate_tracker(path=None, entries=None, store=None):
         extras = _tracker_extras({
             "discovery_source": discovery_source(card), **entry,
             "resume": entry.get("resume") or cells.get("cv_file"),
-        })
+        }, hash_resume=False)
         if not entry:  # not in the apply log: who applied is only known when the note says so
             extras[3] = _applied_by_note(cells.get("notes"))
         out.append(row + extras)
