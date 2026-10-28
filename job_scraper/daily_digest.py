@@ -324,80 +324,12 @@ def _counts(jobs):
     return {k: sum(1 for j in jobs if j.get("fit") == k) for k in ("high", "medium", "low")}
 
 
-def _blocks(jobs):
-    lines = []
-    ordered = sorted(
-        jobs,
-        key=_rank_key,
-    )
-    for i, job in enumerate(ordered, 1):
-        fit = (job.get("fit") or "low").upper()
-        title = job.get("title") or "Untitled"
-        company = job.get("company") or "Company not listed"
-        found = job.get("found_on")
-        lines.append(f"{i}. {fit} | {title}")
-        lines.append(f"    {company} | {_where(job)}")
-        if found:
-            lines.append(f"    Found: {found}")
-        if job.get("salary"):
-            lines.append(f"    Pay on the card: {job.get('salary')}")
-        lines.append(f"    {_why(job)}")
-        lines.append(f"    {job.get('url') or 'No link on the card'}")
-        lines.append("")
-    return lines
-
-
 def _date_key(value):
     """Sort key so a missing or newer date comes first inside a fit band."""
     try:
         return -date.fromisoformat(value).toordinal()
     except (TypeError, ValueError):
         return 0
-
-
-def render(day, jobs, log_text, from_existing=False):
-    counts = _counts(jobs)
-    lines = [
-        "Adam Colyer job search",
-        f"Date: {day}",
-        f"New jobs: {len(jobs)}    High: {counts['high']}    Medium: {counts['medium']}    Low: {counts['low']}",
-        "Fit comes from the posting text. The why says what held the grade down.",
-        f"These jobs are in this date file only. Each one also stays in daily/latest.docx for {WINDOW_DAYS} days from the day it was found, then it is removed.",
-        "",
-    ]
-    if from_existing:
-        lines.append("This file was written from the scrape already on disk. It is not a new search.")
-        lines.append("")
-    notes = _pipeline_notes(log_text)
-    if notes:
-        lines.append("Pipeline")
-        lines.extend(notes)
-        lines.append("")
-    if not jobs:
-        lines.append("No new jobs today.")
-        lines.append("")
-    else:
-        lines.extend(_blocks(jobs))
-    return "\n".join(lines).rstrip() + "\n"
-
-
-def render_latest(day, jobs):
-    counts = _counts(jobs)
-    lines = [
-        "Adam Colyer job search",
-        f"Latest jobs as of {day}",
-        f"Jobs: {len(jobs)}    High: {counts['high']}    Medium: {counts['medium']}    Low: {counts['low']}",
-        f"A job stays in this file for {WINDOW_DAYS} days from the day it was found, then it is removed.",
-        "The first days after a posting goes up are when applications get read. A week is still worth acting on. At 14 days the listing is past the usual first review, and that is also as far back as the scraper looks.",
-        "Fit comes from the posting text. The why says what held the grade down.",
-        "",
-    ]
-    if not jobs:
-        lines.append("No jobs in the last 14 days.")
-        lines.append("")
-    else:
-        lines.extend(_blocks(jobs))
-    return "\n".join(lines).rstrip() + "\n"
 
 
 def _read_store_doc():
