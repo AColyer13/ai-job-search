@@ -384,9 +384,8 @@ def test_unread_snippet_rows_are_withheld_and_counted_as_left_out():
     assert left_out == []
     assert [j["title"] for j in daily_digest.fit_jobs(rows)] == ["Solutions Engineer"]
     assert daily_digest.left_out_count(rows) == 2  # the low row and the unread Jooble row
-    upper, lows = daily_digest._split_for_doc(rows)
+    upper = daily_digest.type_sections(daily_digest.fit_jobs(rows))
     assert [j["title"] for s in upper for j in s["jobs"]] == ["Solutions Engineer"]
-    assert [j["title"] for s in lows for j in s["jobs"]] == ["Solutions Consultant"]
 
 
 def test_word_file_does_not_list_unread_snippet_rows(tmp_path):

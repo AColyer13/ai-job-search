@@ -822,14 +822,6 @@ def left_out_count(jobs):
     return len(listable(jobs)) - len(fit_jobs(jobs))
 
 
-def _split_for_doc(jobs):
-    """(high and medium sections, low sections). The Word files use only the first."""
-    listed = listable(jobs)
-    upper = [job for job in listed if (job.get("fit") or "low") != "low" and not is_unchecked(job)]
-    lows = [job for job in listed if (job.get("fit") or "low") == "low"]
-    return type_sections(upper), type_sections(lows)
-
-
 def _p(text, bold=False, size=22, space_after=80):
     """One Word paragraph. size is half-points (22 = 11pt)."""
     run = (
@@ -929,7 +921,7 @@ def write_docx(path, title, intro, jobs):
     body = [_p(title, bold=True, size=32, space_after=120)]
     for line in intro:
         body.append(_p(line, size=22, space_after=60))
-    upper, _lows = _split_for_doc(jobs)
+    upper = type_sections(fit_jobs(jobs))
     link_n = 10
     bookmark_id = 1
 
