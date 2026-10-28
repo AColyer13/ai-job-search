@@ -1,7 +1,7 @@
 ---
 name: job-application-assistant
 description: >
-  Assists with job applications: evaluating job postings, tailoring CVs, writing cover letters,
+  Assists with job applications: evaluating job postings, tailoring CVs,
   and preparing for interviews. Triggers on keywords like: job posting, job application, CV,
   cover letter, resume, interview prep, job fit, career, application, apply, ansøgning, stilling
 allowed-tools: Read, Glob, Grep, WebFetch, WebSearch, Edit, Write, AskUserQuestion
@@ -31,13 +31,7 @@ When the user provides a job posting (URL or text), follow this workflow:
 - Create `cv/main_<company>_<role>.tex` with tailored content
 - Adjust: profile statement, skills section, experience bullet emphasis, section order
 
-### Step 3: Write Cover Letter
-- Follow the writing style rules in `03-writing-style.md` (critical: no em-dashes, no cliches)
-- Follow the template structure in `06-cover-letter-templates.md`
-- Create `cover_letters/cover_<company>_<role>.tex`
-- Ensure the letter connects specific experience to the role requirements
-
-### Step 4: Interview Preparation
+### Step 3: Interview Preparation
 - Follow the framework in `07-interview-prep.md`
 - Prepare STAR-format answers for likely questions
 - Identify role-specific talking points
@@ -54,7 +48,6 @@ When the user provides a job posting (URL or text), follow this workflow:
 | `03-writing-style.md` | Tone, structure, do's and don'ts |
 | `04-job-evaluation.md` | Scoring framework for job fit |
 | `05-cv-templates.md` | LaTeX CV structure and tailoring rules |
-| `06-cover-letter-templates.md` | LaTeX cover letter structure and tailoring rules |
 | `07-interview-prep.md` | STAR examples, tough questions, roleplay guidelines |
 
 ---
@@ -64,6 +57,5 @@ When the user provides a job posting (URL or text), follow this workflow:
 The user may also ask for individual steps without the full workflow:
 - "Evaluate this job posting" - Step 1 only
 - "Write a CV for [company]" - Step 2 only
-- "Write a cover letter for [role] at [company]" - Step 3 only
 - "Help me prepare for an interview at [company]" - Step 4 only
 - "What jobs should I look for?" - Career strategy discussion using profile + evaluation framework

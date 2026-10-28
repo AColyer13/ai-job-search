@@ -26,7 +26,7 @@ Confirm the Gmail MCP tools (`mcp__claude_ai_Gmail__*`) are available. If not, t
 
 ## Step 2: Load State
 
-1. Read `job_search_tracker.csv`. If it does not exist, tell the user there is nothing to sync against yet (suggest `/outcome` or `/apply` first) and stop. Do not create it here - `/gmail-sync` never originates new applications, only updates existing ones.
+1. Read `job_search_tracker.csv`. If it does not exist, tell the user there is nothing to sync against yet (suggest `/outcome` first) and stop. Do not create it here - `/gmail-sync` never originates new applications, only updates existing ones.
 2. Read `gmail_sync/state.json` (create if missing: `{"last_sync": null, "processed_message_ids": []}`).
 3. Build the set of **open applications**: tracker rows whose `status` is not a final value (`hired`, `rejected`, `no response`, `offer declined`, `withdrawn`). For each, derive its archive folder `documents/applications/<company>_<role>/` (lowercase, underscores - same convention as `/outcome`) and check whether `outcome.md` exists there.
 4. If `$ARGUMENTS` named a company, filter this set to the matching row(s) (case-insensitive). No match → tell the user and stop, do not guess.
@@ -124,7 +124,7 @@ For every row the user approved:
    ```
    YYYY-MM-DD (via /gmail-sync): <one-line summary of what the email said>. Source: "<subject>" from <sender>, <email date>.
    ```
-3. If no archive folder/`outcome.md` exists yet for a matched application (it was added to the tracker outside `/apply`/`/outcome`), create the folder and a minimal `outcome.md` following the exact format in `documents/README.md`, same as `/outcome` would.
+3. If no archive folder/`outcome.md` exists yet for a matched application (it was added to the tracker outside `/outcome`), create the folder and a minimal `outcome.md` following the exact format in `documents/README.md`, same as `/outcome` would.
 
 Rows the user skipped are left untouched - no tracker write, no `outcome.md` write - but their message IDs are still marked processed in Step 8, so the same email isn't re-proposed every run.
 
@@ -165,8 +165,6 @@ Confirm what actually happened, distinct from the Step 6 proposal:
 ```
 
 If nothing was proposed this run, a brief note is enough instead of an empty summary.
-
-If this run pushed the count of applications with a **final** `outcome.md` status to 3+ (or resolved a second application sharing a pattern), suggest the same `/setup` Path A calibration handoff `/outcome` suggests - do not duplicate that logic, just point the user there.
 
 ---
 

@@ -2,7 +2,7 @@
 
 You are preparing the user for a real, scheduled interview on one of their applications. The frameworks for this already exist - `07-interview-prep.md` (STAR examples, tough questions, questions to ask, roleplay protocol) and the Company Research Checklist in `04-job-evaluation.md` - and the `/outcome` archive records which stage the user is at and what earlier stages surfaced. This command wires them together into a stage-specific prep pack and an optional mock interview.
 
-`/apply` optimizes what the company reads; `/interview` optimizes what the company hears. The bridge between them is consistency: the interviewer has read the submitted CV and cover letter, so everything prepared here must match what those documents claim.
+`/interview` optimizes what the company hears. The interviewer has read the submitted CV, so everything prepared here must match what it claims.
 
 Follow these steps **in order**.
 
@@ -62,7 +62,7 @@ Derive from four sources, in priority order:
 ### 2. STAR answer mapping
 Match the ready-made STAR examples in `07-interview-prep.md` to the likely questions using their "Use for" tags. Then:
 - For likely questions **no existing STAR example covers**, draft a new STAR answer grounded strictly in facts from `01-candidate-profile.md` - profile facts arranged into S/T/A/R, not embellished. Include these drafts in the prep pack; offer to append them to `07-interview-prep.md` only if the user explicitly approves.
-- If `/setup` left incomplete STAR stubs relevant to this role, surface them: the user should fill in the details before the interview.
+- If incomplete STAR stubs are relevant to this role, surface them: the user should fill in the details before the interview.
 
 ### 3. Consistency brief
 A short list of the specific claims the submitted CV and cover letter make (achievements, numbers, skills emphasized) that the interviewer is most likely to probe. The rule stated plainly: **no claim in the room that isn't on the paper, and every claim on the paper must be defensible in depth.**
@@ -84,7 +84,7 @@ Save the pack to `documents/applications/<company>_<role>/interview_prep_<stage>
 
 Ask if the user wants to practice. If yes, run the roleplay **in this conversation** following the Roleplay Guidelines in `07-interview-prep.md` exactly: warm-up first, then role-specific technical questions, 1-2 behavioral questions tied to the posting's competencies, and one tough question or curveball. After each answer, give brief feedback - what worked, what to sharpen, and which STAR example from the pack would have served better.
 
-Calibrate feedback against `02-behavioral-profile.md`: coach toward the user's natural register, not a generic ideal - the same voice-consistency rule the `/apply` reviewer applies to cover letters.
+Calibrate feedback against `02-behavioral-profile.md`: coach toward the user's natural register, not a generic ideal.
 
 ---
 
@@ -92,7 +92,7 @@ Calibrate feedback against `02-behavioral-profile.md`: coach toward the user's n
 
 End with:
 
-> Good luck. After the interview, run `/outcome <company>` to log the stage and any feedback - it sharpens the prep for the next round, and once the process resolves it feeds your fit-framework calibration via `/setup`.
+> Good luck. After the interview, run `/outcome <company>` to log the stage and any feedback - it sharpens the prep for the next round.
 
 If Step 3 drafted new STAR answers the user approved for keeps, remind them those were appended to `07-interview-prep.md` (or offer again if they deferred).
 

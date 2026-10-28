@@ -2,7 +2,7 @@
 name: scrape
 description: >
   Finds new job postings matching your profile via installed portal-search CLIs
-  (LinkedIn, local job boards, and any skills added with /add-portal). Deduplicates
+  (LinkedIn, local job boards). Deduplicates
   across runs. Triggers on: job scrape, find jobs, search jobs, new jobs, job search,
   scrape jobs, /scrape
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash(bun --version), Bash(bun run .agents/skills/*/cli/src/cli.ts *), WebFetch, WebSearch, Agent, AskUserQuestion
@@ -147,7 +147,7 @@ For each new job, do a rapid fit check (NOT the full evaluation from `04-job-eva
       "first_seen": "YYYY-MM-DD",
       "fit": "high/medium/low",
       "status": "new/skipped/evaluated/ranked/expired",
-      "portal": "<source portal skill, e.g. jobindex-search>"
+      "portal": "<source portal skill, e.g. linkedin-search>"
     }
   }
 }
@@ -246,7 +246,7 @@ LinkedIn search links:
 After presenting, ask:
 > "Want me to evaluate any of these in detail? Just give me the number(s)."
 
-If the user picks a number, invoke the **job-application-assistant** skill workflow (fit evaluation first, then CV + cover letter if approved).
+If the user picks a number, invoke the **job-application-assistant** skill workflow (fit evaluation first, then a tailored CV if approved).
 
 If the run found many new jobs (roughly 8+), also suggest `/rank` - it batch-scores all new postings against the full fit framework and returns a ranked shortlist, which beats eyeballing a long table. (`/rank` sets the `ranked` and `expired` status values in `seen_jobs.json`; treat both as already-seen for dedup purposes.)
 

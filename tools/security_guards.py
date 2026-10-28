@@ -36,20 +36,16 @@ errors: list[str] = []
 ALLOWED_PERMISSIONS = {
     "Skill(job-application-assistant)",
     "Bash(bun run:*)",
-    "Bash(python salary_lookup.py:*)",
-    "Bash(python3 salary_lookup.py:*)",
     "Bash(pdftotext:*)",
 }
 
 # Personal-data ignore rules that must never disappear from .gitignore.
 REQUIRED_IGNORE_RULES = [
-    "salary_data.json",
     # Depth-independent: the job-scraper skill resolves `job_scraper/` relative
     # to its own directory, so the state file lands under .claude/skills/... and
     # a repo-rooted rule silently fails to match it.
     "**/job_scraper/seen_jobs.json",
     "cv/main_*.tex",
-    "!cv/main_example.tex",
     "cover_letters/cover_*.tex",
     "documents/cv/**",
     "documents/linkedin/**",
@@ -63,14 +59,11 @@ REQUIRED_IGNORE_RULES = [
 # Negation (re-include) rules the template legitimately ships. .gitignore is
 # order-sensitive: a later `!pattern` re-includes a path an earlier rule
 # excluded, so a rule can be physically present in REQUIRED_IGNORE_RULES yet
-# no longer ignored (e.g. adding `!salary_data.json`). Set membership on the
+# no longer ignored (e.g. adding `!job_search_tracker.csv`). Set membership on the
 # required rules cannot see that. Any negation outside this allowlist is a
 # failure - add an intentional one here in the same PR, exactly as with
 # ALLOWED_PERMISSIONS, so the widening is explicit and reviewable.
 ALLOWED_IGNORE_NEGATIONS = {
-    "!cover_letters/OpenFonts/fonts/**",
-    "!cv/main_example.tex",
-    "!cover_letters/cover_example.tex",
     "!documents/**/.gitkeep",
     # job_scraper/*.md is ignored to keep run notes out of the repo; SOURCES.md
     # is curated documentation (no personal data) and is meant to be committed.

@@ -3,9 +3,9 @@
 You are recording what happened to a job application: progress updates (interview invitations, stages completed, offers) and final resolutions (hired, rejected, no response). The data lands in two places the framework already reads but nothing systematically writes:
 
 - `job_search_tracker.csv` - the status column that `/scrape` and `/rank` use for dedup and exclusion
-- `documents/applications/<company>_<role>/` - the per-application archive (posting, submitted drafts, `outcome.md`) that `/setup` Path A mines to calibrate `04-job-evaluation.md` and surface STAR candidates
+- `documents/applications/<company>_<role>/` - the per-application archive (posting, submitted drafts, `outcome.md`)
 
-`/outcome` writes the data; `/setup` interprets it. This command never edits the evaluation framework or profile files itself.
+This command never edits the evaluation framework or profile files itself.
 
 The command also owns the stretch *before* there is an outcome to record: the **follow-up branch** (Step 2b) surfaces open applications that have gone quiet, drafts a brief follow-up note in the user's voice, and logs it - so the chase and the resolution it eventually leads to live in one flow.
 
@@ -90,9 +90,9 @@ If the user decides not to send, log nothing.
 
 Create or update `documents/applications/<company>_<role>/`. All content here is personal data - the folder is already gitignored (`documents/applications/**`), so nothing needs redacting.
 
-1. **`cv_draft.tex` and `cover_letter.tex`** - copy (never move) the submitted files. Locate them via the tracker row's `cv_file`/`cover_letter_file` columns; if those are empty, look for `cv/main_<company>*.tex` and `cover_letters/cover_<company>_*.tex`. If a file already exists in the archive, leave it - the archived version is what was actually submitted. If no draft files exist (application made outside `/apply`), skip with a note.
+1. **The submitted resume** - copy (never move) the file named in the tracker row's `cv_file` column. If a file already exists in the archive, leave it - the archived version is what was actually submitted. If the column is empty, skip with a note.
 2. **`job_posting.md`** - if it already exists, leave it. Otherwise try WebFetch on the tracker row's `source` URL and save the posting text. If the URL is dead (postings expire fast - this is exactly why the archive matters), ask the user to paste the posting, or write a stub noting the posting is unavailable. **Never reconstruct a posting from memory.**
-3. **`outcome.md`** - write or update it in exactly the format documented in `documents/README.md`, so `/setup` Path A parses it without special cases:
+3. **`outcome.md`** - write or update it in exactly the format documented in `documents/README.md`:
 
 ```markdown
 # Outcome: <Company> — <Role>
@@ -129,9 +129,6 @@ Update the matched row's `status` column (e.g. `applied` → `interview` → `of
 
 Count the `outcome.md` files under `documents/applications/` with a **final** status (not `in_progress`).
 
-- If 3 or more are resolved (or 2+ share a pattern - same role type rejected twice, same sector going silent), suggest:
-  > "You now have <N> resolved applications on record. Run `/setup` (Path A) to fold them into your evaluation framework - it calibrates fit scoring from what actually got interviews, and mines your interview feedback for STAR examples."
-- Do **not** write anything into `04-job-evaluation.md` or other skill files yourself. `/setup` Path A owns that merge - it is read-before-write and idempotent, and duplicating its logic here would race it.
 
 ---
 
@@ -159,7 +156,7 @@ If the recorded status is `hired`, congratulate the user warmly first - this is 
 
 ## Important Rules
 
-1. **Write data, don't interpret it.** The archive and tracker are the outputs; calibration belongs to `/setup`. This command never edits profile or framework files.
+1. **Write data, don't interpret it.** The archive and tracker are the outputs. This command never edits profile or framework files.
 2. **The archived version is the submitted version.** Existing files in the application folder are never overwritten by fresher drafts.
 3. **Never fabricate.** A dead posting URL gets a user-pasted copy or an explicit "unavailable" stub, not a reconstruction. Feedback is recorded as the user reports it.
 4. **Stay schema-compatible.** `outcome.md` follows the format in `documents/README.md` exactly (`in_progress` is the one addition, for open applications); the tracker keeps its columns.

@@ -107,27 +107,9 @@ Does this role advance career goals and contain tasks that energize?
 - **Flexibility**: Prefers remote/hybrid; see location tiers in `01-candidate-profile.md` / CLAUDE.md Deal-breakers section for the acceptable commute/relocation radius
 - **Professional development**: Actively building a production-engineering track record post-bootcamp to support the sales-to-engineering transition narrative
 
-### 6. Salary Benchmark (Optional)
+### 6. Pay
 
-If the salary lookup tool is configured (`salary_data.json` exists), look up the company:
-```
-python salary_lookup.py "<Company Name>" --json
-```
-
-If a city is known from the posting, add `--city "<City>"` to narrow results.
-
-Present findings as:
-```
-### Salary Benchmark
-| Metric | Value |
-|--------|-------|
-| [Category] index | XX.X (+/-X.X% vs baseline) |
-| Overall index | XX.X (+/-X.X% vs baseline) |
-```
-
-Interpret results relative to the baseline defined in the data file's metadata. For index-based data, higher typically means above-market compensation.
-
-If the salary tool is not configured, skip this section.
+Use the pay stated in the posting (the daily list shows it as "Pay on the card"). If none is stated, say so; do not guess a figure.
 
 ## Output Format
 

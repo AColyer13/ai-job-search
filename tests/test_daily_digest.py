@@ -389,10 +389,8 @@ def test_unread_snippet_rows_are_withheld_and_counted_as_left_out():
     assert [j["title"] for s in lows for j in s["jobs"]] == ["Solutions Consultant"]
 
 
-def test_word_file_and_dashboard_do_not_list_unread_snippet_rows(tmp_path):
+def test_word_file_does_not_list_unread_snippet_rows(tmp_path):
     import zipfile
-
-    import html_report
 
     path = tmp_path / "withheld.docx"
     daily_digest.write_docx(path, "Test", ["Intro"], daily_digest.fit_jobs([UNREAD, READ]))
@@ -400,7 +398,10 @@ def test_word_file_and_dashboard_do_not_list_unread_snippet_rows(tmp_path):
     assert "Solutions Engineer" in xml
     assert "Sales Engineer" not in xml
     assert "jooble.org" not in zipfile.ZipFile(path).read("word/_rels/document.xml.rels").decode("utf-8")
-    page = html_report.render_page([UNREAD, READ, LOW], [], [], [], "2026-10-27")
-    assert "Sales Engineer" not in page
-    assert "Unchecked" not in page
-    assert "Medium: 1    Low: 1" in page
+
+
+def test_publish_writes_only_the_two_word_files():
+    import inspect
+
+    assert "html_report" not in inspect.getsource(daily_digest)
+    assert "dashboard" not in inspect.getsource(daily_digest._publish).lower()

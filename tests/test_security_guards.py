@@ -127,19 +127,19 @@ class GitignoreGuardTests(GuardRepoFixture):
 
 class GitignoreNegationTests(GuardRepoFixture):
     def test_negation_reincluding_personal_data_fails(self):
-        # .gitignore is order-sensitive: `!salary_data.json` after the
-        # `salary_data.json` rule re-includes the file, so the required rule is
+        # .gitignore is order-sensitive: `!job_search_tracker.csv` after the
+        # `job_search_tracker.csv` rule re-includes the file, so the required rule is
         # still present but no longer takes effect. Set membership on the
         # required rules cannot see this, so the negation must be rejected.
-        self.write_gitignore(list(security_guards.REQUIRED_IGNORE_RULES) + ["!salary_data.json"])
+        self.write_gitignore(list(security_guards.REQUIRED_IGNORE_RULES) + ["!job_search_tracker.csv"])
         result = run_guards(self.root)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("negation rule not in the reviewed allowlist", result.stdout)
-        self.assertIn("!salary_data.json", result.stdout)
+        self.assertIn("!job_search_tracker.csv", result.stdout)
 
     def test_allowlisted_negations_pass(self):
-        # The template's own benign negations (example CV/cover letter, fonts,
-        # .gitkeep placeholders) must keep passing.
+        # The template's own benign negations (.gitkeep placeholders, SOURCES.md)
+        # must keep passing.
         self.write_gitignore(
             list(security_guards.REQUIRED_IGNORE_RULES)
             + sorted(security_guards.ALLOWED_IGNORE_NEGATIONS)

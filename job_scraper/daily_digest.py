@@ -1219,7 +1219,7 @@ def _source_lines(sources):
 
 
 def _publish(day, store, log_text):
-    """Write the date file, latest.docx, and the HTML page. The date file is one day only."""
+    """Write the date file and latest.docx. The date file is one day only."""
     regrade_store(list(store.values()))
     apply_location_caps(list(store.values()))
     apply_board_shells(list(store.values()))
@@ -1251,14 +1251,7 @@ def _publish(day, store, log_text):
     latest_intro.extend(_source_lines(sources))
     dated = write_docx(DAILY / f"{day}.docx", "Adam Colyer job search", day_intro, day_jobs)
     latest = write_docx(DAILY / "latest.docx", "Adam Colyer job search", latest_intro, latest_jobs)
-    html_path = None
-    try:
-        import html_report
-
-        html_path = html_report.write_dashboard(store, sources, day)
-    except Exception as exc:
-        print(f"Dashboard was not written: {exc}")
-    return dated, latest, html_path
+    return dated, latest
 
 
 def write_backfill_files(store):
@@ -1319,21 +1312,17 @@ def main():
     if not args.from_existing:
         code, log_text = run_pipeline(["--window-days", str(args.backfill + 1)] if args.backfill else [])
         if code != 0 and not cand_path.exists():
-            dated, latest, html_path = _publish(day, store, log_text + f"\nThe scrape exited {code}. See daily/run.log.")
+            dated, latest = _publish(day, store, log_text + f"\nThe scrape exited {code}. See daily/run.log.")
             print(dated)
             print(latest)
-            if html_path:
-                print(html_path)
             return code
     if cand_path.exists():
         doc = json.loads(cand_path.read_text(encoding="utf-8"))
         merge_jobs(store, doc.get("new") or [], day)
     elif not store:
-        dated, latest, html_path = _publish(day, store, log_text + f"\nNo candidates file at {cand_path}.")
+        dated, latest = _publish(day, store, log_text + f"\nNo candidates file at {cand_path}.")
         print(dated)
         print(latest)
-        if html_path:
-            print(html_path)
         return 1
     store, _removed = prune_jobs(store, today)
     print(f"duplicate jobs removed from the store: {collapse_store(store)}")
@@ -1345,13 +1334,11 @@ def main():
                     row["date"] = (job.get("date") or "")[:10]
         moved = backfill_found_on(store, today, args.backfill)
         print("backfilled by posting date:", dict(sorted(moved.items())))
-    dated, latest, html_path = _publish(day, store, log_text)
+    dated, latest = _publish(day, store, log_text)
     if args.backfill:
         write_backfill_files(store)
     print(dated)
     print(latest)
-    if html_path:
-        print(html_path)
     return 0
 
 

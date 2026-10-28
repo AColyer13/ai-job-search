@@ -1,8 +1,8 @@
 # /rank - Triage Scraped Jobs into a Ranked Shortlist
 
-You are batch-scoring the jobs that `/scrape` has collected, so the user can decide where to spend `/apply` effort. `/scrape` finds and dedupes postings; `/apply` evaluates one at a time in depth. `/rank` is the bridge: it scores every new posting against the fit framework and returns a ranked shortlist.
+You are batch-scoring the jobs that `/scrape` has collected, so the user can decide where to spend application effort. `/scrape` finds and dedupes postings. `/rank` it scores every new posting against the fit framework and returns a ranked shortlist.
 
-`/rank` produces **triage scores**, not final evaluations. It scores from the posting text and the candidate profile only - no company research, no reviewer agent. `/apply`'s Step 1 evaluation (which adds company research) remains authoritative and always re-runs when the user applies.
+`/rank` produces **triage scores**, not final evaluations. It scores from the posting text and the candidate profile only - no company research, no reviewer agent. A full evaluation with company research is a separate step before anything is drafted.
 
 Follow these steps **in order**.
 
@@ -35,11 +35,11 @@ State how many jobs will be ranked before proceeding.
 
 ## Step 2: Batch-Fetch and Score
 
-Dispatch parallel `general-purpose` agents via the **Agent tool**, ~5 jobs per agent (a single agent is fine for ≤5 jobs). Token-efficiency rules, consistent with `/apply`:
+Dispatch parallel `general-purpose` agents via the **Agent tool**, ~5 jobs per agent (a single agent is fine for ≤5 jobs). Token-efficiency rules:
 
 - Pass each agent everything it needs **inline in the prompt** - the job list (title, company, URL) and a compact scoring rubric extracted from the files you read in Step 1: the strong/moderate/weak skill match areas, direct/adjacent experience domains, behavioral thrive/drain factors, career goals, deal-breakers, and the location constraints. Do **not** make agents re-read the profile files.
 - Agents fetch each posting URL with WebFetch and score **only from actually fetched content**. If a URL is dead, redirects to a listing page, or the posting has expired, the agent marks that job `expired` - it never scores from the title alone and never fabricates posting content.
-- Scope is triage: posting text vs. rubric. **No company research, no salary lookup, no web searches** - that depth belongs to `/apply`.
+- Scope is triage: posting text vs. rubric. **No company research, no salary lookup, no web searches** - that depth belongs to the full evaluation.
 
 Each agent returns a JSON array, one object per job:
 
@@ -112,9 +112,8 @@ Ranked <N> new postings (<X> shortlisted, <Y> below threshold, <Z> expired/vetoe
 Rules for the presentation:
 
 - Every claim traces to fetched posting text or the profile - no invented details.
-- Say explicitly that these are **triage scores from the posting text only**, and that `/apply` will re-evaluate with company research before anything is drafted.
-- Then ask: "Want to apply to any of these? Give me the number(s) and I'll start with the full `/apply` workflow."
-- If the user picks one, run the `/apply` workflow on that job's URL, passing the triage verdict as prior context but **re-running the full Step 1 evaluation** - triage never substitutes for it.
+- Say explicitly that these are **triage scores from the posting text only**, and that a full evaluation with company research comes before anything is drafted.
+- Then ask which of these the user wants to apply to. Triage never substitutes for the full evaluation.
 
 ---
 
