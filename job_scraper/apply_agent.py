@@ -1,0 +1,675 @@
+"""Apply to Greenhouse, Lever and Ashby jobs with Adam approving every submit on Telegram.
+
+    python job_scraper/apply_agent.py queue [--day YYYY-MM-DD] [--fit high,medium] [--limit 10]
+    python job_scraper/apply_agent.py serve [--for MINUTES] [--idle-exit] [--dry-run] [--headed]
+    python job_scraper/apply_agent.py run   [--for MINUTES] [--dry-run]    queue, then serve until idle
+    python job_scraper/apply_agent.py status
+    python job_scraper/apply_agent.py selftest        send a button and wait for your tap
+
+One job is worked at a time. For each:
+
+    1. A browser opens the application form and reads its fields. Nothing is typed yet.
+    2. Answers come from your profile and from questions you already answered (daily/apply_answers.json).
+       An essay or cover letter is drafted by the model from the resume. Anything only you know is asked
+       on Telegram, with buttons when the form gives a list of choices.
+    3. You get the full summary with [Submit] [Skip] [I'll do it]. Nothing is sent before you tap Submit.
+       Reply with text to replace a draft (start with "2:" to replace the second one).
+    4. On Submit a fresh browser fills the form again, checks nothing new is required, clicks submit and
+       reads the confirmation. The result is written to the applied log (applied, by AI).
+
+Anything the agent cannot do goes to Recommended in the applied log with the reason, and you get a
+message: a login or account, a CAPTCHA or code prompt, a closed posting, a required file it does not
+have, a question you declined, no AI provider to draft with, or a form that changed after you approved.
+If a submit click gets no confirmation the job is logged as Recommended (not Applied) so nothing is
+claimed that was not seen; check your email before applying again.
+
+Nothing is assumed. Facts come only from the profile and from answers you gave before (and every one is
+shown in the summary before you approve). A required question the agent cannot answer from those is asked
+on Telegram. After APPLY_NUDGE_HOURS (default 3) without a reply you get one reminder.
+
+Every fit job (high and medium) is tried. The hourly digest starts this agent by itself after it finishes
+(`run --for 58`); set APPLY_AGENT=0 in .env to turn that off. Taps and replies are only read while the
+agent is running, and Telegram holds them until it starts again.
+
+State is in daily/apply_state.json. Only one `serve` runs at a time (daily/apply_agent.lock). A job
+waiting on you for more than APPLY_WAIT_HOURS (default 24) is handed back as Recommended.
+"""
+import argparse
+import contextlib
+import hashlib
+import html
+import json
+import os
+import re
+import sys
+import time
+import urllib.parse
+from datetime import date
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import agent_runner  # noqa: E402
+import apply_answers  # noqa: E402
+import apply_forms  # noqa: E402
+import daily_digest  # noqa: E402
+import telegram_notify  # noqa: E402
+
+ROOT = daily_digest.ROOT
+STATE_PATH = daily_digest.DAILY / "apply_state.json"
+LOCK_PATH = daily_digest.DAILY / "apply_agent.lock"
+SHOT_DIR = daily_digest.DAILY / "apply_shots"
+LETTER_DIR = ROOT / "cover_letters"
+OPEN = ("queued", "preparing", "asking", "ready", "submitting")
+WAITING = ("asking", "ready")
+LOCK_STALE_SECONDS = 1800
+MAX_BUTTON_OPTIONS = 8
+ATS_LABEL = {"greenhouse": "Greenhouse form", "lever": "Lever form", "ashby": "Ashby form"}
+
+
+def esc(text):
+    return html.escape(str(text), quote=False)
+
+
+def job_id(url):
+    return hashlib.sha1(daily_digest._key(url).encode()).hexdigest()[:8]
+
+
+def digest(answers):
+    return hashlib.sha1(json.dumps(answers, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def clip(text, n=160):
+    text = " ".join(str(text).split())
+    return text if len(text) <= n else text[: n - 1] + "…"
+
+
+# ---------------------------------------------------------------- Telegram, browser and log wrappers
+
+class Telegram:
+    """What the agent needs from Telegram. Tests pass a fake with the same three methods."""
+
+    def __init__(self, env=None):
+        self.env = telegram_notify.read_env() if env is None else env
+
+    def send(self, text, buttons=None):
+        result = telegram_notify.send_message(text[: telegram_notify.MESSAGE_LIMIT], self.env, buttons=buttons)
+        return (result or {}).get("message_id")
+
+    def poll(self, wait=0):
+        return telegram_notify.poll(self.env, wait=wait)
+
+    def answer(self, callback_id, text="Got it"):
+        telegram_notify.answer_button(callback_id, text, self.env)
+
+
+@contextlib.contextmanager
+def open_browser(headed=False):
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=not headed)
+        try:
+            context = browser.new_context(viewport={"width": 1280, "height": 1800}, locale="en-US")
+            yield context.new_page()
+        finally:
+            browser.close()
+
+
+def log_result(job, status, reason=None, cover_letter=None, note=None, resume=None):
+    """Write the outcome to the applied log (daily/applied_for.*) through its own CLI. Returns True when it worked."""
+    import applied_log
+    argv = ["add", "--url", job["url"], "--status", status]
+    if job.get("title"):
+        argv += ["--title", job["title"]]
+    if job.get("company"):
+        argv += ["--company", job["company"]]
+    if job.get("fit") in applied_log.FIT_ORDER:
+        argv += ["--fit", job["fit"]]
+    if job.get("fit_score") is not None:
+        argv += ["--score", str(job["fit_score"])]
+    if status == "applied":
+        argv += ["--method", ATS_LABEL.get(job.get("ats"), "Online form") + " (AI, approved on Telegram)"]
+        if resume:
+            argv += ["--resume", resume]
+        if cover_letter:
+            argv += ["--cover-letter", cover_letter]
+    else:
+        argv += ["--reason", reason or "Needs you to apply by hand"]
+    if note:
+        argv += ["--note", note]
+    return applied_log.main(argv) == 0
+
+
+# ---------------------------------------------------------------- the agent
+
+class Agent:
+    def __init__(self, tg, state_path=None, forms=apply_forms, runner=agent_runner.run_agent,
+                 log=log_result, browser=open_browser, profile=None, bank_path=None,
+                 dry_run=False, headed=False, letter_dir=None, shot_dir=None, now=time.time):
+        self.tg, self.forms, self.runner, self.log = tg, forms, runner, log
+        self.browser_factory, self.dry_run, self.headed, self.now = browser, dry_run, headed, now
+        self.state_path = Path(state_path or STATE_PATH)
+        self.bank_path = bank_path
+        self.profile = profile
+        self.letter_dir = Path(letter_dir or LETTER_DIR)
+        self.shot_dir = Path(shot_dir or SHOT_DIR)
+        self.wait_seconds = float(os.environ.get("APPLY_WAIT_HOURS") or 24) * 3600
+        self.nudge_seconds = float(os.environ.get("APPLY_NUDGE_HOURS") or 3) * 3600
+        self.jobs = self._load()
+
+    # ---- state
+    def _load(self):
+        try:
+            return json.loads(self.state_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+
+    def save(self):
+        self.state_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.state_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(self.jobs, indent=1, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(self.state_path)
+
+    def browser(self):
+        return self.browser_factory(self.headed) if self.browser_factory is open_browser else self.browser_factory()
+
+    def say(self, text, buttons=None):
+        try:
+            return self.tg.send(text, buttons)
+        except telegram_notify.TelegramError as e:
+            print(f"telegram send failed: {e}", file=sys.stderr)
+            return None
+
+    def title_of(self, job):
+        return f"<b>{esc(job.get('title') or 'Untitled')}</b> at {esc(job.get('company') or 'company not listed')}"
+
+    # ---- queue
+    def queue(self, candidates, limit=10, fits=("high", "medium"), hand_off_rest=False):
+        """Add jobs on a supported ATS that are not already known or in the applied log. Returns the new job records.
+
+        With hand_off_rest, a fit job on any other site goes straight to Recommended (one summary message),
+        because the agent only knows Greenhouse, Lever and Ashby forms.
+        """
+        import applied_log
+        applied = {daily_digest._key(e.get("url")) for e in applied_log.load_log().values()}
+        added, other = [], []
+        for j in candidates:
+            url = daily_digest.apply_link(j)
+            if (j.get("fit") or "low") not in fits or not url:
+                continue
+            jid = job_id(url)
+            if jid in self.jobs or daily_digest._key(url) in applied:
+                continue
+            ats = self.forms.detect_ats(url)
+            rec = {"id": jid, "url": self.forms.clean_url(url) if ats else url, "title": j.get("title"),
+                   "company": j.get("company"), "fit": j.get("fit"), "fit_score": j.get("fit_score"),
+                   "ats": ats, "description": (j.get("description") or "")[:3500], "status": "queued",
+                   "created": self.now(), "updated": self.now(), "answers": {}, "fields": {}, "pending": [],
+                   "drafts": {}, "asked": None, "ver": 0}
+            if ats:
+                if len(added) < limit:
+                    self.jobs[jid] = rec
+                    added.append(rec)
+            elif hand_off_rest:
+                host = urllib.parse.urlparse(url).netloc or "another site"
+                rec["status"], rec["reason"] = "handed_off", f"Applies on {host}, which the agent cannot fill (it knows Greenhouse, Lever and Ashby)."
+                self.jobs[jid] = rec
+                other.append(rec)
+        self.save()
+        for rec in other:
+            self.log(rec, "recommended", reason=rec["reason"])
+        if added or other:
+            self.say(f"Apply agent: {len(added)} job(s) I will try to apply to"
+                     + (f", {len(other)} on other sites saved under Recommended" if other else "")
+                     + ". I will message you here for anything I need, and nothing is sent until you tap Submit.")
+        return added
+
+    def open_jobs(self):
+        return [j for j in self.jobs.values() if j["status"] in OPEN]
+
+    def active(self):
+        return next((j for j in self.jobs.values() if j["status"] in WAITING), None)
+
+    def set_status(self, job, status):
+        job["status"], job["updated"] = status, self.now()
+        self.save()
+
+    # ---- finishing a job
+    def handoff(self, job, reason, extra=""):
+        """Give the job to Adam: log it as Recommended with the reason and say so on Telegram."""
+        self.set_status(job, "handed_off")
+        job["reason"] = reason
+        logged = self.log(job, "recommended", reason=reason)
+        link = self.forms.application_url(job["url"]) if job.get("url") else ""
+        self.say(f"<b>Over to you:</b> {self.title_of(job)}\n{esc(reason)}{extra}\n"
+                 + (f'<a href="{esc(link)}">Open the application</a>\n' if link else "")
+                 + ("Saved under Recommended." if logged else "I could not write it to the applied log, so note it yourself."))
+        self.save()
+
+    def skip(self, job):
+        self.set_status(job, "skipped")
+        self.say(f"Skipped {self.title_of(job)}. It will not come back.")
+
+    # ---- step 1 and 2: read the form, fill in what we know, draft, ask
+    def prepare(self, job):
+        self.set_status(job, "preparing")
+        profile = self.profile or apply_answers.load_profile()
+        bank = apply_answers.load_bank(self.bank_path)
+        if not Path(profile["resume_pdf"]).exists():
+            return self.handoff(job, f"The resume PDF is missing: {profile['resume_pdf']}")
+        try:
+            with self.browser() as page:
+                form = self.forms.discover(page, job["url"])
+                job["form_url"] = form.url
+                if form.blocker:
+                    return self.handoff(job, f"The page needs a human step ({form.blocker}).")
+                plan = [(f, *apply_answers.resolve(f, profile, bank)) for f in form.fields]
+                letter = self._draft_all(job, plan, page, profile)
+        except self.forms.FormError as e:
+            return self.handoff(job, str(e))
+        except Exception as e:  # noqa: BLE001 - browser trouble must not stop the agent
+            return self.handoff(job, f"Could not read the form ({type(e).__name__}).")
+        if letter is False:
+            return None
+        job["pending"] = [k for k, m in job["fields"].items() if m["outcome"] == "ask" and k not in job["answers"]]
+        self.save()
+        return self.next_step(job)
+
+    def _draft_all(self, job, plan, page, profile):
+        """Fill job['answers'] and job['fields'] from the plan. Returns False if the job was handed off."""
+        posting = {"title": job.get("title"), "company": job.get("company"), "description": job.get("description")}
+        for f, outcome, value, source in plan:
+            meta = {"label": f.label, "kind": f.kind, "required": f.required, "options": list(f.options),
+                    "outcome": outcome}
+            job["fields"][f.key] = meta
+            if outcome in ("fill", "consent"):
+                job["answers"][f.key] = value
+            elif outcome == "draft":
+                is_letter = bool(re.search(r"cover letter|letter", f.key))
+                question = (f"Write a cover letter for the {job.get('title')} role at {job.get('company')}."
+                            if is_letter else f.label)
+                text, provider = apply_answers.draft(question, posting, self.runner,
+                                                     "cover letter" if is_letter else "answer")
+                if text is None:
+                    if provider.startswith("no AI provider"):
+                        self.handoff(job, f"{provider}. Required: {clip(f.label, 80)}")
+                        return False
+                    meta["outcome"] = "ask"  # needs facts only Adam has
+                    continue
+                job["drafts"][f.key] = {"label": f.label, "text": text, "provider": provider, "letter": is_letter and f.kind == "file"}
+                if is_letter and f.kind == "file":
+                    job["answers"][f.key] = self._letter_pdf(job, text, profile, page)
+                else:
+                    job["answers"][f.key] = text
+        return True
+
+    def _letter_pdf(self, job, text, profile, page):
+        path = self.letter_dir / f"apply_{job['id']}.pdf"
+        other = page.context.new_page() if hasattr(page, "context") else page
+        try:
+            self.forms.render_pdf(other, path, profile["full_name"],
+                                  f"{profile['email']} | {profile['phone']} | {profile['location']}",
+                                  date.today().strftime("%B %d, %Y").replace(" 0", " "), text)
+        finally:
+            if other is not page:
+                other.close()
+        job["cover_letter"] = str(path)
+        return str(path)
+
+    # ---- asking
+    def next_step(self, job):
+        if job["pending"]:
+            return self.ask(job)
+        return self.approval(job)
+
+    def ask(self, job):
+        key = job["pending"][0]
+        meta = job["fields"][key]
+        job["asked"] = key
+        self.set_status(job, "asking")
+        options = meta["options"][:MAX_BUTTON_OPTIONS] if 0 < len(meta["options"]) <= MAX_BUTTON_OPTIONS else []
+        if meta["kind"] == "checkbox" and not meta["options"]:
+            options = ["Yes", "No"]
+        meta["shown_options"] = options
+        buttons = [[(clip(o, 40), f"a:{job['id']}:{i}")] for i, o in enumerate(options)]
+        buttons.append([("Skip this job", f"x:{job['id']}"), ("I'll do it", f"h:{job['id']}")])
+        hint = "" if options else "\nReply with your answer."
+        self.say(f"{self.title_of(job)}\n<b>Question:</b> {esc(meta['label'])}"
+                 + (" (required)" if meta["required"] else "") + hint, buttons)
+        self.save()
+
+    def record_answer(self, job, raw):
+        """Store Adam's answer to the asked question. Returns an error text to show him, or None."""
+        key = job["asked"]
+        meta = job["fields"][key]
+        value = raw
+        if meta["kind"] == "checkbox" and not meta["options"]:
+            if normalize_yes_no(raw) is not True:
+                return self.handoff(job, f"You declined a required checkbox: {clip(meta['label'], 100)}") or "handed off"
+            value = True
+        elif meta["options"]:
+            value = self.forms.best_option(meta["options"], raw)
+            if value is None:
+                return "That does not match any choice on the form. Tap a button or type one of them."
+        job["answers"][key] = value
+        if not isinstance(value, bool):
+            apply_answers.save_to_bank(key, meta["label"], value, path=self.bank_path)
+        job["pending"].remove(key)
+        job["asked"] = None
+        self.save()
+        return None
+
+    # ---- approval
+    def approval(self, job):
+        job["ver"] += 1
+        self.set_status(job, "ready")
+        profile = self.profile or apply_answers.load_profile()
+        lines = [f"<b>Ready to submit:</b> {self.title_of(job)}",
+                 f"{(job.get('fit') or '').upper()} fit | {ATS_LABEL.get(job['ats'], job['ats'])}"
+                 + (" | DRY RUN, will not click submit" if self.dry_run else "")]
+        for key, value in job["answers"].items():
+            meta = job["fields"].get(key, {})
+            if key in job["drafts"]:
+                continue
+            if value is True:
+                lines.append(f"- {esc(clip(meta.get('label', key), 70))}: will tick")
+            elif isinstance(value, str) and re.search(r"\.(pdf|docx?)$", value, re.I):
+                lines.append(f"- {esc(clip(meta.get('label', key), 40))}: file {esc(Path(value).name)}")
+            else:
+                lines.append(f"- {esc(clip(meta.get('label', key), 50))}: {esc(clip(value, 120))}")
+        self.say("\n".join(lines))
+        drafts = list(job["drafts"].items())
+        for n, (key, d) in enumerate(drafts, 1):
+            self.say(f"<b>Draft {n}: {esc(clip(d['label'], 80))}</b> (written by {esc(d['provider'])})\n{esc(d['text'])}")
+        tail = "Tap Submit to send it."
+        if drafts:
+            tail += ' Reply with text to replace draft 1, or start with "2:" for draft 2.'
+        buttons = [[("Submit", f"s:{job['id']}:{job['ver']}"), ("Skip", f"x:{job['id']}"),
+                    ("I'll do it", f"h:{job['id']}")]]
+        self.say(tail, buttons)
+
+    def replace_draft(self, job, text):
+        m = re.match(r"^\s*(\d+)\s*[:.)]\s*(.+)$", text, re.S)
+        n, body = (int(m.group(1)), m.group(2).strip()) if m else (1, text.strip())
+        keys = list(job["drafts"])
+        if not keys or not 1 <= n <= len(keys):
+            return self.say("There is no such draft to replace.")
+        key = keys[n - 1]
+        job["drafts"][key]["text"], job["drafts"][key]["provider"] = body, "you"
+        if job["drafts"][key]["letter"]:
+            profile = self.profile or apply_answers.load_profile()
+            try:
+                with self.browser() as page:
+                    job["answers"][key] = self._letter_pdf(job, body, profile, page)
+            except Exception as e:  # noqa: BLE001
+                return self.say(f"I could not rebuild the cover letter PDF ({esc(type(e).__name__)}). Try again.")
+        else:
+            job["answers"][key] = body
+        self.approval(job)
+
+    # ---- step 3: the approved submit
+    def submit_job(self, job):
+        self.set_status(job, "submitting")
+        answers = job["answers"]
+        shots = self.shot_dir
+        try:
+            with self.browser() as page:
+                form = self.forms.discover(page, job["url"])
+                if form.blocker:
+                    return self.handoff(job, f"The page now needs a human step ({form.blocker}).")
+                missing = [f.label or f.key for f in form.fields if f.required and f.key not in answers]
+                if missing:
+                    return self.handoff(job, "The form changed after you approved it and now asks: "
+                                        + "; ".join(clip(m, 60) for m in missing[:4]))
+                errors = self.forms.fill(page, form, answers)
+                required_bad = {k: v for k, v in errors.items() if any(f.key == k and f.required for f in form.fields)}
+                if required_bad:
+                    k, v = next(iter(required_bad.items()))
+                    return self.handoff(job, f"Could not fill a required field ({clip(k, 60)}): {clip(v, 100)}")
+                shot = self.forms.screenshot(page, shots / f"{job['id']}-filled.png")
+                if self.dry_run:
+                    self.set_status(job, "dry_run")
+                    return self.say(f"Dry run for {self.title_of(job)}: the form filled without errors"
+                                    + (f" ({len(errors)} optional field(s) failed)" if errors else "")
+                                    + f". Nothing was submitted. Screenshot: {esc(shot)}")
+                status, detail = self.forms.submit(page)
+                self.forms.screenshot(page, shots / f"{job['id']}-after.png")
+        except self.forms.FormError as e:
+            return self.handoff(job, f"Submit stopped: {e}")
+        except Exception as e:  # noqa: BLE001
+            return self.handoff(job, f"Something broke before the result was known ({type(e).__name__}). "
+                                "Check your email for a confirmation before applying again.")
+        self.finish_submit(job, status, detail)
+
+    def finish_submit(self, job, status, detail):
+        profile = self.profile or apply_answers.load_profile()
+        if status == "submitted":
+            self.set_status(job, "applied")
+            logged = self.log(job, "applied", cover_letter=job.get("cover_letter"), resume=profile["resume_pdf"],
+                              note=f"Approved on Telegram; {len(job['drafts'])} draft(s)" if job["drafts"] else "Approved on Telegram")
+            self.say(f"<b>Submitted:</b> {self.title_of(job)}\nLogged as Applied." if logged
+                     else f"<b>Submitted:</b> {self.title_of(job)}\nThe applied log write failed. Add it by hand.")
+        elif status == "unknown":
+            self.handoff(job, f"I clicked submit but saw no confirmation ({detail}). It may have gone through; "
+                              "check your email before applying again.")
+        else:  # blocked or invalid
+            self.handoff(job, f"The form did not accept it ({status}): {clip(detail, 200)}")
+
+    # ---- events
+    def handle(self, ev):
+        if ev["type"] == "button":
+            return self.on_button(ev)
+        return self.on_text(ev["text"])
+
+    def on_button(self, ev):
+        parts = ev["data"].split(":")
+        kind, jid = parts[0], parts[1] if len(parts) > 1 else ""
+        job = self.jobs.get(jid)
+        ack = lambda text: self.tg.answer(ev.get("callback_id"), text)  # noqa: E731
+        if not job or job["status"] not in WAITING:
+            return ack("That one is no longer waiting")
+        if kind == "x":
+            ack("Skipped")
+            return self.skip(job)
+        if kind == "h":
+            ack("Over to you")
+            return self.handoff(job, "You chose to apply by hand.")
+        if kind == "a" and job["status"] == "asking" and len(parts) > 2:
+            options = job["fields"][job["asked"]].get("shown_options") or []
+            try:
+                choice = options[int(parts[2])]
+            except (ValueError, IndexError):
+                return ack("That button is out of date")
+            ack(clip(choice, 40))
+            return self.after_answer(job, choice)
+        if kind == "s" and job["status"] == "ready" and len(parts) > 2:
+            if parts[2] != str(job["ver"]):
+                return ack("That summary is out of date. Use the newest one.")
+            ack("Submitting")
+            self.say(f"Submitting {self.title_of(job)}…")
+            return self.submit_job(job)
+        ack("Nothing to do")
+
+    def after_answer(self, job, raw):
+        error = self.record_answer(job, raw)
+        if job["status"] == "handed_off":
+            return
+        if error:
+            return self.say(esc(error))
+        self.next_step(job)
+
+    def on_text(self, text):
+        text = text.strip()
+        job = self.active()
+        if text.lower().startswith("/status"):
+            return self.say(self.status_text())
+        if not job:
+            return self.say("Nothing is waiting for your answer.")
+        if text.lower().startswith("/skip"):
+            return self.skip(job)
+        if job["status"] == "asking":
+            return self.after_answer(job, text)
+        if job["status"] == "ready":
+            return self.replace_draft(job, text)
+
+    # ---- loop
+    def recover(self):
+        """A job left 'submitting' by a crash may or may not have gone through. Never retry it."""
+        for job in list(self.jobs.values()):
+            if job["status"] in ("submitting", "preparing"):
+                if job["status"] == "submitting":
+                    self.handoff(job, "The agent stopped while submitting this one. It may have gone through; "
+                                      "check your email before applying again.")
+                else:
+                    self.set_status(job, "queued")
+
+    def expire(self):
+        for job in list(self.jobs.values()):
+            if job["status"] not in WAITING:
+                continue
+            waited = self.now() - job["updated"]
+            if waited > self.wait_seconds:
+                self.handoff(job, f"No reply in {self.wait_seconds / 3600:g} hours, so I stopped waiting.")
+            elif waited > self.nudge_seconds and not job.get("nudged"):
+                since, job["nudged"] = job["updated"], True
+                self.say(f"Still waiting on you for {self.title_of(job)} ({waited / 3600:.0f}h). Question or summary again:")
+                (self.ask if job["status"] == "asking" else self.approval)(job)
+                job["updated"] = since  # the 24 hour clock keeps running from the first message
+                self.save()
+
+    def advance(self):
+        """Start the next queued job when nobody is waiting on an answer. True if it did something."""
+        if self.active():
+            return False
+        queued = next((j for j in self.jobs.values() if j["status"] == "queued"), None)
+        if not queued:
+            return False
+        self.prepare(queued)
+        return True
+
+    def status_text(self):
+        if not self.jobs:
+            return "No jobs in the apply queue."
+        rows = [f"{esc(j['status'])}: {esc(clip(j.get('title') or '', 50))} at {esc(clip(j.get('company') or '', 30))}"
+                for j in self.jobs.values() if j["status"] in OPEN or j["status"] == "dry_run"]
+        counts = {}
+        for j in self.jobs.values():
+            counts[j["status"]] = counts.get(j["status"], 0) + 1
+        return "\n".join(rows + ["Totals: " + ", ".join(f"{n} {s}" for s, n in sorted(counts.items()))])
+
+    def serve(self, minutes=None, idle_exit=False, wait=25):
+        deadline = self.now() + minutes * 60 if minutes else None
+        self.recover()
+        while True:
+            touch_lock()
+            self.expire()
+            worked = self.advance()
+            if not worked and idle_exit and not self.open_jobs():
+                return
+            if deadline and self.now() > deadline:
+                return
+            try:
+                events = self.tg.poll(0 if worked else wait)
+            except telegram_notify.TelegramError as e:
+                print(f"telegram poll failed: {e}", file=sys.stderr)
+                time.sleep(5)
+                continue
+            for ev in events:
+                self.handle(ev)
+
+
+def normalize_yes_no(text):
+    t = str(text).strip().lower()
+    if t in ("yes", "y", "yep", "true", "ok", "sure", "agree"):
+        return True
+    if t in ("no", "n", "nope", "false"):
+        return False
+    return None
+
+
+# ---------------------------------------------------------------- lock and CLI
+
+def acquire_lock(path=None):
+    path = Path(path or LOCK_PATH)
+    if path.exists() and time.time() - path.stat().st_mtime < LOCK_STALE_SECONDS:
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(str(os.getpid()), encoding="utf-8")
+    return True
+
+
+def touch_lock(path=None):
+    path = Path(path or LOCK_PATH)
+    if path.exists():  # only the process that took the lock keeps it fresh
+        with contextlib.suppress(OSError):
+            path.touch()
+
+
+def release_lock(path=None):
+    with contextlib.suppress(OSError):
+        Path(path or LOCK_PATH).unlink()
+
+
+def candidates(day=None):
+    store = daily_digest.load_store()
+    jobs = daily_digest.fit_jobs(daily_digest.jobs_found_on(store, day or date.today().isoformat()))
+    return sorted(jobs, key=telegram_notify._rank)
+
+
+def selftest(tg, wait=180):
+    """Send a message with a button and wait for the tap. Proves Telegram works in both directions."""
+    tg.poll(0)  # drop taps from earlier tests so they cannot pass this one
+    tg.send("Tap the button to confirm the apply agent can hear you.", [[("Tap me", "t:selftest")]])
+    deadline = time.time() + wait
+    while time.time() < deadline:
+        for ev in tg.poll(20):
+            if ev["type"] == "button" and ev["data"] == "t:selftest":
+                tg.answer(ev.get("callback_id"), "Heard you")
+                tg.send("Heard you. Buttons work both ways.")
+                return True
+    return False
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("cmd", choices=("queue", "serve", "run", "status", "selftest"))
+    ap.add_argument("--day")
+    ap.add_argument("--fit", default=os.environ.get("APPLY_FIT", "high,medium"))
+    ap.add_argument("--limit", type=int, default=10)
+    ap.add_argument("--for", dest="minutes", type=float)
+    ap.add_argument("--idle-exit", action="store_true")
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--headed", action="store_true")
+    args = ap.parse_args(argv)
+    fits = tuple(f.strip() for f in args.fit.split(",") if f.strip())
+    try:
+        tg = Telegram()
+        if args.cmd == "selftest":
+            ok = selftest(tg)
+            print("Button tap received." if ok else "No tap received in time.")
+            return 0 if ok else 1
+        agent = Agent(tg, dry_run=args.dry_run, headed=args.headed)
+        if args.cmd == "status":
+            print(re.sub(r"<[^>]+>", "", html.unescape(agent.status_text())))
+            return 0
+        if args.cmd in ("queue", "run"):
+            added = agent.queue(candidates(args.day), limit=args.limit, fits=fits, hand_off_rest=True)
+            for j in added:
+                print(f"queued: {j['title']} | {j['company']} | {j['ats']}")
+            print(f"{len(added)} job(s) queued")
+            if args.cmd == "queue":
+                return 0
+        if not acquire_lock():
+            print("Another apply agent is running (daily/apply_agent.lock is fresh).")
+            return 1
+        try:
+            agent.serve(minutes=args.minutes, idle_exit=args.idle_exit or args.cmd == "run")
+        finally:
+            release_lock()
+        return 0
+    except telegram_notify.TelegramError as e:
+        print(e)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

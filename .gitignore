@@ -1,3 +1,6 @@
+# Secrets (Telegram bot token and chat id) - never commit
+.env
+
 # Dependencies
 node_modules/
 bun.lock
@@ -94,3 +97,7 @@ upskill/*.md
 job_scraper/last_run.json
 job_scraper/jsearch_runs.json
 job_scraper/source_runs.json
+
+# Apply agent runtime files
+daily/apply_agent.lock
+daily/apply_agent.log

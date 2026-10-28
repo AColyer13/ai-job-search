@@ -1263,7 +1263,44 @@ def main():
         write_backfill_files(store)
     print(dated)
     print(latest)
+    _notify_telegram(store, day)
+    _start_apply_agent()
     return 0
+
+
+def _notify_telegram(store, day):
+    """Message Adam the new fit jobs. Never fails the run: Telegram is a convenience."""
+    try:
+        import telegram_notify
+        sent = telegram_notify.notify_new_jobs(store, day)
+        if sent:
+            print(f"telegram: sent {sent} job(s)")
+    except Exception as exc:  # noqa: BLE001 - a notification problem must not lose the day's files
+        print(f"telegram: skipped ({type(exc).__name__}: {exc})")
+
+
+def _start_apply_agent():
+    """Start the apply agent in the background to work today's fit jobs, asking Adam on Telegram.
+
+    Off when APPLY_AGENT=0 in .env, when Telegram is not set up, or under pytest. The agent's own lock
+    stops a second copy. Never fails the run.
+    """
+    try:
+        import subprocess
+        import telegram_notify
+        env = telegram_notify.read_env()
+        if os.environ.get("PYTEST_CURRENT_TEST") or env.get("APPLY_AGENT", "1") == "0":
+            return
+        if not env.get("TELEGRAM_BOT_TOKEN") or not env.get("TELEGRAM_CHAT_ID"):
+            return
+        log = open(DAILY / "apply_agent.log", "a", encoding="utf-8")
+        flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        subprocess.Popen([sys.executable, str(Path(__file__).with_name("apply_agent.py")), "run", "--for", "58"],
+                         cwd=str(ROOT), stdout=log, stderr=log, stdin=subprocess.DEVNULL, creationflags=flags,
+                         env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+        print("apply agent: started")
+    except Exception as exc:  # noqa: BLE001
+        print(f"apply agent: not started ({type(exc).__name__}: {exc})")
 
 
 if __name__ == "__main__":
