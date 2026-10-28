@@ -222,3 +222,15 @@ def test_new_tracker_rows_carry_score_source_and_mode(tmp_path):
     first, second = csv.DictReader(path.open(encoding="utf-8", newline=""))
     assert (first["score"], first["discovery_source"], first["score_version"], first["apply_mode"]) == ("0", "himalayas.app", "abc1234", "hand")
     assert second["score"] == "" and second["apply_mode"] == "ai"
+
+
+def test_resume_version_hashes_the_submitted_file(tmp_path):
+    pdf = tmp_path / "Resume_2026-10.pdf"
+    pdf.write_bytes(b"first build")
+    first = applied_log.resume_version(str(pdf))
+    pdf.write_bytes(b"rebuilt under the same name")
+    second = applied_log.resume_version(str(pdf))
+    assert first.startswith("Resume_2026-10@") and second.startswith("Resume_2026-10@") and first != second
+    assert applied_log.resume_version(str(pdf), hash_file=False) == "Resume_2026-10"
+    assert applied_log.resume_version(str(tmp_path / "missing.pdf")) == "missing"
+    assert applied_log.resume_version("") == ""
