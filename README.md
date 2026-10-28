@@ -4,7 +4,7 @@ Finds and grades jobs on its own every hour. An AI agent (Claude Code or similar
 
 ## Finding jobs
 
-The Windows scheduled task "Adam daily job search" runs `job_scraper/run_daily.cmd` hourly from 6 AM to 5 PM. Each run searches every source in [job_scraper/SOURCES.md](job_scraper/SOURCES.md): LinkedIn and FreeHire through the CLI tools in `.agents/skills/`, plus public feeds, company boards and JSearch (a paid plan of 10,000 requests a month). Queries live in `job_scraper/queries.json`.
+The Windows scheduled task "Adam daily job search" runs `job_scraper/run_daily.cmd` at 6 AM, 8 AM, 10 AM, noon, 2 PM, 4 PM and 6 PM. After each search the apply agent works the new jobs and asks you on Telegram for anything it needs (see `job_scraper/apply_agent.py`). Each run searches every source in [job_scraper/SOURCES.md](job_scraper/SOURCES.md): LinkedIn and FreeHire through the CLI tools in `.agents/skills/`, plus public feeds, company boards and JSearch (a paid plan of 10,000 requests a month). Queries live in `job_scraper/queries.json`.
 
 ## Grading
 

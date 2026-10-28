@@ -5,7 +5,7 @@
     python job_scraper/telegram_notify.py test      send a test message
     python job_scraper/telegram_notify.py digest    send today's new fit jobs that were not sent before
 
-daily_digest.py calls `notify_new_jobs` after each hourly run. A failure here never fails the run.
+daily_digest.py calls `notify_new_jobs` after each scheduled run. A failure here never fails the run.
 
 The bot token and chat id live in .env at the repo root (gitignored). Environment variables of the
 same name only fill in what the file leaves out. The bot only ever writes to the one saved chat id. It reads nothing but

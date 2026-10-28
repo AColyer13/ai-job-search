@@ -658,13 +658,13 @@ def src_remoteok():
 
 
 # Remotive asks for at most 4 fetches a day and blocks more than that, so it runs on
-# these four hours of the hourly schedule and skips the rest.
-REMOTIVE_HOURS = (6, 10, 13, 16)
+# these four hours of the schedule (6, 8, 10, 12, 14, 16 and 18) and skips the rest.
+REMOTIVE_HOURS = (6, 10, 14, 18)
 
 
 def src_remotive():
     if datetime.now().hour not in REMOTIVE_HOURS:
-        raise SkipSource("Remotive allows 4 fetches a day; runs at 6, 10, 13 and 16")
+        raise SkipSource("Remotive allows 4 fetches a day; runs at 6, 10, 14 and 18")
     data = _get_json("https://remotive.com/api/remote-jobs?limit=200")
     out = []
     for j in data.get("jobs") or []:

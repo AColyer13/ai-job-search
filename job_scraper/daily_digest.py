@@ -1,6 +1,6 @@
 """Run the daily scrape and write Word documents of that day's new jobs.
 
-The scheduled task (hourly, 6 AM to 5 PM) calls this with no arguments. It runs `pipeline.py all`, then
+The scheduled task (6, 8, 10, noon, 2, 4 and 6) calls this with no arguments. It runs `pipeline.py all`, then
 writes:
 
     daily/YYYY-MM-DD.docx   jobs first found on that date
@@ -1279,28 +1279,34 @@ def _notify_telegram(store, day):
         print(f"telegram: skipped ({type(exc).__name__}: {exc})")
 
 
-def _start_apply_agent():
-    """Start the apply agent in the background to work today's fit jobs, asking Adam on Telegram.
+APPLY_MINUTES = 80  # the scheduled task stops after 2 hours; the search itself takes the rest
 
-    Off when APPLY_AGENT=0 in .env, when Telegram is not set up, or under pytest. The agent's own lock
-    stops a second copy. Never fails the run.
+
+def _start_apply_agent():
+    """Run the apply agent after the search: it works today's fit jobs and asks Adam on Telegram.
+
+    It runs here, inside the scheduled task, so Task Scheduler cannot end it as an orphan. It stops itself
+    after APPLY_MINUTES, or sooner when nothing is waiting. Off when APPLY_AGENT=0 in .env, when Telegram is
+    not set up, or under pytest. Its own lock stops a second copy. Never fails the run.
     """
     try:
-        import subprocess
         import telegram_notify
         env = telegram_notify.read_env()
         if os.environ.get("PYTEST_CURRENT_TEST") or env.get("APPLY_AGENT", "1") == "0":
             return
         if not env.get("TELEGRAM_BOT_TOKEN") or not env.get("TELEGRAM_CHAT_ID"):
             return
-        log = open(DAILY / "apply_agent.log", "a", encoding="utf-8")
-        flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-        subprocess.Popen([sys.executable, str(Path(__file__).with_name("apply_agent.py")), "run", "--for", "58"],
-                         cwd=str(ROOT), stdout=log, stderr=log, stdin=subprocess.DEVNULL, creationflags=flags,
-                         env={**os.environ, "PYTHONIOENCODING": "utf-8"})
-        print("apply agent: started")
+        print("apply agent: starting")
+        with open(DAILY / "apply_agent.log", "a", encoding="utf-8") as log:
+            done = subprocess.run(
+                [sys.executable, str(Path(__file__).with_name("apply_agent.py")), "run", "--for", str(APPLY_MINUTES)],
+                cwd=str(ROOT), stdout=log, stderr=log, stdin=subprocess.DEVNULL,
+                env={**os.environ, "PYTHONIOENCODING": "utf-8"}, timeout=(APPLY_MINUTES + 15) * 60)
+        print(f"apply agent: finished (exit {done.returncode})")
+    except subprocess.TimeoutExpired:
+        print("apply agent: stopped at its time limit")
     except Exception as exc:  # noqa: BLE001
-        print(f"apply agent: not started ({type(exc).__name__}: {exc})")
+        print(f"apply agent: not run ({type(exc).__name__}: {exc})")
 
 
 if __name__ == "__main__":

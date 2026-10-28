@@ -7,12 +7,12 @@ HTTP sources are enabled/disabled via the `http_sources` list there (or
 
 ## Run schedule
 
-The Windows task "Adam daily job search" runs `run_daily.cmd` hourly from 6 AM to 5 PM, and every run searches every source. The daily Word files are rewritten on each run from the jobs found so far.
+The Windows task "Adam daily job search" runs `run_daily.cmd` at 6 AM, 8 AM, 10 AM, noon, 2 PM, 4 PM and 6 PM, and every run searches every source. The daily Word files are rewritten on each run from the jobs found so far.
 
 Rate limits at 12 runs a day:
 
 - **Remotive** publishes a limit of 4 fetches a day, so it runs only at 6, 10, 13 and 16 and skips the other runs.
-- **Jobicy** asks for at most one automated check an hour; an hourly run is exactly that.
+- **Jobicy** asks for at most one automated check an hour; a run every two hours is within that.
 - **JSearch** is a paid plan: about 1,800 requests a month of 10,000.
 - **LinkedIn and FreeHire** retry 429 and 5xx with backoff in their own CLIs. No 429 appears in the last week of run logs.
 - **Every other HTTP source** has no published limit. `_get` retries a 429 or 5xx twice, waiting out `Retry-After`; a source that still fails reports FAIL for that run and tries again the next hour.

@@ -254,7 +254,8 @@ def discover(page, url):
     except Exception:  # noqa: BLE001
         pass
     if re.search(r"no longer (open|available|accepting)|job (is )?not found|this (job|position) (has been|is) (closed|filled)|"
-                 r"page (you are looking for )?(does not|doesn't) exist|404", page_text[:1500], re.I):
+                 r"page (you are looking for )?(does not|doesn't) exist|^\s*404|404\s*(error|not found|page)|error\s*404",
+                 page_text[:1500], re.I | re.M):
         raise FormError("the posting is closed or gone")
     return read_form(page, ats, target)
 

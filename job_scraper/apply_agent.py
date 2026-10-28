@@ -27,8 +27,8 @@ Nothing is assumed. Facts come only from the profile and from answers you gave b
 shown in the summary before you approve). A required question the agent cannot answer from those is asked
 on Telegram. After APPLY_NUDGE_HOURS (default 3) without a reply you get one reminder.
 
-Every fit job (high and medium) is tried. The hourly digest starts this agent by itself after it finishes
-(`run --for 58`); set APPLY_AGENT=0 in .env to turn that off. Taps and replies are only read while the
+Every fit job (high and medium) is tried. The scheduled digest runs this agent itself after it finishes
+(`run --for 80`, inside the task so Task Scheduler cannot end it early); set APPLY_AGENT=0 in .env to turn that off. Taps and replies are only read while the
 agent is running, and Telegram holds them until it starts again.
 
 State is in daily/apply_state.json. Only one `serve` runs at a time (daily/apply_agent.lock). A job

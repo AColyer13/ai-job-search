@@ -84,7 +84,7 @@ None.
 
 ## Repo Structure
 - `documents/cv/` - canonical resume (`resume.md`)
-- `job_scraper/` - hourly search, grading and the daily list
+- `job_scraper/` - search (7 runs a day: 6, 8, 10, noon, 2, 4, 6), grading, the daily list and the apply agent
 - `daily/` - `latest.docx`, dated lists, the apply log
 - `.claude/skills/` - AI skill definitions for the application workflow
 - `.agents/skills/` - Job search CLI tools
