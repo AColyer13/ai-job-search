@@ -271,3 +271,17 @@ def test_save_to_bank_skips_job_specific_answers(tmp_path):
     assert apply_answers.save_to_bank("desired salary", "Desired salary", "1", path=path) is False
     assert apply_answers.save_to_bank("willing to relocate", "Willing to relocate?", "Yes", path=path) is True
     assert list(apply_answers.load_bank(path)) == ["willing to relocate"]
+
+
+def test_a_choice_question_that_mentions_linkedin_is_not_the_linkedin_field():
+    radio = make("news media social github twitter linkedin bluesky etc", "radio", required=False,
+                 options=["News / Media / Social (LinkedIn)", "Employee Referral"])
+    assert apply_answers.resolve(radio, PROFILE, {})[0] == "skip"
+    required = make("how did you hear about us linkedin or other", "select", options=["LinkedIn", "Other"])
+    assert apply_answers.resolve(required, PROFILE, {})[0] == "ask"
+
+
+def test_preferred_name_is_asked_not_guessed_and_a_country_line_gets_the_country():
+    assert apply_answers.resolve(make("preferred name"), PROFILE, {})[0] == "ask"
+    where = make("please enter your current city state or province and country", label="Please enter your current city, state (or province), and country.")
+    assert apply_answers.resolve(where, PROFILE, {})[1] == "Edina, MN, United States"

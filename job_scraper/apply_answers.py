@@ -48,7 +48,7 @@ DEFAULT_PROFILE = {
 RULES = (
     (r"^(first|given) name", "first_name"),
     (r"^(last|family) name|^surname", "last_name"),
-    (r"^(full |legal |your |preferred )?name$|^name\b.*\bfull\b", "full_name"),
+    (r"^(full |legal |your )?name$|^name\b.*\bfull\b", "full_name"),
     (r"\be mail\b|^email", "email"),
     (r"^(phone|mobile|telephone|cell)", "phone"),
     (r"linkedin", "linkedin"),
@@ -99,6 +99,8 @@ def _profile_value(field, name, profile):
     value = profile.get(name, "")
     if name == "location" and field.kind == "combobox":
         value = profile.get("city", value)  # a typed-search city box wants "Edina", not "Edina, MN"
+    elif name == "location" and "country" in (field.label or "").lower():
+        value = f"{value}, {profile.get('country', '')}".rstrip(", ")
     return value
 
 
@@ -116,6 +118,10 @@ def resolve(field, profile, bank):
     if field.kind == "checkbox" and CONSENT.search(label) and not OPTIONAL_CONSENT.search(label):
         return ("consent", True, "profile") if field.required else ("skip", None, "")
     for pattern, name in RULES:
+        # Profile text only goes into a box that takes text. A radio or checkbox group, or a list of choices,
+        # can mention "LinkedIn" in its label without being the LinkedIn field.
+        if field.kind in ("radio", "checkbox") or (field.options and name in ("linkedin", "github", "portfolio")):
+            break
         if re.search(pattern, key) and profile.get(name):
             return "fill", _profile_value(field, name, profile), "profile"
     if re.search(r"cover letter", key):
