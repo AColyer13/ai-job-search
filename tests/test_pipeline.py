@@ -872,13 +872,13 @@ def test_remotive_runs_four_times_a_day(monkeypatch):
     monkeypatch.setattr(pipeline, "datetime", FakeDT)
     monkeypatch.setattr(pipeline, "_get_json", lambda url, headers=None, timeout=None: {"jobs": []})
     ran = []
-    for h in range(6, 18):
+    for h in range(6, 19):
         FakeDT.hour_now = h
         try:
             pipeline.src_remotive(); ran.append(h)
         except pipeline.SkipSource:
             pass
-    assert ran == [6, 10, 13, 16]
+    assert ran == [6, 10, 14, 18]
 
 
 def test_jooble_needs_a_key(monkeypatch):
