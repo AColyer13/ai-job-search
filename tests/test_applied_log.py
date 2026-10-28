@@ -129,7 +129,7 @@ def test_word_file_has_a_heading_and_both_lists_per_month(tmp_path):
     xml = _document_xml(path)
     ElementTree.fromstring(xml)  # well-formed
     for text in ("October 2026", "November 2026", "Applied by AI on 2026-10-27 via Greenhouse form.",
-                 "Why by hand: Needs an account", "1 applied, 1 still for you"):
+                 "Why by hand: Needs an account", "1 applied, 1 for you to apply to by hand"):
         assert text in xml
     assert xml.index("November 2026") < xml.index("October 2026")
     with zipfile.ZipFile(path) as zf:
@@ -234,3 +234,40 @@ def test_resume_version_hashes_the_submitted_file(tmp_path):
     assert applied_log.resume_version(str(pdf), hash_file=False) == "Resume_2026-10"
     assert applied_log.resume_version(str(tmp_path / "missing.pdf")) == "missing"
     assert applied_log.resume_version("") == ""
+
+
+def test_unsent_is_its_own_bucket_and_applying_moves_it_to_applied():
+    entries = {}
+    url = "https://boards.example.com/acme/1"
+    add(entries, url, "unsent", "2026-10-28", reason="No Submit tap in 4.5 hours")
+    (entry,) = entries.values()
+    assert entry["status"] == "unsent" and entry["date_unsent"] == "2026-10-28"
+    bucket = applied_log.months(entries)["2026-10"]
+    assert len(bucket["unsent"]) == 1 and not bucket["recommended"] and not bucket["applied"]
+    # a later recommended entry for the same job does not push it back
+    _, message = add(entries, url, "recommended", "2026-10-29", reason="x")
+    assert entry["status"] == "unsent" and "left as is" in message
+    # whoever applies later moves it to Applied
+    _, message = add(entries, url, "applied", "2026-10-30", by="AI", method="Greenhouse form")
+    assert entry["status"] == "applied" and entry["date_applied"] == "2026-10-30" and len(entries) == 1
+    _, message = add(entries, url, "unsent", "2026-10-31")
+    assert entry["status"] == "applied" and "not moved back" in message
+
+
+def test_a_recommended_job_can_become_unsent():
+    entries = {}
+    url = "https://boards.example.com/beta/2"
+    add(entries, url, "recommended", "2026-10-27", reason="Needs an account")
+    add(entries, url, "unsent", "2026-10-28", reason="No tap")
+    (entry,) = entries.values()
+    assert entry["status"] == "unsent" and entry["date_recommended"] == "2026-10-27"
+
+
+def test_word_file_lists_the_unsent_bucket(tmp_path):
+    entries = {}
+    add(entries, "https://boards.example.com/acme/1", "unsent", "2026-10-28", reason="No Submit tap in 4.5 hours")
+    path = applied_log.write_doc(entries, tmp_path / "applied_for.docx", today="2026-10-28")
+    xml = _document_xml(path)
+    ElementTree.fromstring(xml)
+    for text in ("AI could have applied, not sent (1)", "No Submit tap in 4.5 hours", "1 the AI prepared but you did not send"):
+        assert text in xml

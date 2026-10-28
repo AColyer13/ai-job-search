@@ -231,7 +231,8 @@ def loc_tier(loc, work_mode=None):
 
 
 _REMOTE_FILLER_RE = re.compile(
-    r"\b(remote|united states of america|united states|u\.s\.a\.|u\.s\.|usa|us)\b",
+    r"\b(remote|united states of america|united states|u\.s\.a\.|u\.s\.|usa|us|"
+    r"in|within|across|anywhere|the|only|wfh|work from home)\b",
     re.I,
 )
 _ELSEWHERE_RE = re.compile(

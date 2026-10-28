@@ -1085,6 +1085,10 @@ def test_failed_refetch_of_a_long_snippet_keeps_it_readable(monkeypatch):
 def test_generic_us_remote_keeps_state_names_and_drops_canada():
     assert pipeline._generic_us_remote("Remote (United States)")
     assert pipeline._generic_us_remote("Remote")
+    assert pipeline._generic_us_remote("Remote in USA")
+    assert pipeline._generic_us_remote("Remote - Anywhere in the US")
+    assert not pipeline._generic_us_remote("Remote in Utah")
+    assert pipeline._card_in_requested_location("Remote in USA", "remote")
     assert not pipeline._generic_us_remote("Remote, Canada")
     assert not pipeline._generic_us_remote("Austin, Texas")
     assert pipeline._card_in_requested_location("Remote (United States)", "remote")

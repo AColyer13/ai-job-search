@@ -101,7 +101,7 @@ def env(tmp_path):
     resume.write_bytes(b"%PDF")
     profile = {**apply_answers.DEFAULT_PROFILE, "resume_pdf": str(resume)}
     logged = []
-    return SimpleNamespace(tmp=tmp_path, profile=profile, logged=logged,
+    return SimpleNamespace(tmp=tmp_path, profile=profile, logged=logged, entries={}, fits={},
                            log=lambda job, status, **kw: logged.append((status, kw)) or True)
 
 
@@ -111,7 +111,8 @@ def make_agent(env, fields, runner=None, **forms_kw):
     agent = apply_agent.Agent(tg, state_path=env.tmp / "state.json", forms=forms, runner=runner or Runner(),
                               log=env.log, browser=fake_browser, profile=env.profile,
                               bank_path=env.tmp / "bank.json", letter_dir=env.tmp / "letters",
-                              shot_dir=env.tmp / "shots")
+                              shot_dir=env.tmp / "shots", log_entries=lambda: env.entries,
+                              fit_of=lambda url: env.fits.get(url))
     job = {"id": "j1", "url": URL, "title": "Engineer", "company": "Acme", "fit": "high", "fit_score": 90,
            "ats": "greenhouse", "description": "Build things", "status": "queued", "created": 0, "updated": 0,
            "answers": {}, "fields": {}, "pending": [], "drafts": {}, "asked": None, "ver": 0}
@@ -313,14 +314,14 @@ def test_an_unanswered_question_holds_the_line_so_replies_match_one_question(env
     assert job["status"] == "ready" and agent.advance() is True
 
 
-def test_waiting_too_long_hands_the_job_back(env):
+def test_a_question_left_unanswered_hands_the_job_back(env):
     clock = [1000.0]
-    agent, tg, forms, job = make_agent(env, BASIC)
+    agent, tg, forms, job = make_agent(env, BASIC + [field("desired salary", "text", "Desired salary")])
     agent.now = lambda: clock[0]
     agent.advance()
-    clock[0] += 25 * 3600
+    clock[0] += 5 * 3600
     agent.expire()
-    assert job["status"] == "handed_off" and "No reply" in env.logged[0][1]["reason"]
+    assert job["status"] == "handed_off" and "No answer" in env.logged[0][1]["reason"]
 
 
 def test_crash_while_submitting_is_not_retried(env):
@@ -340,9 +341,8 @@ def test_state_survives_a_restart(env):
 
 
 def test_queue_skips_unsupported_known_and_applied_jobs(env, monkeypatch):
-    import applied_log
-    monkeypatch.setattr(applied_log, "load_log", lambda path=None: {"k": {"url": URL + "9"}})
     agent, *_ = make_agent(env, BASIC)
+    env.entries["k"] = {"url": URL + "9"}
     agent.jobs.clear()
     cands = [{"url": URL, "title": "A", "fit": "high"}, {"url": "https://example.com/x", "title": "B", "fit": "high"},
              {"url": URL + "9", "title": "C", "fit": "high"}, {"url": URL + "5", "title": "D", "fit": "medium"}]
@@ -394,9 +394,143 @@ def test_one_reminder_after_a_quiet_spell_and_the_deadline_keeps_running(env):
     agent.expire()
     assert len(tg.sent) > sent and "Still waiting on you" in tg.sent[sent][0] and job["updated"] == start
     sent = len(tg.sent)
-    clock[0] += 3600
+    clock[0] += 1800
     agent.expire()
     assert len(tg.sent) == sent  # only once
-    clock[0] += 20 * 3600
+    clock[0] += 3600
     agent.expire()
     assert job["status"] == "handed_off"
+
+
+# ---------------------------------------------------------------- not sent, reconcile, questions
+
+def tap_data(tg, data):
+    tg.events.append({"type": "button", "data": data, "callback_id": "cb"})
+    for ev in tg.poll():
+        tg.agent.handle(ev)
+
+
+def text_in(agent, text):
+    agent.handle({"type": "text", "text": text})
+
+
+def ready_agent(env, clock):
+    agent, tg, forms, job = make_agent(env, BASIC)
+    agent.now = lambda: clock[0]
+    tg.agent = agent
+    agent.advance()
+    assert job["status"] == "ready"
+    return agent, tg, forms, job
+
+
+def test_no_submit_tap_in_four_and_a_half_hours_logs_it_as_unsent(env):
+    clock = [1000.0]
+    agent, tg, forms, job = ready_agent(env, clock)
+    clock[0] += 4 * 3600
+    agent.expire()
+    assert job["status"] == "ready"  # still waiting, only nudged
+    clock[0] += 0.6 * 3600
+    agent.expire()
+    assert job["status"] == "unsent" and forms.submitted == 0
+    status, kw = env.logged[-1]
+    assert status == "unsent" and "no Submit tap" in kw["reason"] and "j1" in kw["reason"]
+    assert "AI could have applied" in tg.sent[-1][0] and any(d.startswith("r:j1") for _, d in tg.last_buttons())
+
+
+def test_an_unsent_job_can_still_be_submitted_from_its_old_button_or_unsent_command(env):
+    clock = [1000.0]
+    agent, tg, forms, job = ready_agent(env, clock)
+    old = tg.last_buttons()[0][1]  # Submit button of the first summary
+    clock[0] += 5 * 3600
+    agent.expire()
+    assert job["status"] == "unsent"
+    text_in(agent, "/unsent")
+    review = next(d for label, d in tg.last_buttons() if label.startswith("Review"))
+    tap_data(tg, review)
+    assert job["status"] == "ready" and forms.submitted == 0
+    assert tg.last_buttons()[0][1] != old  # a fresh, versioned Submit button
+    tap_data(tg, tg.last_buttons()[0][1])
+    assert forms.submitted == 1 and job["status"] == "applied" and env.logged[-1][0] == "applied"
+
+
+def test_old_submit_button_on_an_unsent_job_still_works(env):
+    clock = [1000.0]
+    agent, tg, forms, job = ready_agent(env, clock)
+    submit = next(d for label, d in tg.last_buttons() if label == "Submit")
+    clock[0] += 5 * 3600
+    agent.expire()
+    tap_data(tg, submit)
+    assert forms.submitted == 1 and job["status"] == "applied"
+
+
+def test_a_lump_sum_apply_elsewhere_moves_unsent_state_to_applied(env):
+    clock = [1000.0]
+    agent, tg, forms, job = ready_agent(env, clock)
+    clock[0] += 5 * 3600
+    agent.expire()
+    env.entries["k"] = {"url": URL, "status": "applied", "applied_by": "AI"}
+    assert agent.unsent_jobs() == []
+    assert job["status"] == "applied" and job["note"] == "applied elsewhere"
+    text_in(agent, "/unsent")
+    assert "Nothing is waiting" in tg.sent[-1][0] and forms.submitted == 0
+
+
+def test_a_free_text_question_spawns_an_agent_and_the_answer_goes_to_telegram(env):
+    seen = {}
+
+    def runner(prompt, **kw):
+        seen.update(kw, prompt=prompt)
+        return SimpleNamespace(ok=True, text="You applied to 0 jobs today.", provider="claude", attempts=[])
+
+    clock = [1000.0]
+    agent, tg, forms, job = ready_agent(env, clock)
+    agent.runner = runner
+    text_in(agent, "How many jobs did I apply to today?")
+    assert "You applied to 0 jobs today." in tg.sent[-1][0]
+    assert "How many jobs did I apply to today?" in seen["prompt"] and seen["allowed_tools"] == ["Read", "Grep", "Glob"]
+    assert job["status"] == "ready" and forms.submitted == 0  # a question is not a draft edit or an answer
+
+
+def test_a_reply_to_an_open_question_is_an_answer_even_without_a_question_mark(env):
+    agent, tg, forms, job = make_agent(env, BASIC + [field("desired salary", "text", "Desired salary")])
+    tg.agent = agent
+    agent.runner = lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not spawn an agent"))
+    agent.advance()
+    assert job["status"] == "asking"
+    text_in(agent, "120000")
+    assert job["answers"]["desired salary"] == "120000"
+
+
+def test_question_with_no_provider_says_so(env):
+    agent, tg, forms, job = make_agent(env, BASIC)
+    agent.runner = Runner(ok=False)
+    text_in(agent, "/ask what is waiting?")
+    assert "No AI provider answered" in tg.sent[-1][0]
+
+
+def test_the_queue_message_separates_ai_jobs_from_hand_jobs(env):
+    agent, tg, forms, job = make_agent(env, BASIC)
+    agent.jobs.clear()
+    cands = [{"title": "Eng A", "company": "Acme", "fit": "high", "url": URL},
+             {"title": "Eng B", "company": "Beta", "fit": "medium", "url": "https://acme.wd1.myworkdayjobs.com/x/job/1"}]
+    agent.queue(cands, hand_off_rest=True)
+    message = tg.sent[-1][0]
+    assert "AI is handling these 1" in message and "You apply to these 1 by hand" in message
+    assert message.index("Eng A") < message.index("You apply to these") < message.index("Eng B")
+
+
+def test_status_separates_the_buckets(env):
+    agent, tg, forms, job = make_agent(env, BASIC)
+    env.entries["r"] = {"url": "x", "status": "recommended"}
+    text = agent.status_text()
+    assert "AI is handling" in text and "You apply by hand:</b> 1" in text
+
+
+def test_a_queued_job_the_scorer_now_grades_low_is_skipped_without_preparing(env):
+    agent, tg, forms, job = make_agent(env, BASIC)
+    env.fits[URL] = "low"
+    assert agent.drop_regraded_low() == 1
+    assert job["status"] == "skipped" and agent.advance() is False and forms.filled == [] and not tg.sent
+    env.fits[URL] = "medium"  # a job still graded medium is kept
+    job["status"] = "queued"
+    assert agent.drop_regraded_low() == 0 and job["status"] == "queued"

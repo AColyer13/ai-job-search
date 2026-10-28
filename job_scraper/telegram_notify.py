@@ -194,6 +194,14 @@ def pending_jobs(store, day, sent, applied_urls=()):
     return sorted(jobs, key=_rank)
 
 
+def handling_label(link):
+    """Who applies: the agent fills Greenhouse, Lever and Ashby forms (asking on Telegram first); anything else is yours."""
+    import apply_forms  # imported here so telegram_notify stays importable on its own
+    if link and apply_forms.detect_ats(link):
+        return "AI handles this one here: I will ask before anything is sent"
+    return "You apply by hand (not a form the AI can fill)"
+
+
 def format_job(job):
     esc = html.escape
     title = esc(job.get("title") or "Untitled")
@@ -203,7 +211,7 @@ def format_job(job):
     head = f"<b>{title}</b> at {company}"
     meta = f"{fit} fit" + (f" ({score})" if score is not None else "") + f" | {esc(daily_digest._where(job))}"
     link = daily_digest.apply_link(job)
-    lines = [head, meta]
+    lines = [head, meta, handling_label(link)]
     if link:
         lines.append(f'<a href="{esc(link, quote=True)}">Open posting</a>')
     return "\n".join(lines)

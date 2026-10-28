@@ -106,7 +106,8 @@ INDUSTRIAL_TITLE_RE = re.compile(
     r"\b(nuclear|cnc|machine tools?|laser|welding|valves?|hvac|electrical|electronics|mechanical|"
     r"power engineering|aftermarket|vehicle components|packaging|pumps?|hydraulic|pneumatic|plc|"
     r"environmental|wastewater|oil (?:and|&) gas|chemical|steel|aerospace|construction|roofing|"
-    r"bas|building automation|hvac controls|electrification|motion control|industrial automation)\b",
+    r"bas|building automation|hvac controls|electrification|motion control|industrial automation|"
+    r"adhesives?|sealants?|coatings?|lubricants?|polymers?|resins?)\b",
     re.I,
 )
 _INDUSTRIAL_DESC_RE = re.compile(
@@ -258,6 +259,55 @@ NOT_A_CAREER_RE = re.compile(
     r"\b(part[- ]time|seasonal|temporary|1099|per hour|hourly|enablement)\b|/\s*hour",
     re.I,
 )
+# The posting body says the job is part-time ("This part-time remote role", "20 hours per week"). "Full-time or
+# part-time" and "full or part time" leave the choice open, so they do not count.
+PART_TIME_TEXT_RE = re.compile(
+    r"(?<!full[- ]time or )(?<!full or )(?<!full[- ]time/)\b(?:this|a|our)\s+(?:is\s+a\s+)?(?:\w+\s+){0,2}part[- ]time\b|"
+    r"\bpart[- ]time\s+(?:remote\s+)?(?:role|position|job|opportunity|contract|basis|only)\b|"
+    r"\b(?:up to |about |approximately )?(?:5|10|15|20|25)\s*(?:-|to)?\s*(?:\d{1,2}\s*)?hours?\s+(?:per|a|each|/)\s*week\b",
+    re.I,
+)
+# A posting that says outright it is not for entry-level people, or that wants experienced engineers.
+NOT_ENTRY_TEXT_RE = re.compile(
+    r"\b(?:not (?:intended|designed|suitable|open|meant|appropriate) for|(?:is|are) not (?:an? )?)"
+    r"[^.!?\n]{0,80}?\b(?:entry[- ]level|new grad(?:uate)?s?|junior)\b|"
+    r"\bno (?:entry[- ]level|junior) (?:applicants|candidates)\b|"
+    r"\bintended for experienced (?:engineers|developers|professionals)\b",
+    re.I,
+)
+# A title that names a city territory outside Minnesota and the states he would relocate to: the remote hire
+# has to live near those accounts ("Sales Engineer, Seattle/Portland"). Not a state or compass word, so
+# territory_excludes_him does not see it.
+_CITY_TERRITORY_RE = re.compile(
+    r"\b(?:seattle|portland|san francisco|san jose|bay area|los angeles|san diego|sacramento|denver|boulder|"
+    r"phoenix|las vegas|salt lake city|boston|new york(?: city)?|nyc|philadelphia|pittsburgh|baltimore|"
+    r"washington,? d\.?c\.?|raleigh|charlotte|nashville|kansas city|st\.? louis|cincinnati|cleveland|columbus|"
+    r"detroit|indianapolis)\b",
+    re.I,
+)
+_STATE_NAME_ONLY_RE = re.compile(
+    r"^\s*(?:remote|work from home|wfh)\s*[-\u2013\u2014(,:/|]\s*(" + "|".join(sorted(
+        ["alabama", "alaska", "arizona", "arkansas", "california", "colorado", "connecticut", "delaware", "florida",
+         "georgia", "hawaii", "idaho", "illinois", "indiana", "iowa", "kansas", "kentucky", "louisiana", "maine",
+         "maryland", "massachusetts", "michigan", "minnesota", "mississippi", "missouri", "montana", "nebraska",
+         "nevada", "new hampshire", "new jersey", "new mexico", "new york", "north carolina", "north dakota", "ohio",
+         "oklahoma", "oregon", "pennsylvania", "rhode island", "south carolina", "south dakota", "tennessee", "texas",
+         "utah", "vermont", "virginia", "washington", "west virginia", "wisconsin", "wyoming"], key=len, reverse=True))
+    + r")\s*\)?\s*$",
+    re.I,
+)
+_ALLOWED_STATE_NAMES = frozenset({"minnesota", "mississippi", "texas", "oklahoma", "arkansas", "louisiana", "alabama",
+                                  "georgia", "florida"})
+
+
+def card_state_limit(location):
+    """The state a remote card is tied to ("Remote (California)", "Remote - Utah") when it is not his, else ''."""
+    m = _STATE_NAME_ONLY_RE.search(location or "")
+    if m and m.group(1).lower() not in _ALLOWED_STATE_NAMES:
+        return m.group(1).title()
+    return ""
+
+
 # Roles outside the four he is aiming at. They are worth a look, never a top grade.
 ADJACENT_RE = re.compile(
     r"\b(technical account|technical consultant|implementation|onboarding|customer success)\b",
@@ -557,7 +607,7 @@ _DEGREE_FIELD_RE = re.compile(
     r"\b(?:bachelor(?:'?s)?|b\.?\s?s\.?\b|m\.?\s?s\.?\b|master(?:'?s)?|undergraduate|college|degree)\b"
     r".{0,60}\b(?:in|of)\s+(?:an?\s+)?(?:computer science|computer engineering|(?:[\w-]+\s+){0,2}engineering|"
     r"software development|computer information systems|information (?:technology|systems)|data science|"
-    r"mathematics|cs\b)|"
+    r"mathematics|bioinformatics|computational \w+|statistics|physics|chemistry|biology|cs\b)|"
     r"\b(?:bs|ms|b\.s\.?|m\.s\.?)\b(?:\s*/\s*(?:bs|ms|b\.s\.?|m\.s\.?))?\s+(?:in\s+)?"
     r"(?:computer science|computer engineering|(?:[\w-]+\s+){0,2}engineering|software development|"
     r"computer information systems|data science|cs)\b|"
@@ -1152,6 +1202,13 @@ def score(job):
     if PENTEST_TITLE_RE.search(title):
         blockers.append("The title is penetration testing or offensive security, a field you have not worked in.")
         return result(_LOW)
+    if _CITY_TERRITORY_RE.search(title) and not _REGION_OK_RE.search(title) and not title_states(title):
+        blockers.append("The title names a city territory (for example Seattle or New York) outside Minnesota and the states you would relocate to, so a remote hire would have to live there.")
+        return result(_LOW)
+    limited_state = card_state_limit(job.get("location"))
+    if limited_state:
+        blockers.append(f"The card location is remote but tied to {limited_state}, which is not Minnesota or a state you would relocate to.")
+        return result(_LOW)
     if territory_excludes_him(title):
         blockers.append("The title is a sales territory (for example Northeast, West, NM/CO) that leaves out Minnesota and the Gulf Coast, so a remote hire would have to live there.")
         return result(_LOW)
@@ -1161,6 +1218,12 @@ def score(job):
     limited_to = state_restriction(job.get("description"))
     if limited_to and not (HOME_STATES | RELOCATION_STATES) & set(limited_to):
         blockers.append(f"The posting limits hires to {', '.join(limited_to)}, none of which are Minnesota or a state you would relocate to.")
+        return result(_LOW)
+    if PART_TIME_TEXT_RE.search(desc[:1500]):
+        blockers.append("The posting says the job is part-time, not a full-time sales or engineering role.")
+        return result(_LOW)
+    if NOT_ENTRY_TEXT_RE.search(desc):
+        blockers.append("The posting says it is not for entry-level applicants and wants experienced engineers.")
         return result(_LOW)
     if NOT_A_CAREER_RE.search(title):
         blockers.append("The title is part-time, seasonal, hourly, or an enablement seat, not a full-time sales or engineering role.")

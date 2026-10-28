@@ -651,3 +651,37 @@ class SnippetGates(unittest.TestCase):
         # A read posting is judged on its full text, by the gates that already exist for it.
         desc = BODY + STACK + " The team sits in the Toledo/Detroit area."
         self.assertNotEqual(grade("Solutions Engineer", description=desc), "low")
+
+
+class FoundInTodaysAudit(unittest.TestCase):
+    """Grades that were wrong against the actual postings on 2026-10-28."""
+
+    def test_a_part_time_posting_is_low_even_when_the_title_does_not_say_so(self):
+        text = "This part-time remote Fresher Full Stack Developer role is for people starting out. " + BODY + STACK
+        self.assertEqual(grade("Junior Full Stack Developer", description=text), "low")
+        ok = "Full-time or part-time hours are available. " + BODY + STACK
+        self.assertEqual(grade("Junior Full Stack Developer", description=ok), "high")
+
+    def test_a_posting_that_says_it_is_not_for_entry_level_people_is_low(self):
+        text = ("This role is intended for experienced engineers with demonstrated industry experience. "
+                "It is not intended for internship, new graduate, or entry-level applicants. ") + BODY + STACK
+        self.assertEqual(grade("AI Engineer", description=text), "low")
+
+    def test_a_city_territory_title_is_low(self):
+        self.assertEqual(grade("Sales Engineer, Seattle/Portland (Strategic)"), "low")
+        self.assertEqual(grade("Sales Engineer, Minneapolis"), "high")
+        self.assertEqual(grade("Sales Engineer"), "high")
+
+    def test_a_remote_card_tied_to_a_state_that_is_not_his_is_low(self):
+        for location in ("Remote (California)", "Remote - Utah", "Remote, Pennsylvania"):
+            self.assertEqual(grade("Sales Engineer", location=location), "low", location)
+        for location in ("Remote (Texas)", "Remote - Minnesota", "Remote in USA", "Remote (United States)"):
+            self.assertEqual(grade("Sales Engineer", location=location), "high", location)
+
+    def test_a_science_degree_with_no_alternative_is_low(self):
+        text = "Qualifications Minimum Qualifications: BS/BA or higher in Bioinformatics. " + BODY + STACK
+        self.assertEqual(grade("Software Engineer 1", description=text), "low")
+
+    def test_adhesives_sales_is_a_trade_product_and_cannot_be_high(self):
+        text = "You sell adhesives and bonding systems to manufacturers. " + BODY
+        self.assertEqual(grade("Technical Sales Representative - Adhesives & Bonding", description=text), "medium")
