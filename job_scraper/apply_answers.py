@@ -21,6 +21,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import claim_linter  # noqa: E402
 import daily_digest  # noqa: E402
 from apply_forms import normalize_label  # noqa: E402
 
@@ -291,4 +292,7 @@ def draft(question, job, run, kind="answer"):
     text = clean_draft(result.text)
     if not text or text.upper().startswith("NEEDS_ADAM"):
         return None, "needs facts only Adam has"
+    problems = claim_linter.check(text, resume_text() + "\n" + _facts())
+    if problems:
+        return None, "draft made claims the profile does not support: " + "; ".join(problems)[:300]
     return text, result.provider

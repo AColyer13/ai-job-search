@@ -100,8 +100,10 @@ of the 7 into the supported set. Needs a read of 2 or 3 of those links before it
 1. Source of truth is `master_profile.md` sections 3 and 4. Posting text supplies keywords only.
 2. A claim is allowed if its subject (title, number, employer, tool) appears in section 3. Otherwise the draft must come back
    `NEEDS_ADAM` (this is already how `TRUTH_RULES` in `apply_answers.py` works).
-3. Enforcement today is a prompt instruction only. **No code checks a drafted answer or cover letter for unverified claims
-   before it reaches Adam's summary.** `[code]`
+3. Enforcement: prompt instruction (`TRUTH_RULES`) plus, since 2026-10-28, `job_scraper/claim_linter.py`. `draft()` refuses
+   any draft with a banned claim or a dollar amount, "N+" count, percentage or "N years" that is not in the resume or
+   `application_facts.md`; the agent then asks Adam instead. Limits: it checks numbers and listed phrases only, so an
+   invented title, employer or skill in plain words still reaches Adam's review. `[code]`
 4. Keyword coverage: report genuine gaps, never stuff (CLAUDE.md checklist).
 5. Known unsafe seed, fixed 2026-10-28: the base cover letter said Adam "evaluated model-generated code" at Activus. Adam
    confirmed no coding was involved; `application_facts.md` now matches the resume. Letters already sent from the base

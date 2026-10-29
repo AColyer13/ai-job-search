@@ -10,6 +10,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "job_scraper"))
 import apply_answers  # noqa: E402
+import claim_linter  # noqa: E402
 import oracle  # noqa: E402
 
 ORACLE = oracle.load()
@@ -43,7 +44,7 @@ def test_oracle_validates_and_rejects_a_broken_one():
     with pytest.raises(oracle.OracleError):
         oracle.validate({"identity": {}})
     with pytest.raises(oracle.OracleError):
-        oracle.validate({**ORACLE, "banned_claims": [{"pattern": "("}]})
+        oracle.validate({**ORACLE, "roles": [{"title": "X", "employer": "Y", "start": "", "end": "Current"}]})
 
 
 def test_resume_lists_every_oracle_role_with_its_dates():
@@ -57,6 +58,12 @@ def test_resume_contains_every_oracle_metric():
     resume = read(ROOT / "documents" / "cv" / "resume.md")
     for metric in ORACLE["metrics"]:
         assert metric in resume, metric
+
+
+def test_base_cover_letter_passes_the_claim_linter():
+    root = ROOT / "documents" / "cv"
+    source = read(root / "resume.md") + "\n" + read(root / "application_facts.md")
+    assert claim_linter.check(apply_answers.base_cover_letter(), source) == []
 
 
 def test_apply_profile_matches_oracle_identity():
@@ -77,7 +84,7 @@ def test_apply_profile_matches_oracle_identity():
 def test_no_banned_claim_in_text_sent_to_employers(path):
     text = read(path)
     # Rule text that says "never claim X" legitimately names X, so only lines that read as claims about Adam count.
-    for claim in ORACLE["banned_claims"]:
+    for pattern, why in claim_linter.BANNED_CLAIMS:
         for line in text.splitlines():
-            if re.search(claim["pattern"], line, re.I) and not re.search(r"\b(never|do not|don't|not)\b", line, re.I):
-                pytest.fail(f"{path.name}: {claim['why']}: {line.strip()[:120]}")
+            if re.search(pattern, line, re.I) and not re.search(r"\b(never|do not|don't|not)\b", line, re.I):
+                pytest.fail(f"{path.name}: {why}: {line.strip()[:120]}")

@@ -17,8 +17,7 @@ class OracleError(ValueError):
 
 
 def validate(data):
-    """Raise OracleError when the oracle is missing a section, role field or a valid banned-claim pattern."""
-    import re
+    """Raise OracleError when the oracle is missing a section, or role field."""
     for section, keys in REQUIRED.items():
         block = data.get(section)
         if not isinstance(block, dict):
@@ -32,11 +31,6 @@ def validate(data):
         for key in ("title", "employer", "start", "end"):
             if not role.get(key):
                 raise OracleError(f"role {role.get('employer', '?')} is missing {key}")
-    for claim in data.get("banned_claims", []):
-        try:
-            re.compile(claim["pattern"])
-        except (KeyError, re.error) as e:
-            raise OracleError(f"bad banned claim {claim!r}: {e}") from None
     return data
 
 
