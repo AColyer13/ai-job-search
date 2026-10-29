@@ -85,7 +85,42 @@ def test_grok_passes_model_and_returns_text(monkeypatch):
     assert seen["cmd"][seen["cmd"].index("-m") + 1] == "grok-4.7"
 
 
+def test_gemini_sends_the_prompt_on_stdin_and_returns_the_response(monkeypatch):
+    seen = {}
+
+    def fake_run(cmd, cwd, env, timeout, stdin=None):
+        seen.update(cmd=cmd, stdin=stdin)
+        return fake_proc('{"response": "from gemini", "stats": {}}')
+
+    monkeypatch.setattr(agent_runner, "_run", fake_run)
+    assert agent_runner.run_gemini("the prompt", ".", 5, 1, model="gemini-2.5-pro") == "from gemini"
+    assert seen["stdin"] == "the prompt" and "-p" in seen["cmd"] and "--yolo" not in seen["cmd"]
+    assert seen["cmd"][seen["cmd"].index("-m") + 1] == "gemini-2.5-pro"
+
+
+def test_gemini_error_and_missing_cli_raise(monkeypatch):
+    monkeypatch.setattr(agent_runner, "_run", lambda *a, **k: fake_proc('{"error": {"message": "quota exceeded"}}', returncode=1))
+    with pytest.raises(agent_runner.ProviderFailed, match="quota exceeded"):
+        agent_runner.run_gemini("p", ".", 5, 1)
+
+    def missing(*a, **k):
+        raise FileNotFoundError
+
+    monkeypatch.undo()  # back to the real _run, which turns a program that is not installed into ProviderFailed
+    monkeypatch.setattr(agent_runner.shutil, "which", lambda name: None)
+    monkeypatch.setattr(agent_runner.subprocess, "run", missing)
+    with pytest.raises(agent_runner.ProviderFailed, match="could not start"):
+        agent_runner.run_gemini("p", ".", 5, 1)
+
+
+def test_gemini_is_third_in_the_default_chain_after_claude_and_grok(monkeypatch):
+    monkeypatch.delenv("AGENT_PROVIDERS", raising=False)
+    chain = [("claude", failing("limit")), ("grok", failing("402")), ("gemini", lambda *a, **k: "from gemini")]
+    result = agent_runner.run_agent("hi", providers=chain)
+    assert result.provider == "gemini" and [n for n, _ in result.attempts] == ["claude", "grok"]
+
+
 def test_provider_chain_defaults_and_local_is_opt_in(monkeypatch):
     monkeypatch.delenv("AGENT_PROVIDERS", raising=False)
-    assert [n for n, _ in agent_runner.provider_chain({})] == ["claude", "grok"]
+    assert [n for n, _ in agent_runner.provider_chain({})] == ["claude", "grok", "gemini"]
     assert [n for n, _ in agent_runner.provider_chain({"AGENT_PROVIDERS": "claude, grok, local"})] == ["claude", "grok", "local"]

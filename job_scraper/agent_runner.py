@@ -3,13 +3,17 @@
     python job_scraper/agent_runner.py "Reply with exactly: OK"
     python job_scraper/agent_runner.py --providers grok "Reply with exactly: OK"
 
-Providers (AGENT_PROVIDERS in .env, default "claude,grok"):
+Providers (AGENT_PROVIDERS in .env, default "claude,grok,gemini"):
 
     claude   Claude Code headless (`claude -p`), signed in on Adam's subscription. ANTHROPIC_API_KEY is
              removed from the child's environment so a stray key can never switch it to paid API billing.
     grok     Grok Build CLI (`grok -p -m GROK_MODEL`), signed in with grok.com. GROK_MODEL in .env,
              default grok-4.7. It has to be a cloud Grok model: the CLI's own default is a local Ollama
              model, which is the "local" tier below.
+    gemini   Google's Gemini CLI (`gemini -p`), signed in with a Google account or GEMINI_API_KEY. Optional
+             GEMINI_MODEL in .env; unset uses the CLI's default. Not installed on this PC yet: until it is
+             (`npm install -g @google/gemini-cli`, then run `gemini` once to sign in) this step fails with
+             "could not start" and the job goes to Adam by hand, same as before.
     local    The Grok CLI's local default model (Ollama). Off unless named in AGENT_PROVIDERS, because a
              20B model is not reliable at driving a browser form.
 
@@ -18,6 +22,7 @@ one runs. If all fail, the result says so and the caller leaves the job for Adam
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -31,7 +36,7 @@ import telegram_notify  # noqa: E402
 ROOT = daily_digest.ROOT
 CLAUDE = Path.home() / ".local" / "bin" / "claude.exe"
 GROK = Path.home() / ".grok" / "bin" / "grok.exe"
-DEFAULT_PROVIDERS = ("claude", "grok")
+DEFAULT_PROVIDERS = ("claude", "grok", "gemini")
 DEFAULT_TIMEOUT = 600
 
 
@@ -112,13 +117,31 @@ def run_grok(prompt, cwd, timeout, max_turns, model=None, **_):
     return str(data.get("text") or "")
 
 
+def run_gemini(prompt, cwd, timeout, max_turns, model=None, **_):
+    """Google's Gemini CLI, headless. The prompt goes in on stdin, with a one-line -p instruction, so a long
+    resume and posting never hit the Windows command-line limit. Run without --yolo, so in headless mode any
+    tool that needs approval (a write, a shell command) is refused."""
+    cmd = [shutil.which("gemini") or "gemini", "-p", "Follow the instructions in the input and reply with the answer only.",
+           "--output-format", "json"]
+    if model:
+        cmd += ["-m", model]
+    proc = _run(cmd, cwd, os.environ.copy(), timeout, stdin=prompt)
+    data = _json_reply(proc)
+    error = (data or {}).get("error")
+    if proc.returncode != 0 or data is None or error:
+        why = (error.get("message") if isinstance(error, dict) else error) or (proc.stderr or "").strip() or f"exit {proc.returncode}"
+        raise ProviderFailed(str(why).replace("\n", " ")[:200])
+    return str(data.get("response") or "")
+
+
 def provider_chain(env=None):
     env = env or telegram_notify.read_env()
     raw = os.environ.get("AGENT_PROVIDERS") or env.get("AGENT_PROVIDERS") or ""
     names = [n.strip().lower() for n in raw.split(",") if n.strip()] or list(DEFAULT_PROVIDERS)
     model = env.get("GROK_MODEL") or "grok-4.7"
+    gemini_model = env.get("GEMINI_MODEL") or None  # unset: the CLI picks its own default
     table = {"claude": run_claude, "grok": lambda *a, **k: run_grok(*a, model=model, **k),
-             "local": run_grok}
+             "gemini": lambda *a, **k: run_gemini(*a, model=gemini_model, **k), "local": run_grok}
     return [(n, table[n]) for n in names if n in table]
 
 
