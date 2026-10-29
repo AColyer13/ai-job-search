@@ -106,9 +106,11 @@ def test_greenhouse_end_to_end(env):
 
 
 def test_lever_end_to_end(env):
-    agent, tg, logged, _ = env
+    agent, tg, logged, pages = env
+    pages[LV + "/apply"] = LEVER.replace("</body>", '<div class="h-captcha" data-sitekey="x"></div></body>')  # Lever draws this container on the page
     job = add(agent, LV, "lever")
     agent.advance()
+    assert job["human_click"]  # seen on the page, not assumed from the link
     done = drive(agent, tg, "Python")
     assert done["status"] == "assisting" and agent.launched == [job["id"]] and not logged  # Lever's hCaptcha: Adam clicks
     agent.state_path.with_name(f"apply_assist_{job['id']}.json").write_text(json.dumps({"status": "submitted", "detail": ""}))
@@ -117,10 +119,12 @@ def test_lever_end_to_end(env):
 
 
 def test_ashby_end_to_end(env):
-    agent, tg, logged, _ = env
+    agent, tg, logged, pages = env
+    pages[AB + "/application"] = ASHBY.replace("</body>", '<div style="position:fixed;inset:0;background:#fff;z-index:9">check</div></body>')
     job = add(agent, AB, "ashby")
     agent.advance()
-    assert drive(agent, tg)["status"] == "assisting" and agent.launched == [job["id"]]
+    assert not job.get("human_click")  # nothing on the page says robot check until Submit is pressed
+    assert drive(agent, tg)["status"] == "assisting" and agent.launched == [job["id"]]  # the site refused the script, so Chrome tries it
 
 
 def test_captcha_page_is_prepared_and_left_for_adams_click(env):

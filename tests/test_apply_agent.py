@@ -244,7 +244,7 @@ def finish_assist(agent, job, status, detail=""):
 
 
 def start_assisted(env, ats="ashby"):
-    agent, tg, forms, job = make_agent(env, BASIC)
+    agent, tg, forms, job = make_agent(env, BASIC, blocker="CAPTCHA")  # the page itself shows a robot check
     job["ats"] = ats
     agent.assist_launcher = lambda jid: None
     agent.advance()
@@ -276,7 +276,7 @@ def test_an_unfinished_chrome_window_is_never_applied(env, status, detail, words
 
 def test_a_lost_chrome_window_is_handed_off_after_the_wait(env):
     clock = [1000.0]
-    agent, tg, forms, job = make_agent(env, BASIC)
+    agent, tg, forms, job = make_agent(env, BASIC, blocker="CAPTCHA")
     agent.now = lambda: clock[0]
     job["ats"], agent.assist_launcher = "ashby", lambda jid: None
     agent.advance()
@@ -426,14 +426,14 @@ def test_state_survives_a_restart(env):
     assert again.jobs["j1"]["status"] == "ready" and again.jobs["j1"]["ver"] == 1
 
 
-def test_queue_skips_unsupported_known_and_applied_jobs(env, monkeypatch):
+def test_queue_tries_every_fit_job_whatever_the_link_and_skips_known_and_applied(env, monkeypatch):
     agent, *_ = make_agent(env, BASIC)
     env.entries["k"] = {"url": URL + "9"}
     agent.jobs.clear()
     cands = [{"url": URL, "title": "A", "fit": "high"}, {"url": "https://example.com/x", "title": "B", "fit": "high"},
              {"url": URL + "9", "title": "C", "fit": "high"}, {"url": URL + "5", "title": "D", "fit": "medium"}]
     added = agent.queue(cands, limit=5, fits=("high",))
-    assert [j["title"] for j in added] == ["A"]
+    assert [j["title"] for j in added] == ["A", "B"]  # an unfamiliar site is tried, not assumed unfillable
     assert agent.queue(cands, limit=5, fits=("high",)) == []
 
 
@@ -562,7 +562,7 @@ def test_selftest_needs_the_tap():
     assert apply_agent.selftest(tg2, wait=0) is False
 
 
-def test_fit_jobs_on_other_sites_go_straight_to_recommended_with_one_message(env, monkeypatch):
+def test_fit_jobs_on_other_sites_are_queued_like_any_other_with_one_message(env, monkeypatch):
     import applied_log
     monkeypatch.setattr(applied_log, "load_log", lambda path=None: {})
     agent, tg, *_ = make_agent(env, BASIC)
@@ -570,11 +570,10 @@ def test_fit_jobs_on_other_sites_go_straight_to_recommended_with_one_message(env
     cands = [{"url": URL, "title": "A", "company": "Acme", "fit": "medium"},
              {"url": "https://acme.wd1.myworkdayjobs.com/x", "title": "B", "company": "Acme", "fit": "high"},
              {"url": URL + "7", "title": "Low", "fit": "low"}]
-    added = agent.queue(cands, hand_off_rest=True)
-    assert [j["title"] for j in added] == ["A"]
-    assert [(s, k["reason"][:11]) for s, k in env.logged] == [("recommended", "Applies on ")]
-    assert len(tg.sent) == 1 and "Nothing goes out until you tap Submit" in tg.sent[0][0]
-    assert agent.queue(cands, hand_off_rest=True) == [] and len(env.logged) == 1  # never logged twice
+    added = agent.queue(cands)
+    assert [j["title"] for j in added] == ["A", "B"] and not env.logged  # nothing is logged until a page has been tried
+    assert len(tg.sent) == 1 and "trying 2 applications" in tg.sent[0][0]
+    assert agent.queue(cands) == []  # never queued twice
 
 
 def test_one_reminder_after_a_quiet_spell_and_the_deadline_keeps_running(env):
@@ -701,15 +700,15 @@ def test_question_with_no_provider_says_so(env):
     assert "No AI provider answered" in tg.sent[-1][0]
 
 
-def test_the_queue_message_separates_ai_jobs_from_hand_jobs(env):
+def test_the_queue_message_lists_every_job_and_promises_no_hand_off_by_link(env):
     agent, tg, forms, job = make_agent(env, BASIC)
     agent.jobs.clear()
     cands = [{"title": "Eng A", "company": "Acme", "fit": "high", "url": URL},
              {"title": "Eng B", "company": "Beta", "fit": "medium", "url": "https://acme.wd1.myworkdayjobs.com/x/job/1"}]
-    agent.queue(cands, hand_off_rest=True)
+    agent.queue(cands)
     message = tg.sent[-1][0]
-    assert "I'm preparing 1 application" in message and "1 for you to apply by hand" in message
-    assert message.index("Eng A") < message.index("for you to apply by hand") < message.index("Eng B")
+    assert "I'm trying 2 applications" in message and "apply by hand" not in message
+    assert message.index("Eng A") < message.index("Eng B")
 
 
 def test_status_separates_the_buckets(env):
@@ -792,7 +791,7 @@ def test_summaries_waiting_for_a_tap_go_out_when_auto_submit_is_on(env):
 
 
 def test_a_robot_check_site_is_tried_in_chrome_with_nobody_pulled_in(env):
-    agent, tg, forms, job = make_agent(env, BASIC, auto=True)
+    agent, tg, forms, job = make_agent(env, BASIC, auto=True, blocker="CAPTCHA")
     job["ats"], launched = "ashby", []
     agent.assist_launcher = launched.append
     agent.advance()
@@ -805,7 +804,7 @@ def test_a_robot_check_site_is_tried_in_chrome_with_nobody_pulled_in(env):
 
 
 def test_a_robot_check_site_that_accepts_the_click_is_logged_as_sent_automatically(env):
-    agent, tg, forms, job = make_agent(env, BASIC, auto=True)
+    agent, tg, forms, job = make_agent(env, BASIC, auto=True, blocker="CAPTCHA")
     job["ats"] = "lever"
     agent.assist_launcher = lambda jid: None
     agent.advance()

@@ -242,9 +242,7 @@ def _combobox_options(page, f):
 
 def discover(page, url):
     """Open the application page and read its fields. Types nothing."""
-    ats = detect_ats(url)
-    if not ats:
-        raise FormError(f"not a Greenhouse, Lever or Ashby link: {urllib.parse.urlparse(url).netloc}")
+    ats = detect_ats(url)  # only names the site for the log and picks Lever's and Ashby's /apply sub-page; any link is tried
     target = application_url(url)
     try:
         page.goto(target, wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
@@ -261,7 +259,39 @@ def discover(page, url):
                  r"page (you are looking for )?(does not|doesn't) exist|^\s*404|404\s*(error|not found|page)|error\s*404",
                  page_text[:1500], re.I | re.M):
         raise FormError("the posting is closed or gone")
-    return read_form(page, ats, target)
+    try:
+        return read_form(page, ats, target)
+    except FormError as e:
+        if ats or "no application form" not in str(e) or not _open_apply_link(page):
+            raise
+        return read_form(page, ats, page.url)  # the posting page had an Apply link; the form is one click further
+
+
+APPLY_LINK = re.compile(r"^\s*(apply( now| here| for this (job|position|role))?|apply to this (job|position|role)|start (your )?application)\s*$", re.I)
+
+
+def _open_apply_link(page):
+    """On a posting page that is not itself a form, follow its own Apply link once. True when the page changed."""
+    try:
+        for kind in ("link", "button"):
+            loc = page.get_by_role(kind, name=APPLY_LINK)
+            if not loc.count():
+                continue
+            el = loc.first
+            href = (el.get_attribute("href") or "") if kind == "link" else ""
+            before = page.url
+            if href.startswith(("http://", "https://", "/")):
+                page.goto(urllib.parse.urljoin(page.url, href), wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
+            else:
+                el.click(timeout=5000)
+            try:
+                page.wait_for_load_state("networkidle", timeout=15000)
+            except Exception:  # noqa: BLE001
+                pass
+            return page.url != before or bool(page.locator("form input:visible").count())
+    except Exception:  # noqa: BLE001 - no usable Apply link means no form was found, which is reported
+        return False
+    return False
 
 
 def read_form(page, ats, target):
@@ -280,6 +310,9 @@ def read_form(page, ats, target):
     if not [f for f in form.fields if f.kind != "file" or f.required]:
         raise FormError("no application form found on the page")
     form.blocker = blocker_on_page(page)
+    if not ats and not form.blocker and not any(f.kind == "file" for f in form.fields):
+        # an unknown site: without a resume upload this is a search box or a newsletter sign-up, never an application
+        raise FormError("no application form found on the page (no resume upload)")
     return form
 
 

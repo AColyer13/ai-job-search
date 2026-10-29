@@ -82,7 +82,6 @@ QUESTION_WORDS = ("who", "what", "when", "where", "why", "how", "which", "is ", 
                   "can ", "could ", "should ", "will ", "would ", "show", "list", "tell", "explain")
 LOCK_STALE_SECONDS = 1800
 MAX_BUTTON_OPTIONS = 8
-ROBOT_CHECK_ATS = ("ashby", "lever")  # their Submit is guarded by a robot check, so Adam makes the last click
 ROBOT_CHECK = re.compile(r"captcha|robot check", re.I)
 ASSIST_MINUTES = 20
 
@@ -380,15 +379,15 @@ class Agent:
         return f"<b>{esc(job.get('title') or 'Untitled')}</b> · {esc(job.get('company') or 'company not listed')}"
 
     # ---- queue
-    def queue(self, candidates, limit=10, fits=("high", "medium"), hand_off_rest=False):
-        """Add jobs on a supported ATS that are not already known or in the applied log. Returns the new job records.
+    def queue(self, candidates, limit=10, fits=("high", "medium")):
+        """Add every fit job that is not already known or in the applied log. Returns the new job records.
 
-        With hand_off_rest, a fit job on any other site goes straight to Recommended (one summary message),
-        because the agent only knows Greenhouse, Lever and Ashby forms.
+        Adam, 2026-10-29: the link never decides what the AI can do. Every job is tried; the page it actually opens
+        decides (a form it can fill, a login wall, a robot check), and a job it could not finish is logged as attempted.
         """
         import applied_log
         applied = {daily_digest._key(e.get("url")) for e in self.log_entries().values()}
-        added, other = [], []
+        added = []
         for j in candidates:
             url = daily_digest.apply_link(j)
             if (j.get("fit") or "low") not in fits or not url:
@@ -409,33 +408,20 @@ class Agent:
                    "ats": ats, "description": (j.get("description") or "")[:3500], "status": "queued",
                    "created": self.now(), "updated": self.now(), "answers": {}, "fields": {}, "pending": [],
                    "drafts": {}, "asked": None, "ver": 0}
-            if ats:
-                if len(added) < limit:
-                    self.jobs[jid] = rec
-                    added.append(rec)
-            elif hand_off_rest:
-                host = urllib.parse.urlparse(url).netloc or "another site"
-                rec["status"], rec["reason"] = "handed_off", f"Applies on {host}, which the agent cannot fill (it knows Greenhouse, Lever and Ashby)."
+            if len(added) < limit:
                 self.jobs[jid] = rec
-                other.append(rec)
+                added.append(rec)
         self.save()
-        for rec in other:
-            self.log(rec, "recommended", reason=rec["reason"])
-        if added or other:
-            self.say(self.queue_summary(added, other))
+        if added:
+            self.say(self.queue_summary(added))
         return added
 
-    def queue_summary(self, added, other):
-        def lines(jobs):
-            rows = [f"• {self.title_of(j)} ({(j.get('fit') or '').upper()})" for j in jobs[:12]]
-            return rows + ([f"• and {len(jobs) - 12} more"] if len(jobs) > 12 else [])
-        parts = []
-        if added:
-            parts += [f"🤖 <b>I'm preparing {len(added)} application{'s' if len(added) != 1 else ''}.</b> "
-                      "I'll ask if I need anything. Nothing goes out until you tap Submit."] + lines(added)
-        if other:
-            parts += ["", f"✋ <b>{len(other)} for you to apply by hand</b> (the AI cannot fill these sites; they are in your log):"] + lines(other)
-        return "\n".join(parts)
+    def queue_summary(self, added):
+        rows = [f"• {self.title_of(j)} ({(j.get('fit') or '').upper()})" for j in added[:12]]
+        rows += [f"• and {len(added) - 12} more"] if len(added) > 12 else []
+        lead = (f"🤖 <b>I'm trying {len(added)} application{'s' if len(added) != 1 else ''}.</b> "
+                "I'll ask only about a question I have never been answered; anything the site stops is logged as AI tried.")
+        return "\n".join([lead] + rows)
 
     def open_jobs(self):
         return [j for j in self.jobs.values() if j["status"] in OPEN]
@@ -671,14 +657,14 @@ class Agent:
 
     # ---- approval
     def needs_human_click(self, job):
-        return not self.dry_run and (job.get("human_click") or job.get("ats") in ROBOT_CHECK_ATS)
+        return not self.dry_run and bool(job.get("human_click"))  # the page itself showed a robot check; the link never decides
 
     def approval(self, job, prefix=""):
         job["ver"] += 1
         job["approved"] = digest(job["answers"])  # Submit works only while the answers still hash to what this summary showed
         self.set_status(job, "ready")
         lines = [f"{prefix}✅ <b>Ready.</b> {self.title_of(job)}",
-                 f"{(job.get('fit') or '').upper()} fit · {ATS_LABEL.get(job['ats'], job['ats'])}"
+                 f"{(job.get('fit') or '').upper()} fit · {ATS_LABEL.get(job['ats'], 'Online form')}"
                  + (" · DRY RUN, will not click submit" if self.dry_run else "")]
         if self.needs_human_click(job):
             lines.append("🖥 This site has a robot check. Tap Submit and I open the filled form in Chrome on your PC for your last click.")
@@ -1114,7 +1100,7 @@ Adam's question: {question}
             return False
         with contextlib.suppress(OSError):
             path.unlink()
-        self.queue(candidates(day), limit=limit, fits=fits, hand_off_rest=True)
+        self.queue(candidates(day), limit=limit, fits=fits)
         return True
 
     def serve(self, minutes=None, idle_exit=False, wait=25, listen=False, fits=("high", "medium"), limit=10):
@@ -1258,9 +1244,9 @@ def main(argv=None):
             print(re.sub(r"<[^>]+>", "", html.unescape(agent.status_text())))
             return 0
         def queue_now():
-            added = agent.queue(candidates(args.day), limit=args.limit, fits=fits, hand_off_rest=True)
+            added = agent.queue(candidates(args.day), limit=args.limit, fits=fits)
             for j in added:
-                print(f"queued: {j['title']} | {j['company']} | {j['ats']}")
+                print(f"queued: {j['title']} | {j['company']} | {j['ats'] or 'other site'}")
             print(f"{len(added)} job(s) queued")
 
         # Take the lock before queueing: the process holding it owns the state file, and a second writer would

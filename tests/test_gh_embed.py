@@ -75,11 +75,10 @@ def test_queue_does_not_add_it_again_when_the_original_or_the_form_link_is_logge
         assert agent.queue(cand, limit=5, fits=("high",)) == [], logged
 
 
-def test_queue_hands_off_an_embedded_link_that_cannot_be_resolved(env):
+def test_queue_still_tries_an_embedded_link_that_cannot_be_resolved(env):
     agent, *_ = make_agent(env, BASIC)
     agent.jobs.clear()
     agent.embed_resolver = lambda url, company: ""
-    assert agent.queue([{"url": EMBED, "title": "TAM", "company": "Expel", "fit": "high"}], limit=5, fits=("high",),
-                       hand_off_rest=True) == []
+    assert agent.queue([{"url": EMBED, "title": "TAM", "company": "Expel", "fit": "high"}], limit=5, fits=("high",))
     (rec,) = agent.jobs.values()
-    assert rec["status"] == "handed_off" and rec["url"] == EMBED
+    assert rec["status"] == "queued" and rec["url"] == EMBED  # the page itself will say whether a form is there

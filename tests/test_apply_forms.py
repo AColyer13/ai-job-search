@@ -437,3 +437,33 @@ def test_two_different_saved_answers_to_one_concept_are_asked_not_picked():
 def test_a_saved_work_authorization_answer_is_not_used_for_the_sponsorship_question():
     bank = {"are you authorized to work in the us": {"label": "Are you authorized to work in the US?", "answer": "Yes"}}
     assert apply_answers.saved_by_concept("Do you require visa sponsorship?", bank) is None
+
+
+# --- any link is tried; the page it opens decides (Adam, 2026-10-29) ---
+OWN_SITE = GREENHOUSE.replace("<h2>Apply</h2>", "<h2>Apply</h2><input type=\"file\" name=\"resume\">")
+
+
+def test_an_unknown_site_with_a_resume_form_is_read_like_any_application(page):
+    serve_page(page, "https://careers.example.org/jobs/1", OWN_SITE)
+    form = af.discover(page, "https://careers.example.org/jobs/1")
+    assert form.ats == "" and "first name" in by_key(form)
+
+
+def test_an_unknown_posting_page_is_followed_through_its_own_apply_link(page):
+    serve_page(page, "https://careers.example.org/jobs/2", '<html><body><h1>Engineer</h1><a href="/jobs/2/form">Apply now</a></body></html>')
+    serve_page(page, "https://careers.example.org/jobs/2/form", OWN_SITE)
+    form = af.discover(page, "https://careers.example.org/jobs/2")
+    assert "first name" in by_key(form) and form.url.endswith("/jobs/2/form")
+
+
+def test_a_page_without_a_resume_upload_is_not_mistaken_for_an_application(page):
+    newsletter = '<html><body><form><label for="e">Email *</label><input id="e" name="e" required></form></body></html>'
+    serve_page(page, "https://careers.example.org/jobs/3", newsletter)
+    with pytest.raises(af.FormError, match="no application form"):
+        af.discover(page, "https://careers.example.org/jobs/3")
+
+
+def test_a_login_wall_on_an_unknown_site_is_reported_not_logged_into(page):
+    wall = OWN_SITE.replace("<h2>Apply</h2>", '<h2>Apply</h2><input type="password" name="pw">')
+    serve_page(page, "https://careers.example.org/jobs/4", wall)
+    assert "login" in af.discover(page, "https://careers.example.org/jobs/4").blocker.lower()
