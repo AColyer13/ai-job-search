@@ -1,0 +1,86 @@
+[
+ {
+  "kind": "file",
+  "label": "Resume/CV ATTACH RESUME/CV",
+  "required": false,
+  "key": "resume cv attach resume cv",
+  "options": []
+ },
+ {
+  "kind": "text",
+  "label": "Full name✱",
+  "required": true,
+  "key": "full name",
+  "options": []
+ },
+ {
+  "kind": "email",
+  "label": "Email✱",
+  "required": true,
+  "key": "email",
+  "options": []
+ },
+ {
+  "kind": "text",
+  "label": "Phone ✱",
+  "required": true,
+  "key": "phone",
+  "options": []
+ },
+ {
+  "kind": "text",
+  "label": "Current location ✱",
+  "required": true,
+  "key": "current location",
+  "options": []
+ },
+ {
+  "kind": "text",
+  "label": "Current company ✱",
+  "required": true,
+  "key": "current company",
+  "options": []
+ },
+ {
+  "kind": "text",
+  "label": "LinkedIn URL✱",
+  "required": true,
+  "key": "linkedin url",
+  "options": []
+ },
+ {
+  "kind": "text",
+  "label": "Portfolio URL",
+  "required": false,
+  "key": "portfolio url",
+  "options": []
+ },
+ {
+  "kind": "text",
+  "label": "Acme",
+  "required": false,
+  "key": "acme",
+  "options": []
+ },
+ {
+  "kind": "select",
+  "label": "Gender",
+  "required": false,
+  "key": "gender",
+  "options": []
+ },
+ {
+  "kind": "select",
+  "label": "Race",
+  "required": false,
+  "key": "race",
+  "options": []
+ },
+ {
+  "kind": "select",
+  "label": "Veteran status",
+  "required": false,
+  "key": "veteran status",
+  "options": []
+ }
+]

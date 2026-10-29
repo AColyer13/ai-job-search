@@ -1,0 +1,30 @@
+[
+ {
+  "kind": "file",
+  "label": "Autofill from resume",
+  "required": false,
+  "key": "autofill from resume",
+  "options": []
+ },
+ {
+  "kind": "text",
+  "label": "Name",
+  "required": true,
+  "key": "name",
+  "options": []
+ },
+ {
+  "kind": "email",
+  "label": "Email",
+  "required": true,
+  "key": "email",
+  "options": []
+ },
+ {
+  "kind": "file",
+  "label": "Resume",
+  "required": true,
+  "key": "resume",
+  "options": []
+ }
+]

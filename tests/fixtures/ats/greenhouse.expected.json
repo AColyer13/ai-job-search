@@ -1,0 +1,72 @@
+[
+ {
+  "kind": "text",
+  "label": "First Name*",
+  "required": true,
+  "key": "first name",
+  "options": []
+ },
+ {
+  "kind": "text",
+  "label": "Last Name*",
+  "required": true,
+  "key": "last name",
+  "options": []
+ },
+ {
+  "kind": "text",
+  "label": "Preferred First Name",
+  "required": false,
+  "key": "preferred first name",
+  "options": []
+ },
+ {
+  "kind": "text",
+  "label": "Email*",
+  "required": true,
+  "key": "email",
+  "options": []
+ },
+ {
+  "kind": "combobox",
+  "label": "Country",
+  "required": false,
+  "key": "country",
+  "options": []
+ },
+ {
+  "kind": "tel",
+  "label": "Phone",
+  "required": false,
+  "key": "phone",
+  "options": []
+ },
+ {
+  "kind": "file",
+  "label": "Resume/CV",
+  "required": false,
+  "key": "resume cv",
+  "options": []
+ },
+ {
+  "kind": "file",
+  "label": "Cover Letter",
+  "required": false,
+  "key": "cover letter",
+  "options": []
+ },
+ {
+  "kind": "text",
+  "label": "LinkedIn Profile",
+  "required": false,
+  "key": "linkedin profile",
+  "options": []
+ },
+ {
+  "kind": "text",
+  "label": "Website",
+  "required": false,
+  "key": "website",
+  "options": []
+ }
+]

@@ -6,7 +6,7 @@ knowledge and not checked. Nothing marked `[unverified]` should drive a design d
 
 ## 1. Where the pipeline stands (baseline)
 
-- Test suite before any change: **440 passed, 2 skipped** (`.venv/Scripts/python.exe -m pytest -q`, 8.6 s). `[code]`
+- Test suite before any change: **440 passed, 2 skipped** under `.venv`, which has no Playwright, so every browser test was silently skipped. Under system `python -m pytest -q` the true baseline is **501 passed, 1 skipped** (~100 s). Use system Python. `[code]`
 - The pipeline already exists: `apply_forms.py` (browser layer), `apply_answers.py` (field resolver, five outcomes),
   `apply_agent.py` (queue, Telegram approval, submit). Phase 1 is therefore an audit against the oracle, not a greenfield build.
 - Hosts handled: `boards.greenhouse.io`, `job-boards.greenhouse.io`, `job-boards.eu.greenhouse.io`, `jobs.lever.co`,
@@ -48,6 +48,9 @@ effect (no application leaves without Adam's tap). Decision recorded in `master_
   best practice. `[doc]`
 - Lever's docs do not mention hCaptcha, but the applied log has a case where Lever "rejects submits from the assistant
   browser after the hCaptcha". One observation (n=1). `[log]`
+- A saved live Lever form (`tests/fixtures/ats/lever.html`, 2026-10-28) contains an empty `.h-captcha` div and a hidden
+  `h-captcha-response` input. The widget appears when Submit is pressed, so `read_form` reports no blocker before filling.
+  The log has 0 Lever successes. `[code]` `[log]`
 - The form lives at `<posting>/apply`; `application_url` appends it. `[code]`
 
 ### Ashby
