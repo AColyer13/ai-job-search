@@ -19,7 +19,9 @@ knowledge and not checked. Nothing marked `[unverified]` should drive a design d
 | Form fields are read first with nothing typed (`discover`) | `[code]` apply_forms.py |
 | `--dry-run` fills and sets status `dry_run`, never clicks submit | `[code]` apply_agent.py lines 485-486 |
 | Normal path: summary to Telegram with Submit / Skip / I'll do it; submit only after the Submit tap | `[code]` apply_agent.py module doc |
-| Answers are hashed (`digest`); a form that changed after approval is handed back as Recommended | `[code]` |
+| Each summary carries a version number; a Submit button for an older summary is refused. Since 2026-10-29 the answers are also hashed
+  (`digest`) when the summary is built and the Submit tap is refused, with a fresh summary sent, if they no longer match. Before that
+  `digest` was defined but never called. A form that gained a required question after approval is handed back as Recommended | `[code]` tests/test_submit_gate.py |
 | A submit click with no confirmation is logged Recommended, never Applied | `[code]` |
 | Standing permission for the Telegram-approved submit dated 2026-10-28 | CLAUDE.md |
 

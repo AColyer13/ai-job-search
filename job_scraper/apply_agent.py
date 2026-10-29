@@ -427,6 +427,7 @@ class Agent:
     # ---- approval
     def approval(self, job):
         job["ver"] += 1
+        job["approved"] = digest(job["answers"])  # Submit works only while the answers still hash to what this summary showed
         self.set_status(job, "ready")
         profile = self.profile or apply_answers.load_profile()
         lines = [f"<b>AI has this one ready. Tap Submit to send it:</b> {self.title_of(job)}",
@@ -558,6 +559,9 @@ class Agent:
         if kind == "s" and job["status"] in SUBMITTABLE and len(parts) > 2:
             if parts[2] != str(job["ver"]):
                 return ack("That summary is out of date. Use the newest one.")
+            if job.get("approved") != digest(job["answers"]):
+                ack("The answers changed. Check the new summary.")
+                return self.approval(job)
             ack("Submitting")
             self.say(f"Submitting {self.title_of(job)}…")
             return self.submit_job(job)
