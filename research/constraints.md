@@ -90,9 +90,12 @@ mostly already built and mostly a dead end:
   Workable board listing, by company name and exact title. On 40 fresh Himalayas jobs it found 8 (6 Greenhouse, 1 Lever,
   1 Ashby). It found none of the 7 logged Recommended Himalayas jobs: their employers are not on those four public boards. `[code]`
 - One of the 8 hits (Expel) is a Greenhouse job embedded on the employer's own site (`expel.com/...?gh_jid=...`), a host
-  `detect_ats` rejects. Two of the 32 Recommended log entries are the same pattern (databricks.com, cribl.io). Mapping a
-  `gh_jid` link to `job-boards.greenhouse.io/<board>/jobs/<id>` is a possible new item; the board token is not in the URL and
-  would have to be verified against the public Greenhouse jobs API. Not built. `[code]` `[log]`
+  `detect_ats` rejects. Two of the 32 Recommended log entries are the same pattern (databricks.com, cribl.io). Built the
+  same day: `posting_text.greenhouse_form_url` finds the board name (site domain, then company name), confirms it with
+  the public jobs API (`boards-api.greenhouse.io/v1/boards/<board>/jobs/<id>`), and `Agent.queue` then queues
+  `job-boards.greenhouse.io/embed/job_app?for=<board>&token=<id>`. The plain `/<board>/jobs/<id>` page does **not** work for
+  these boards: it redirects back to the employer's site. The embed URL opened a real form (19 to 23 fields, no blocker)
+  for Expel, Databricks and Cribl on 2026-10-29; nothing was typed or submitted. `[code]` `[log]`
 - Nothing here justifies changing the search sources.
 
 ## 5. Anti-bot boundaries (repo policy)

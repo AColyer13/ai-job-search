@@ -170,6 +170,34 @@ def _greenhouse_by_jid(url, company):
     return ""
 
 
+def greenhouse_form_url(url, company, fetch=None):
+    """The hosted Greenhouse form for a ?gh_jid=123 link on an employer's own site, or ''.
+
+    The link names the job but not the board. A board name counts only when the public jobs API
+    (boards-api.greenhouse.io) lists that job id under it, so a wrong guess never becomes a form link.
+    """
+    parts = urllib.parse.urlparse(url or "")
+    m = _GH_JID_RE.search(url or "")
+    host = parts.netloc.lower()
+    if not m or "greenhouse.io" in host:
+        return ""
+    jid = m.group(1)
+    labels = host.removeprefix("www.").split(".")
+    guesses = [labels[0]] if labels and labels[0] else []
+    guesses += board_slugs({"company": company, "url": url})
+    fetch = fetch or _get
+    for slug in dict.fromkeys(g for g in guesses if len(g) >= 3):
+        try:
+            data = json.loads(fetch(f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs/{jid}", "application/json"))
+        except Exception:  # noqa: BLE001 - a 404 or a bad reply just means this guess is wrong
+            continue
+        if isinstance(data, dict) and str(data.get("id")) == jid:
+            # The hosted /<board>/jobs/<id> page sends an embedded board back to the employer's site; the embed
+            # endpoint serves the same application form on Greenhouse's own host.
+            return f"https://job-boards.greenhouse.io/embed/job_app?for={slug}&token={jid}"
+    return ""
+
+
 def fetch_text(url, company=""):
     """Return (status, text) for one posting URL."""
     if not url:

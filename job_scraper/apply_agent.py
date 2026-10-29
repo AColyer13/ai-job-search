@@ -63,6 +63,7 @@ import apply_answers  # noqa: E402
 import apply_forms  # noqa: E402
 import daily_digest  # noqa: E402
 import telegram_notify  # noqa: E402
+from posting_text import greenhouse_form_url  # noqa: E402
 
 ROOT = daily_digest.ROOT
 STATE_PATH = daily_digest.DAILY / "apply_state.json"
@@ -176,12 +177,14 @@ def log_result(job, status, reason=None, cover_letter=None, note=None, resume=No
 class Agent:
     def __init__(self, tg, state_path=None, forms=apply_forms, runner=agent_runner.run_agent,
                  log=log_result, browser=open_browser, profile=None, bank_path=None,
-                 dry_run=False, headed=False, letter_dir=None, shot_dir=None, now=time.time, log_entries=None, fit_of=None):
+                 dry_run=False, headed=False, letter_dir=None, shot_dir=None, now=time.time, log_entries=None, fit_of=None,
+                 embed_resolver=None):
         self.tg, self.forms, self.runner, self.log = tg, forms, runner, log
         self.browser_factory, self.dry_run, self.headed, self.now = browser, dry_run, headed, now
         self.state_path = Path(state_path or STATE_PATH)
         self.log_entries = log_entries or load_log_entries
         self.fit_of = fit_of or store_fit
+        self.embed_resolver = embed_resolver or greenhouse_form_url
         self.bank_path = bank_path
         # the running list of questions and answers sits next to the answer bank (the real one under daily/ by default)
         self.answer_log_path = Path(bank_path).with_name("apply_answer_log.json") if bank_path else None
@@ -237,6 +240,13 @@ class Agent:
             if jid in self.jobs or daily_digest._key(url) in applied:
                 continue
             ats = self.forms.detect_ats(url)
+            if not ats and "gh_jid=" in url:
+                form_url = self.embed_resolver(url, j.get("company"))  # a Greenhouse job shown on the employer's own site
+                if form_url:
+                    jid, url = job_id(form_url), form_url
+                    if jid in self.jobs or daily_digest._key(url) in applied:
+                        continue
+                    ats = self.forms.detect_ats(url)
             rec = {"id": jid, "url": self.forms.clean_url(url) if ats else url, "title": j.get("title"),
                    "company": j.get("company"), "fit": j.get("fit"), "fit_score": j.get("fit_score"),
                    "ats": ats, "description": (j.get("description") or "")[:3500], "status": "queued",
