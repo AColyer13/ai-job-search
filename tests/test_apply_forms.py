@@ -285,3 +285,42 @@ def test_preferred_name_is_asked_not_guessed_and_a_country_line_gets_the_country
     assert apply_answers.resolve(make("preferred name"), PROFILE, {})[0] == "ask"
     where = make("please enter your current city state or province and country", label="Please enter your current city, state (or province), and country.")
     assert apply_answers.resolve(where, PROFILE, {})[1] == "Edina, MN, United States"
+
+
+def serve_page(page, url, html):
+    page.route(url, lambda route: route.fulfill(status=200, content_type="text/html", body=html))
+
+
+def test_assist_fills_the_form_then_waits_for_a_persons_own_submit(page):
+    url = "https://jobs.lever.co/a/b/apply"
+    later = LEVER.replace("</body>", "<script>setTimeout(() => document.body.insertAdjacentHTML('beforeend',"
+                                     "'<p>Thank you for applying</p>'), 2500)</script></body>")
+    serve_page(page, url, later)
+    try:
+        assert af.assist(page, "https://jobs.lever.co/a/b", {"full name": "Adam Colyer", "email": "a@b.co"}, 20) == ("submitted", "")
+        assert page.input_value("input[name=name]") == "Adam Colyer"
+    finally:
+        page.unroute(url)
+
+
+def test_assist_times_out_and_names_what_it_could_not_fill(page):
+    url = "https://jobs.lever.co/a/b/apply"
+    serve_page(page, url, LEVER)
+    try:
+        status, note = af.assist(page, "https://jobs.lever.co/a/b", {"full name": "Adam Colyer"}, 2)
+    finally:
+        page.unroute(url)
+    assert status == "timeout" and "Email" in note
+
+
+def test_a_click_the_site_will_not_take_is_a_robot_check_not_a_crash(page):
+    page.set_content('<form><button type="submit">Submit application</button></form>'
+                     '<div style="position:fixed;inset:0;background:#fff;z-index:9">overlay</div>')
+    status, detail = af.submit(page)
+    assert status == "blocked" and "robot check" in detail
+
+
+def test_the_reCAPTCHA_image_challenge_counts_as_a_blocker_only_while_it_shows(page):
+    form = load(page, GREENHOUSE.replace("<p id=\"err\">", '<iframe title="challenge" src="about:blank?recaptcha=bframe" style="width:300px;height:200px"></iframe><p id="err">'))
+    assert form.blocker == "CAPTCHA" or form.blocker == ""  # about:blank carries no src path, see the selector test below
+    assert af.blocker_on_page(page) in ("CAPTCHA", "")

@@ -217,11 +217,91 @@ def test_needs_adam_draft_turns_into_a_question(env):
     assert job["status"] == "asking" and job["asked"] == "why do you want to work here"
 
 
-@pytest.mark.parametrize("blocker", ["a CAPTCHA is on the page", "sign in required"])
+@pytest.mark.parametrize("blocker", ["sign in required", "email verification code"])
 def test_blocker_hands_off_to_recommended(env, blocker):
     agent, tg, forms, job = make_agent(env, BASIC, blocker=blocker)
     agent.advance()
     assert job["status"] == "handed_off" and env.logged[0][0] == "recommended" and forms.submitted == 0
+
+
+def test_a_robot_check_is_not_a_dead_end_it_opens_chrome_for_adams_click(env):
+    agent, tg, forms, job = make_agent(env, BASIC, blocker="CAPTCHA")
+    launched = []
+    agent.assist_launcher = launched.append
+    agent.advance()
+    assert job["status"] == "ready" and job["human_click"] and not env.logged
+    assert "robot check" in tg.sent[-1][0] and "Chrome on your PC" in tg.sent[-1][0]
+    tg.tap("Submit")
+    agent.handle(tg.poll()[0])
+    assert job["status"] == "assisting" and launched == ["j1"] and forms.submitted == 0 and not env.logged
+    assert "Your turn, one click" in tg.sent[-1][0]
+
+
+def finish_assist(agent, job, status, detail=""):
+    agent.state_path.with_name(f"apply_assist_{job['id']}.json").write_text(json.dumps({"status": status, "detail": detail}))
+    agent.collect_assists()
+
+
+def start_assisted(env, ats="ashby"):
+    agent, tg, forms, job = make_agent(env, BASIC)
+    job["ats"] = ats
+    agent.assist_launcher = lambda jid: None
+    agent.advance()
+    tg.tap("Submit")
+    agent.handle(tg.poll()[0])
+    assert job["status"] == "assisting"
+    return agent, tg, forms, job
+
+
+def test_ashby_and_lever_go_straight_to_chrome_and_a_confirmed_click_is_logged_as_applied(env):
+    agent, tg, forms, job = start_assisted(env, "lever")
+    assert forms.submitted == 0  # no script ever clicks a guarded Submit
+    assert agent.collect_assists() is None and job["status"] == "assisting"  # nothing finished yet
+    finish_assist(agent, job, "submitted")
+    assert job["status"] == "applied" and [s for s, _ in env.logged] == ["applied"]
+    assert "Applied" in tg.sent[-1][0]
+
+
+@pytest.mark.parametrize("status,detail,words", [("closed", "", "closed"), ("timeout", "", "No confirmation"),
+                                                 ("error", "FormError", "could not finish")])
+def test_an_unfinished_chrome_window_goes_to_recommended_never_applied(env, status, detail, words):
+    agent, tg, forms, job = start_assisted(env)
+    finish_assist(agent, job, status, detail)
+    assert job["status"] == "handed_off" and [s for s, _ in env.logged] == ["recommended"] and words in env.logged[0][1]["reason"]
+
+
+def test_a_lost_chrome_window_is_handed_off_after_the_wait(env):
+    clock = [1000.0]
+    agent, tg, forms, job = make_agent(env, BASIC)
+    agent.now = lambda: clock[0]
+    job["ats"], agent.assist_launcher = "ashby", lambda jid: None
+    agent.advance()
+    tg.tap("Submit")
+    agent.handle(tg.poll()[0])
+    clock[0] += 3600
+    agent.collect_assists()
+    assert job["status"] == "handed_off" and "lost track" in env.logged[0][1]["reason"]
+
+
+def test_run_assist_writes_only_a_result_file_and_never_the_state(tmp_path):
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({"j1": {"url": "https://jobs.lever.co/a/b", "answers": {"name": "Adam"}}}))
+    before = state.read_text()
+    seen = {}
+
+    @contextlib.contextmanager
+    def browser(headed):
+        seen["headed"] = headed
+        yield SimpleNamespace()
+
+    real = apply_forms.assist
+    apply_forms.assist = lambda page, url, answers, wait: (seen.update(url=url, answers=answers, wait=wait) or ("submitted", ""))
+    try:
+        result = apply_agent.run_assist("j1", minutes=3, state_path=state, browser=browser)
+    finally:
+        apply_forms.assist = real
+    assert result["status"] == "submitted" and seen == {"headed": True, "url": "https://jobs.lever.co/a/b", "answers": {"name": "Adam"}, "wait": 180}
+    assert json.loads((tmp_path / "apply_assist_j1.json").read_text())["status"] == "submitted" and state.read_text() == before
 
 
 def test_form_error_hands_off(env):
@@ -274,7 +354,7 @@ def test_dry_run_fills_but_never_submits_or_logs(env):
 
 @pytest.mark.parametrize("result,status", [(("unknown", "no confirmation"), "handed_off"),
                                            (("invalid", "Email is required"), "handed_off"),
-                                           (("blocked", "CAPTCHA"), "handed_off")])
+                                           (("blocked", "email verification code"), "handed_off")])
 def test_unconfirmed_submit_is_never_logged_as_applied(env, result, status):
     agent, tg, forms, job = make_agent(env, BASIC, submit_result=result)
     agent.advance()
@@ -489,7 +569,7 @@ def test_fit_jobs_on_other_sites_go_straight_to_recommended_with_one_message(env
     added = agent.queue(cands, hand_off_rest=True)
     assert [j["title"] for j in added] == ["A"]
     assert [(s, k["reason"][:11]) for s, k in env.logged] == [("recommended", "Applies on ")]
-    assert len(tg.sent) == 1 and "nothing is sent until you tap Submit" in tg.sent[0][0]
+    assert len(tg.sent) == 1 and "Nothing goes out until you tap Submit" in tg.sent[0][0]
     assert agent.queue(cands, hand_off_rest=True) == [] and len(env.logged) == 1  # never logged twice
 
 
@@ -624,8 +704,8 @@ def test_the_queue_message_separates_ai_jobs_from_hand_jobs(env):
              {"title": "Eng B", "company": "Beta", "fit": "medium", "url": "https://acme.wd1.myworkdayjobs.com/x/job/1"}]
     agent.queue(cands, hand_off_rest=True)
     message = tg.sent[-1][0]
-    assert "AI is handling these 1" in message and "You apply to these 1 by hand" in message
-    assert message.index("Eng A") < message.index("You apply to these") < message.index("Eng B")
+    assert "I'm preparing 1 application" in message and "1 for you to apply by hand" in message
+    assert message.index("Eng A") < message.index("for you to apply by hand") < message.index("Eng B")
 
 
 def test_status_separates_the_buckets(env):
@@ -643,3 +723,27 @@ def test_a_queued_job_the_scorer_now_grades_low_is_skipped_without_preparing(env
     env.fits[URL] = "medium"  # a job still graded medium is kept
     job["status"] = "queued"
     assert agent.drop_regraded_low() == 0 and job["status"] == "queued"
+
+
+def test_state_and_country_come_from_the_profile_and_blank_address_is_asked():
+    profile = {**apply_answers.DEFAULT_PROFILE, "address": "", "zip": ""}
+    def field(label, kind="text", options=()):
+        return apply_forms.Field(kind=kind, label=label, key=apply_forms.normalize_label(label), required=True,
+                                 options=list(options), selectors=["x"])
+    assert apply_answers.resolve(field("State"), profile, {})[:2] == ("fill", "Minnesota")
+    assert apply_answers.resolve(field("Country"), profile, {})[:2] == ("fill", "United States")
+    assert apply_answers.resolve(field("Street Address"), profile, {})[0] == "ask"  # no address set: never guessed
+    profile["address"] = "1 Main St"
+    assert apply_answers.resolve(field("Street Address"), profile, {})[:2] == ("fill", "1 Main St")
+
+
+def test_option_aliases_match_usa_and_mn_but_not_inside_other_words():
+    assert apply_forms.best_option(["Canada", "USA"], "United States") == "USA"
+    assert apply_forms.best_option(["Australia", "Canada"], "United States") is None
+    assert apply_forms.best_option(["MN", "WI"], "Minnesota") == "MN"
+
+
+@pytest.mark.parametrize("label", ["Preferred First Name*", "Preferred name", "Nickname", "What should we call you?"])
+def test_a_preferred_name_is_adams_first_name_not_a_question(label):
+    f = apply_forms.Field(kind="text", label=label, key=apply_forms.normalize_label(label), required=True, options=[], selectors=["x"])
+    assert apply_answers.resolve(f, apply_answers.DEFAULT_PROFILE, {})[:2] == ("fill", "Adam")

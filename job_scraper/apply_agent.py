@@ -17,6 +17,9 @@ One job is worked at a time. For each:
        Reply with text to replace a draft (start with "2:" to replace the second one).
     4. On Submit a fresh browser fills the form again, checks nothing new is required, clicks submit and
        reads the confirmation. The result is written to the applied log (applied, by AI).
+       Ashby and Lever guard Submit with a robot check that a script must not clear. For them (and any form
+       that shows a CAPTCHA) Submit opens the filled form in Chrome on your PC (`assist`, its own process,
+       20 minutes) and you press Submit; the agent sees the confirmation and logs it as applied.
 
 Anything the agent cannot do goes to Recommended in the applied log with the reason, and you get a
 message: a login or account, a CAPTCHA or code prompt, a closed posting, a required file it does not
@@ -71,13 +74,16 @@ LOCK_PATH = daily_digest.DAILY / "apply_agent.lock"
 QUEUE_REQUEST_PATH = daily_digest.DAILY / "apply_queue_request.json"
 SHOT_DIR = daily_digest.DAILY / "apply_shots"
 LETTER_DIR = ROOT / "cover_letters"
-OPEN = ("queued", "preparing", "asking", "ready", "submitting")
+OPEN = ("queued", "preparing", "asking", "ready", "submitting", "assisting")
 WAITING = ("asking", "ready")
 SUBMITTABLE = ("ready", "unsent")  # a summary can still be sent after it was logged as not sent
 QUESTION_WORDS = ("who", "what", "when", "where", "why", "how", "which", "is ", "are ", "do ", "does ", "did ",
                   "can ", "could ", "should ", "will ", "would ", "show", "list", "tell", "explain")
 LOCK_STALE_SECONDS = 1800
 MAX_BUTTON_OPTIONS = 8
+ROBOT_CHECK_ATS = ("ashby", "lever")  # their Submit is guarded by a robot check, so Adam makes the last click
+ROBOT_CHECK = re.compile(r"captcha|robot check", re.I)
+ASSIST_MINUTES = 20
 ATS_LABEL = {"greenhouse": "Greenhouse form", "lever": "Lever form", "ashby": "Ashby form"}
 
 
@@ -121,7 +127,10 @@ class Telegram:
 def open_browser(headed=False):
     from playwright.sync_api import sync_playwright
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=not headed)
+        try:  # a visible window is Adam's own Chrome when it is installed, which robot checks trust more
+            browser = p.chromium.launch(headless=False, channel="chrome") if headed else p.chromium.launch(headless=True)
+        except Exception:  # noqa: BLE001
+            browser = p.chromium.launch(headless=not headed)
         try:
             context = browser.new_context(viewport={"width": 1280, "height": 1800}, locale="en-US")
             yield context.new_page()
@@ -158,7 +167,8 @@ def log_result(job, status, reason=None, cover_letter=None, note=None, resume=No
     if job.get("fit_score") is not None:
         argv += ["--score", str(job["fit_score"])]
     if status == "applied":
-        argv += ["--method", ATS_LABEL.get(job.get("ats"), "Online form") + " (AI, approved on Telegram)"]
+        argv += ["--method", ATS_LABEL.get(job.get("ats"), "Online form")
+                 + (" (AI filled it, Adam pressed Submit)" if job.get("assisted") else " (AI, approved on Telegram)")]
         if resume:
             argv += ["--resume", resume]
         if cover_letter:
@@ -172,13 +182,41 @@ def log_result(job, status, reason=None, cover_letter=None, note=None, resume=No
     return applied_log.main(argv) == 0
 
 
+def launch_assist(job_id):
+    """Start the visible-Chrome helper in its own process, so the listener keeps answering Telegram while Adam finishes."""
+    import subprocess
+    out = open(daily_digest.DAILY / "apply_agent.log", "a", encoding="utf-8")
+    flags = 0x00000008 | 0x00000200 if os.name == "nt" else 0  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "assist", job_id], stdout=out, stderr=out,
+                     stdin=subprocess.DEVNULL, creationflags=flags, cwd=str(ROOT))
+
+
+def run_assist(job_id, minutes=ASSIST_MINUTES, state_path=None, browser=None):
+    """The helper process: open the job's form in Chrome, type the approved answers, wait for Adam's own Submit click.
+
+    It only reads the state file. The outcome goes to apply_assist_<id>.json, which the agent picks up, so the
+    agent stays the only process that writes the state and the applied log.
+    """
+    path = Path(state_path or STATE_PATH)
+    job = json.loads(path.read_text(encoding="utf-8"))[job_id]
+    result = {"status": "error", "detail": ""}
+    try:
+        with (browser or open_browser)(True) as page:
+            result["status"], result["detail"] = apply_forms.assist(page, job["url"], job["answers"], minutes * 60)
+    except Exception as e:  # noqa: BLE001
+        result["detail"] = type(e).__name__
+    path.with_name(f"apply_assist_{job_id}.json").write_text(json.dumps(result), encoding="utf-8")
+    return result
+
+
 # ---------------------------------------------------------------- the agent
 
 class Agent:
     def __init__(self, tg, state_path=None, forms=apply_forms, runner=agent_runner.run_agent,
                  log=log_result, browser=open_browser, profile=None, bank_path=None,
                  dry_run=False, headed=False, letter_dir=None, shot_dir=None, now=time.time, log_entries=None, fit_of=None,
-                 embed_resolver=None):
+                 embed_resolver=None, assist_launcher=None):
+        self.assist_launcher = assist_launcher or launch_assist
         self.tg, self.forms, self.runner, self.log = tg, forms, runner, log
         self.browser_factory, self.dry_run, self.headed, self.now = browser, dry_run, headed, now
         self.state_path = Path(state_path or STATE_PATH)
@@ -220,7 +258,7 @@ class Agent:
             return None
 
     def title_of(self, job):
-        return f"<b>{esc(job.get('title') or 'Untitled')}</b> at {esc(job.get('company') or 'company not listed')}"
+        return f"<b>{esc(job.get('title') or 'Untitled')}</b> · {esc(job.get('company') or 'company not listed')}"
 
     # ---- queue
     def queue(self, candidates, limit=10, fits=("high", "medium"), hand_off_rest=False):
@@ -270,15 +308,14 @@ class Agent:
 
     def queue_summary(self, added, other):
         def lines(jobs):
-            rows = [f"- {self.title_of(j)} ({(j.get('fit') or '').upper()})" for j in jobs[:12]]
-            return rows + ([f"- and {len(jobs) - 12} more"] if len(jobs) > 12 else [])
+            rows = [f"• {self.title_of(j)} ({(j.get('fit') or '').upper()})" for j in jobs[:12]]
+            return rows + ([f"• and {len(jobs) - 12} more"] if len(jobs) > 12 else [])
         parts = []
         if added:
-            parts += [f"<b>AI is handling these {len(added)} here on Telegram.</b> "
-                      "I will ask you for anything I need, and nothing is sent until you tap Submit:"] + lines(added)
+            parts += [f"🤖 <b>I'm preparing {len(added)} application{'s' if len(added) != 1 else ''}.</b> "
+                      "I'll ask if I need anything. Nothing goes out until you tap Submit."] + lines(added)
         if other:
-            parts += ["", f"<b>You apply to these {len(other)} by hand.</b> They are on sites the AI cannot fill, "
-                          "and are saved under Recommended in the applied log:"] + lines(other)
+            parts += ["", f"✋ <b>{len(other)} for you to apply by hand</b> (the AI cannot fill these sites; they are in your log):"] + lines(other)
         return "\n".join(parts)
 
     def open_jobs(self):
@@ -304,14 +341,14 @@ class Agent:
         job["reason"] = reason
         logged = self.log(job, "recommended", reason=reason)
         link = self.forms.application_url(job["url"]) if job.get("url") else ""
-        self.say(f"<b>You apply to this one by hand:</b> {self.title_of(job)}\n{esc(reason)}{extra}\n"
-                 + (f'<a href="{esc(link)}">Open the application</a>\n' if link else "")
-                 + ("Saved under Recommended, you apply." if logged else "I could not write it to the applied log, so note it yourself."))
+        self.say(f"✋ <b>Over to you:</b> {self.title_of(job)}\n{esc(reason)}{extra}\n"
+                 + (f'<a href="{esc(link)}">Open the application</a>' if link else "")
+                 + ("" if logged else "\n⚠ I could not write it to the applied log, so note it yourself."))
         self.save()
 
     def skip(self, job):
         self.set_status(job, "skipped")
-        self.say(f"Skipped {self.title_of(job)}. It will not come back.")
+        self.say(f"⏭ Skipped {self.title_of(job)}. It will not come back.")
 
     # ---- step 1 and 2: read the form, fill in what we know, draft, ask
     def prepare(self, job):
@@ -324,8 +361,9 @@ class Agent:
             with self.browser() as page:
                 form = self.forms.discover(page, job["url"])
                 job["form_url"] = form.url
-                if form.blocker:
+                if form.blocker and not ROBOT_CHECK.search(form.blocker):
                     return self.handoff(job, f"The page needs a human step ({form.blocker}).")
+                job["human_click"] = bool(form.blocker)  # a robot check: I do the rest, Adam makes the last click
                 standard = apply_answers.standard_answers()
                 plan = [(f, *apply_answers.resolve(f, profile, bank, standard)) for f in form.fields]
                 letter = self._draft_all(job, plan, page, profile)
@@ -386,7 +424,7 @@ class Agent:
             return self.ask(job)
         return self.approval(job)
 
-    def ask(self, job):
+    def ask(self, job, prefix=""):
         key = job["pending"][0]
         meta = job["fields"][key]
         job["asked"] = key
@@ -398,7 +436,7 @@ class Agent:
         buttons = [[(clip(o, 40), f"a:{job['id']}:{i}")] for i, o in enumerate(options)]
         buttons.append([("Skip this job", f"x:{job['id']}"), ("I'll do it", f"h:{job['id']}")])
         hint = "" if options else "\nReply with your answer."
-        self.say(f"{self.title_of(job)}\n<b>Question:</b> {esc(meta['label'])}"
+        self.say(f"{prefix}❓ {self.title_of(job)}\n<b>{esc(meta['label'])}</b>"
                  + (" (required)" if meta["required"] else "") + hint, buttons)
         self.save()
 
@@ -425,34 +463,37 @@ class Agent:
         return None
 
     # ---- approval
-    def approval(self, job):
+    def needs_human_click(self, job):
+        return not self.dry_run and (job.get("human_click") or job.get("ats") in ROBOT_CHECK_ATS)
+
+    def approval(self, job, prefix=""):
         job["ver"] += 1
         job["approved"] = digest(job["answers"])  # Submit works only while the answers still hash to what this summary showed
         self.set_status(job, "ready")
-        profile = self.profile or apply_answers.load_profile()
-        lines = [f"<b>AI has this one ready. Tap Submit to send it:</b> {self.title_of(job)}",
-                 f"{(job.get('fit') or '').upper()} fit | {ATS_LABEL.get(job['ats'], job['ats'])}"
-                 + (" | DRY RUN, will not click submit" if self.dry_run else "")]
+        lines = [f"{prefix}✅ <b>Ready.</b> {self.title_of(job)}",
+                 f"{(job.get('fit') or '').upper()} fit · {ATS_LABEL.get(job['ats'], job['ats'])}"
+                 + (" · DRY RUN, will not click submit" if self.dry_run else "")]
+        if self.needs_human_click(job):
+            lines.append("🖥 This site has a robot check. Tap Submit and I open the filled form in Chrome on your PC for your last click.")
+        lines.append("")
         for key, value in job["answers"].items():
             meta = job["fields"].get(key, {})
             if key in job["drafts"]:
                 continue
             if value is True:
-                lines.append(f"- {esc(clip(meta.get('label', key), 70))}: will tick")
+                lines.append(f"{esc(clip(meta.get('label', key), 70))}: ✔")
             elif isinstance(value, str) and re.search(r"\.(pdf|docx?)$", value, re.I):
-                lines.append(f"- {esc(clip(meta.get('label', key), 40))}: file {esc(Path(value).name)}")
+                lines.append(f"{esc(clip(meta.get('label', key), 40))}: {esc(Path(value).name)}")
             else:
-                lines.append(f"- {esc(clip(meta.get('label', key), 50))}: {esc(clip(value, 120))}")
-        self.say("\n".join(lines))
+                lines.append(f"{esc(clip(meta.get('label', key), 50))}: {esc(clip(value, 120))}")
         drafts = list(job["drafts"].items())
         for n, (key, d) in enumerate(drafts, 1):
-            self.say(f"<b>Draft {n}: {esc(clip(d['label'], 80))}</b> (written by {esc(d['provider'])})\n{esc(d['text'])}")
-        tail = "Tap Submit to send it."
+            lines += ["", f"<b>Draft {n}: {esc(clip(d['label'], 80))}</b> ({esc(d['provider'])})", esc(d["text"])]
         if drafts:
-            tail += ' Reply with text to replace draft 1, or start with "2:" for draft 2.'
+            lines += ["", 'Reply with text to replace draft 1, or start with "2:" for draft 2.']
         buttons = [[("Submit", f"s:{job['id']}:{job['ver']}"), ("Skip", f"x:{job['id']}"),
                     ("I'll do it", f"h:{job['id']}")]]
-        self.say(tail, buttons)
+        self.say("\n".join(lines), buttons)
 
     def replace_draft(self, job, text):
         m = re.match(r"^\s*(\d+)\s*[:.)]\s*(.+)$", text, re.S)
@@ -475,13 +516,17 @@ class Agent:
 
     # ---- step 3: the approved submit
     def submit_job(self, job):
+        if self.needs_human_click(job):
+            return self.start_assist(job)
         self.set_status(job, "submitting")
         answers = job["answers"]
         shots = self.shot_dir
         try:
             with self.browser() as page:
                 form = self.forms.discover(page, job["url"])
-                if form.blocker:
+                if form.blocker and ROBOT_CHECK.search(form.blocker):
+                    pass  # the robot check is handled after this block, by Adam
+                elif form.blocker:
                     return self.handoff(job, f"The page now needs a human step ({form.blocker}).")
                 missing = [f.label or f.key for f in form.fields if f.required and f.key not in answers]
                 if missing:
@@ -498,14 +543,57 @@ class Agent:
                     return self.say(f"Dry run for {self.title_of(job)}: the form filled without errors"
                                     + (f" ({len(errors)} optional field(s) failed)" if errors else "")
                                     + f". Nothing was submitted. Screenshot: {esc(shot)}")
-                status, detail = self.forms.submit(page)
-                self.forms.screenshot(page, shots / f"{job['id']}-after.png")
+                if form.blocker:
+                    status, detail = "blocked", form.blocker
+                else:
+                    status, detail = self.forms.submit(page)
+                    self.forms.screenshot(page, shots / f"{job['id']}-after.png")
         except self.forms.FormError as e:
             return self.handoff(job, f"Submit stopped: {e}")
         except Exception as e:  # noqa: BLE001
             return self.handoff(job, f"Something broke before the result was known ({type(e).__name__}). "
                                 "Check your email for a confirmation before applying again.")
         self.finish_submit(job, status, detail)
+
+    # ---- a robot check: the form opens in Chrome on Adam's PC and he makes the last click
+    def start_assist(self, job):
+        job["assisted"], job["assist_started"] = True, self.now()
+        self.set_status(job, "assisting")
+        self.state_path.with_name(f"apply_assist_{job['id']}.json").unlink(missing_ok=True)
+        try:
+            self.assist_launcher(job["id"])
+        except OSError as e:
+            return self.handoff(job, f"I could not open Chrome on your PC ({type(e).__name__}).")
+        link = self.forms.application_url(job["url"]) if job.get("url") else ""
+        self.say(f"🖥 <b>Your turn, one click.</b> {self.title_of(job)}\n"
+                 "The site puts a robot check on Submit, so a script cannot send it. "
+                 "I opened the filled form in Chrome on your PC. Clear the check and press Submit, "
+                 f"and I will log it. I wait {ASSIST_MINUTES} minutes.\n"
+                 + (f'<a href="{esc(link)}">Open it yourself instead</a>' if link else ""))
+
+    def collect_assists(self):
+        """Pick up the outcome of each Chrome window Adam was asked to finish."""
+        for job in list(self.jobs.values()):
+            if job["status"] != "assisting":
+                continue
+            path = self.state_path.with_name(f"apply_assist_{job['id']}.json")
+            try:
+                result = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                if self.now() - job.get("assist_started", 0) > ASSIST_MINUTES * 60 + 300:
+                    self.handoff(job, "I lost track of the Chrome window. If you did not press Submit, apply with the link.")
+                continue
+            path.unlink(missing_ok=True)
+            status, detail = result.get("status"), result.get("detail") or ""
+            if status == "submitted":
+                self.finish_submit(job, "submitted", "")
+            elif status == "closed":
+                self.handoff(job, "The Chrome window was closed before the application was sent.")
+            elif status == "timeout":
+                self.handoff(job, f"No confirmation within {ASSIST_MINUTES} minutes, so I stopped waiting."
+                                  + (f" Not filled: {clip(detail, 120)}." if detail else ""))
+            else:
+                self.handoff(job, f"Chrome could not finish the form ({clip(detail, 120) or 'unknown error'}).")
 
     def finish_submit(self, job, status, detail):
         profile = self.profile or apply_answers.load_profile()
@@ -514,15 +602,18 @@ class Agent:
             for d in job["drafts"].values():  # what was actually sent, so the next draft can reuse it
                 apply_answers.log_answer(d["label"], d["text"], "Adam edited" if d["provider"] == "you" else f"AI draft ({d['provider']})",
                                          job, path=self.answer_log_path)
+            how = "Adam pressed Submit" if job.get("assisted") else "Approved on Telegram"
             logged = self.log(job, "applied", cover_letter=job.get("cover_letter"), resume=profile["resume_pdf"],
-                              note=f"Approved on Telegram; {len(job['drafts'])} draft(s)" if job["drafts"] else "Approved on Telegram")
-            self.say(f"<b>Submitted:</b> {self.title_of(job)}\nLogged as Applied." if logged
-                     else f"<b>Submitted:</b> {self.title_of(job)}\nThe applied log write failed. Add it by hand.")
+                              note=f"{how}; {len(job['drafts'])} draft(s)" if job["drafts"] else how)
+            self.say(f"🎉 <b>Applied:</b> {self.title_of(job)}\nSaved in your log." if logged
+                     else f"🎉 <b>Applied:</b> {self.title_of(job)}\n⚠ The applied log write failed. Add it by hand.")
+        elif status == "blocked" and ROBOT_CHECK.search(detail or ""):
+            self.start_assist(job)  # the site asked for a human mid-submit: nothing was sent, so Adam finishes it
         elif status == "unknown":
-            self.handoff(job, f"I clicked submit but saw no confirmation ({detail}). It may have gone through; "
-                              "check your email before applying again.")
+            self.handoff(job, "I clicked Submit but never saw a confirmation page. It may have gone through, "
+                              "so check your email for a confirmation before applying again.")
         else:  # blocked or invalid
-            self.handoff(job, f"The form did not accept it ({status}): {clip(detail, 200)}")
+            self.handoff(job, f"The site did not accept it ({status}): {clip(detail, 200)}")
 
     # ---- events
     def handle(self, ev):
@@ -563,7 +654,7 @@ class Agent:
                 ack("The answers changed. Check the new summary.")
                 return self.approval(job)
             ack("Submitting")
-            self.say(f"Submitting {self.title_of(job)}…")
+            self.say(f"⏳ {'Opening' if self.needs_human_click(job) else 'Submitting'} {self.title_of(job)}…")
             return self.submit_job(job)
         ack("Nothing to do")
 
@@ -737,8 +828,7 @@ Adam's question: {question}
                 self.handoff(job, f"No answer to my question in {self.wait_seconds / 3600:g} hours, so I stopped waiting.")
             elif waited > self.nudge_seconds and not job.get("nudged"):
                 since, job["nudged"] = job["updated"], True
-                self.say(f"Still waiting on you for {self.title_of(job)} ({waited / 3600:.0f}h). Question or summary again:")
-                (self.ask if job["status"] == "asking" else self.approval)(job)
+                (self.ask if job["status"] == "asking" else self.approval)(job, prefix=f"⏰ Still waiting on you ({waited / 3600:.0f}h)\n")
                 job["updated"] = since  # the 24 hour clock keeps running from the first message
                 self.save()
 
@@ -799,6 +889,7 @@ Adam's question: {question}
                 except Exception as e:  # noqa: BLE001 - a bad day file must not stop the listener
                     print(f"queue request failed: {type(e).__name__}: {e}", file=sys.stderr)
             self.drop_regraded_low()
+            self.collect_assists()
             touch_lock()
             self.expire()
             worked = self.advance()
@@ -871,7 +962,8 @@ def selftest(tg, wait=180):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=("queue", "serve", "run", "listen", "status", "selftest"))
+    ap.add_argument("cmd", choices=("queue", "serve", "run", "listen", "status", "selftest", "assist"))
+    ap.add_argument("job_id", nargs="?")
     ap.add_argument("--day")
     ap.add_argument("--fit", default=os.environ.get("APPLY_FIT", "high,medium"))
     ap.add_argument("--limit", type=int, default=10)
@@ -881,6 +973,8 @@ def main(argv=None):
     ap.add_argument("--headed", action="store_true")
     args = ap.parse_args(argv)
     fits = tuple(f.strip() for f in args.fit.split(",") if f.strip())
+    if args.cmd == "assist":  # started by the agent for one job; never takes the lock or touches the state
+        return 0 if args.job_id and run_assist(args.job_id)["status"] == "submitted" else 1
     try:
         tg = Telegram()
         if args.cmd == "selftest":

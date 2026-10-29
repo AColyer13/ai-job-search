@@ -31,6 +31,7 @@ BLOCKER_SELECTORS = (
      "iframe[src*='challenges.cloudflare.com']:visible, .h-captcha:visible, .cf-turnstile:visible", "CAPTCHA"),
     # Lever draws the hCaptcha only when Submit is pressed, but its container and response field are on the page from the start.
     (".h-captcha[data-sitekey], input[name='h-captcha-response']", "hCaptcha on the form"),
+    ("iframe[src*='recaptcha'][src*='bframe']:visible", "CAPTCHA"),  # reCAPTCHA (also Enterprise, which Ashby uses): the image challenge
     ("input[type=password]:visible", "account or login required"),
 )
 SUCCESS_URL = re.compile(r"/confirmation|/thanks|/thank-you|/submitted|application_submitted", re.I)
@@ -281,6 +282,12 @@ def read_form(page, ats, target):
     return form
 
 
+OPTION_ALIASES = {
+    "united states": ("united states of america", "usa", "us", "u s"),
+    "minnesota": ("mn",),
+}
+
+
 def best_option(options, wanted):
     """The listed option that matches `wanted`: exact, then starts-with, then contains. None if nothing fits."""
     want = normalize_label(wanted)
@@ -291,6 +298,10 @@ def best_option(options, wanted):
                  lambda n: want in n, lambda n: n and n in want):
         for n, original in normed:
             if n and test(n):
+                return original
+    for alias in OPTION_ALIASES.get(want, ()):  # "United States" is listed as "USA" on some forms; exact only, "us" sits inside "Australia"
+        for n, original in normed:
+            if n == alias:
                 return original
     return None
 
@@ -380,6 +391,13 @@ def _validation_messages(page):
     return [t[:120] for t in dict.fromkeys(texts)][:6]
 
 
+def confirmed(page, before_url=""):
+    """True when the page shows that the application was received."""
+    if before_url and page.url != before_url and SUCCESS_URL.search(page.url):
+        return True
+    return bool(SUCCESS_TEXT.search(_scan_text(page)) or SUCCESS_TEXT.search(_page_text(page)))
+
+
 def submit(page):
     """Click the form's submit button and watch for the result. Call only after Adam approved.
 
@@ -393,15 +411,21 @@ def submit(page):
     if not button.count():
         return "invalid", "no submit button found"
     before = page.url
-    button.click(timeout=8000)
+    try:
+        page.wait_for_load_state("networkidle", timeout=10000)  # a resume upload still in flight makes the site ignore the click
+    except Exception:  # noqa: BLE001 - a page that never goes quiet is still clicked
+        pass
+    try:
+        button.click(timeout=8000)
+    except Exception as e:  # noqa: BLE001
+        if "Timeout" in type(e).__name__:  # a robot-check overlay (Lever's hCaptcha) keeps the button from taking the click
+            return "blocked", "robot check: the site would not take the click"
+        raise
     waited = 0
     while waited < SUBMIT_WAIT_MS:
         page.wait_for_timeout(700)
         waited += 700
-        if page.url != before and SUCCESS_URL.search(page.url):
-            return "submitted", ""
-        text = _scan_text(page)
-        if SUCCESS_TEXT.search(text) or SUCCESS_TEXT.search(_page_text(page)):
+        if confirmed(page, before):
             return "submitted", ""
         reason = blocker_on_page(page)
         if reason:
@@ -411,6 +435,32 @@ def submit(page):
             if messages:
                 return "invalid", "; ".join(messages)
     return "unknown", "no confirmation page appeared within %d seconds" % (SUBMIT_WAIT_MS // 1000)
+
+
+def assist(page, url, answers, wait_seconds=1200):
+    """Open the form in a visible browser, type the approved answers, and wait for a person to finish it.
+
+    Sites with a robot check (Ashby, Lever) cannot be submitted by a script, and this code never solves
+    one. Adam presses Submit and clears the check himself. Returns ("submitted", ""), ("closed", "") when
+    the window was closed first, ("timeout", "") or ("error", text).
+    """
+    try:
+        form = discover(page, url)
+        errors = fill(page, form, answers)
+        missing = [f.label for f in form.fields if f.required and f.key not in answers]
+        page.bring_to_front()
+        before, waited = page.url, 0
+        while waited < wait_seconds * 1000:
+            page.wait_for_timeout(1500)
+            waited += 1500
+            if confirmed(page, before):
+                return "submitted", ""
+        note = "; ".join(missing[:3] + [f"{k}: {v}" for k, v in list(errors.items())[:2]])
+        return "timeout", note
+    except FormError as e:
+        return "error", str(e)
+    except Exception as e:  # noqa: BLE001 - closing the window ends the wait
+        return ("closed", "") if "closed" in str(e).lower() else ("error", type(e).__name__)
 
 
 def _page_text(page):

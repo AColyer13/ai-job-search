@@ -39,7 +39,10 @@ DEFAULT_PROFILE = {
     "phone": "(612) 710-7700",
     "location": "Edina, MN",
     "city": "Edina",
+    "state": "Minnesota",
     "country": "United States",
+    "address": "",  # street, zip: set in daily/apply_profile.json (local); a blank one is asked, never guessed
+    "zip": "",
     "linkedin": "https://www.linkedin.com/in/colyeradam",
     "github": "https://github.com/AColyer13",
     "portfolio": "https://acolyer13.github.io/WebPortfolio/",
@@ -50,7 +53,7 @@ DEFAULT_PROFILE = {
 
 # (pattern on the normalized label, profile key). First match wins.
 RULES = (
-    (r"^(first|given) name", "first_name"),
+    (r"^(first|given) name|^(preferred|nick) ?(first )?name|^what (should|do) we call you", "first_name"),
     (r"^(last|family) name|^surname", "last_name"),
     (r"^(full |legal |your )?name$|^name\b.*\bfull\b", "full_name"),
     (r"\be mail\b|^email", "email"),
@@ -61,6 +64,9 @@ RULES = (
     (r"^current (company|employer)|^(company|employer)$", "current_company"),
     (r"^current (job )?title", "current_title"),
     (r"^country", "country"),
+    (r"^(state|province)\b", "state"),
+    (r"^(zip|postal)", "zip"),
+    (r"^(current )?(street |mailing |home )?address( line 1)?$|^street", "address"),
     (r"^(current )?location|\bcity\b|where do you (currently )?(live|reside)|where are you (currently )?(located|based)", "location"),
 )
 CONSENT = re.compile(r"privacy|terms|agree|acknowledg|consent|policy|certify|accurate", re.I)

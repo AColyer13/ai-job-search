@@ -4,6 +4,7 @@ ATS pages are local HTML served through Playwright request routing, Telegram and
 "submit" posts to nothing. This is the closest a test can get to a live run without sending an application.
 """
 import contextlib
+import json
 import sys
 from pathlib import Path
 
@@ -56,7 +57,8 @@ def env(tmp_path, chromium):
                               log=lambda job, status, **kw: logged.append((status, kw)) or True, browser=browser,
                               profile={**apply_answers.DEFAULT_PROFILE, "resume_pdf": str(resume)},
                               bank_path=tmp_path / "bank.json", letter_dir=tmp_path / "letters",
-                              shot_dir=tmp_path / "shots")
+                              shot_dir=tmp_path / "shots", assist_launcher=lambda jid: agent.launched.append(jid))
+    agent.launched = []  # Chrome on Adam's PC is never opened by a test
     return agent, tg, logged, pages
 
 
@@ -98,8 +100,8 @@ def test_greenhouse_end_to_end(env):
     done = drive(agent, tg)
     assert done["status"] == "applied", [t for t, _ in tg.sent][-3:]
     assert logged[0][0] == "applied" and logged[0][1]["resume"].endswith("resume.pdf")
-    assert any("Submitted" in t for t, _ in tg.sent)
-    drafts = [t for t, _ in tg.sent if t.startswith("<b>Draft")]
+    assert any("Applied" in t for t, _ in tg.sent)
+    drafts = [t for t, _ in tg.sent if "Draft 1" in t]
     assert drafts and "Tailored answer." in drafts[0]
 
 
@@ -108,22 +110,27 @@ def test_lever_end_to_end(env):
     job = add(agent, LV, "lever")
     agent.advance()
     done = drive(agent, tg, "Python")
-    assert done["status"] == "applied" and logged[0][0] == "applied"
+    assert done["status"] == "assisting" and agent.launched == [job["id"]] and not logged  # Lever's hCaptcha: Adam clicks
+    agent.state_path.with_name(f"apply_assist_{job['id']}.json").write_text(json.dumps({"status": "submitted", "detail": ""}))
+    agent.collect_assists()
+    assert job["status"] == "applied" and logged[0][0] == "applied"
 
 
 def test_ashby_end_to_end(env):
     agent, tg, logged, _ = env
-    add(agent, AB, "ashby")
+    job = add(agent, AB, "ashby")
     agent.advance()
-    assert drive(agent, tg)["status"] == "applied"
+    assert drive(agent, tg)["status"] == "assisting" and agent.launched == [job["id"]]
 
 
-def test_captcha_page_is_handed_off_without_asking_anything(env):
+def test_captcha_page_is_prepared_and_left_for_adams_click(env):
     agent, tg, logged, pages = env
     pages[GH] = CAPTCHA
     job = add(agent, GH, "greenhouse")
     agent.advance()
-    assert job["status"] == "handed_off" and logged[0][0] == "recommended" and "CAPTCHA" in logged[0][1]["reason"]
+    assert job["human_click"] and job["status"] == "asking" and not logged  # the agent still does everything but the click
+    done = drive(agent, tg)
+    assert done["status"] == "assisting" and agent.launched == [job["id"]]
 
 
 def test_closed_posting_is_handed_off(env):
