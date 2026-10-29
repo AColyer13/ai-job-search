@@ -50,7 +50,7 @@ Keep answers to 1-2 minutes. Be specific. End with what you learned or would do 
 **Why it matters:** Good for "how do you balance AI capability with data privacy/compliance" or "design a system handling sensitive data" questions.
 
 ### Mercor: AI Generalist Expert
-**Source:** Mercor, AI Generalist Expert (2026–Current, remote). On applications.
+**Source:** Mercor, AI Generalist Expert (Aug 2026–Current, remote). On applications.
 **What happened:** Providing expertise in AI to improve models for a top AI lab.
 **Why it matters:** Good for "what are you doing now" and "how do you evaluate LLM quality." Keep the title he holds. Do not upgrade it to a staff research job. Activus is the specific public example for rubrics, hallucinations, and sourcing.
 **S/T/A/R stub:**

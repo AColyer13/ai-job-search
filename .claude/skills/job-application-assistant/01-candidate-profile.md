@@ -32,7 +32,7 @@ framework_version: 1.0.0
 
 ## Professional Experience
 
-### AI Generalist Expert (Contract) - Mercor (2026 - Current)
+### AI Generalist Expert (Contract) - Mercor (Aug 2026 - Current)
 Remote. List this on CVs and cover letters.
 - Application bullet: Providing expertise in AI to improve models for a top AI lab.
 - Keep the title he holds. Do not upgrade it to staff engineer, research scientist, or AI-lab employee.
@@ -69,7 +69,7 @@ Feature these four on CVs. Live URLs are the proof path. GitHub Source links on 
 
 - **MissionCtrl** (https://missionctrl.org/) — Next.js 15, TypeScript, Python, Three.js, Gemini API, Docker, Playwright. Satellite mission simulator. Renders live satellite positions and orbital paths on a 3D globe from TLE data (CelesTrak) as the simulation clock advances. Gemini flight assistant (NOVA) answers questions about the current orbit, upcoming burns, and related mission topics. Playwright and unit tests run in GitHub Actions. Public site requires sign-in for the globe.
 - **Valley Forge Automotive** (https://valleyforgeautomotive.org/) — React, TypeScript, Firebase Auth, Firestore, Tailwind CSS. Shop management: live service records, parts inventory, and scheduling. Role checks in Firestore block customers and staff from each other's records; admins can see all. Public brand on the live site is also **VF Tires**; optional parenthetical on longer CVs.
-- **Legal Eagle** — Next.js, TypeScript, PostgreSQL, FastAPI. Practice tools for estate attorneys: client files, filing deadlines, per-case change log. Assistant answers from app data only after names and other sensitive info is stripped. **Do not link** https://legaleagleproject-mu.vercel.app/ until the production debug banner is gone (it currently exposes a Gmail allowlist and `ALLOW_DEV_MAGIC_IN_PROD`).
+- **Legal Eagle** — Next.js, TypeScript, PostgreSQL, FastAPI. Practice tools for estate attorneys: client files, filing deadlines, per-case change log. Assistant answers from app data only after names and other sensitive info is stripped. Live URL: https://legaleagleproject-mu.vercel.app/ (Adam approved linking it on 2026-10-28; the landing page showed no debug banner when fetched).
 - **Stardust** — Next.js, React, Python, PostgreSQL, Docker, faster-whisper. Voice history / digital legacy. Records interviews, then transcribes and formats them for a local RAG index or custom model. Transcription runs faster-whisper on the host so audio never goes to a hosted API. No public URL on file.
 
 Additional portfolio projects (do not feature on a one-page resume unless a posting specifically matches):

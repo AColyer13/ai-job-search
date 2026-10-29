@@ -101,3 +101,6 @@ job_scraper/source_runs.json
 # Apply agent runtime files
 daily/apply_agent.lock
 daily/apply_agent.log
+
+# Personal career facts; never commit (same reason documents/cv/** is ignored)
+research/master_profile.*

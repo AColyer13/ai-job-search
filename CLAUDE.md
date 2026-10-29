@@ -17,7 +17,7 @@ This repo is a job application workspace. The AI agent running this session (Cla
 - **Languages:** English (native)
 - **CV language:** English
 
-- **Status:** Actively job searching. Activus Connect contract ended June 2026. Mercor (AI Generalist Expert) is current and belongs on applications.
+- **Status:** Actively job searching. Activus Connect contract ended June 2026. Mercor (AI Generalist Expert, since Aug 2026) is current and belongs on applications.
 - **LinkedIn headline:** "Message me to see my Portfolio! Over the past several years I closed deals across..." <!-- full headline truncated on public LinkedIn view -->
 - **Public proof:** https://acolyer13.github.io/WebPortfolio/ · https://missionctrl.org/ · https://valleyforgeautomotive.org/ · https://cursor.com/@colyer
 
@@ -27,7 +27,7 @@ This repo is a job application workspace. The AI agent running this session (Cla
 
 ### Professional Experience
 <!-- Full detail with bullets in 01-candidate-profile.md -->
-- **AI Generalist Expert** (2026 - Current) - **Mercor** (Remote)
+- **AI Generalist Expert** (Aug 2026 - Current) - **Mercor** (Remote)
 - **AI Search Quality Evaluator** (Nov 2025 - June 2026) - **Activus Connect (Tech Mahindra)** (Remote)
 - **Account Executive** (Sep 2022 - Aug 2024) - **Citizen Observer** (St. Paul, MN)
 - **Sales Development Representative** (Jul 2021 - Jul 2022) - **Digital River** (Minnetonka, MN)
@@ -38,7 +38,7 @@ This repo is a job application workspace. The AI agent running this session (Cla
 
 ### Technical Skills
 - **Primary:** React, Next.js, TypeScript, Python (FastAPI/Flask), Node.js/Express, AI/LLM integration (RAG, agents, prompt engineering, local/faster-whisper, Claude API and others), Auth (OAuth, JWT, RBAC, Presidio)
-- **Also working knowledge:** Java and SQL (stated by Adam; not yet on the resume, so confirm his depth before claiming it in a CV or cover letter)
+- **Also working knowledge:** Java and SQL (stated by Adam; both are now in the resume's skills block, so say no more than that and confirm his depth before claiming more in a CV or cover letter)
 - **Secondary:** Mobile (React Native, Flutter, native iOS/Android), data science tooling (PyTorch, PEFT, Pandas), cloud/DevOps (AWS, GCP, Azure, Docker, CI/CD), UI polish (DCI-P3, fluid animation, light/dark themes)
 - **Domain:** Privacy-first system design (sensitive info stripped or local inference before model calls), B2B technical sales and stakeholder management (transferable, not engineering experience)
 - **Software:** Claude Code, Cursor, Antigravity, GitHub Actions, Vercel, Render, Firebase, PostgreSQL, Playwright/Vitest/pytest
