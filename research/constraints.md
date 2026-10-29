@@ -80,8 +80,20 @@ effect (no application leaves without Adam's tap). Decision recorded in `master_
 Top Recommended reasons (of 29; reasons can overlap): off-supported host 19 (7 of them himalayas.app), account or Workday
 named 8 (Workday 6), one Lever hCaptcha rejection, one unanswered Telegram summary (9.4 hours), one needs a personal essay. `[log]`
 
-Hypothesis, not yet checked: a Himalayas listing links out to the employer's own ATS, and resolving that link would move some
-of the 7 into the supported set. Needs a read of 2 or 3 of those links before it counts as a fact.
+Himalayas, checked 2026-10-29 (queue item 4). The earlier hypothesis, "resolve the Himalayas link to the employer's ATS", is
+mostly already built and mostly a dead end:
+- The Himalayas search API's `applicationLink` is always a himalayas.app page: 80 of 80 jobs sampled, and none of 100 job
+  descriptions contains a Greenhouse, Lever, Ashby, Workable or Workday link. Measured from the live API, not from vendor docs.
+- The posting page answers a plain browser with a Cloudflare "Performing security verification" check, so the Apply button
+  cannot be read without getting past a bot check, which repo policy forbids. `[code]`
+- `posting_text.resolve_apply_links` already replaces aggregator links with the employer's own Greenhouse, Lever, Ashby or
+  Workable board listing, by company name and exact title. On 40 fresh Himalayas jobs it found 8 (6 Greenhouse, 1 Lever,
+  1 Ashby). It found none of the 7 logged Recommended Himalayas jobs: their employers are not on those four public boards. `[code]`
+- One of the 8 hits (Expel) is a Greenhouse job embedded on the employer's own site (`expel.com/...?gh_jid=...`), a host
+  `detect_ats` rejects. Two of the 32 Recommended log entries are the same pattern (databricks.com, cribl.io). Mapping a
+  `gh_jid` link to `job-boards.greenhouse.io/<board>/jobs/<id>` is a possible new item; the board token is not in the URL and
+  would have to be verified against the public Greenhouse jobs API. Not built. `[code]` `[log]`
+- Nothing here justifies changing the search sources.
 
 ## 5. Anti-bot boundaries (repo policy)
 
