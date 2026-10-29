@@ -49,8 +49,8 @@ effect (no application leaves without Adam's tap). Decision recorded in `master_
 - Lever's docs do not mention hCaptcha, but the applied log has a case where Lever "rejects submits from the assistant
   browser after the hCaptcha". One observation (n=1). `[log]`
 - A saved live Lever form (`tests/fixtures/ats/lever.html`, 2026-10-28) contains an empty `.h-captcha` div and a hidden
-  `h-captcha-response` input. The widget appears when Submit is pressed, so `read_form` reports no blocker before filling.
-  The log has 0 Lever successes. `[code]` `[log]`
+  `h-captcha-response` input. The widget appears when Submit is pressed. Since 2026-10-29 `blocker_on_page` treats that container
+  as a blocker, so a Lever job with it goes to Recommended before anything is typed. The log has 0 Lever successes. `[code]` `[log]`
 - The form lives at `<posting>/apply`; `application_url` appends it. `[code]`
 
 ### Ashby
