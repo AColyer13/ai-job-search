@@ -149,11 +149,11 @@ def test_a_number_404_in_a_real_posting_does_not_look_like_a_missing_page(env):
     assert job["status"] in ("asking", "ready")
 
 
-def test_page_that_returns_404_is_handed_off(env):
+def test_page_that_returns_404_is_logged_as_tried_not_recommended(env):
     agent, tg, logged, pages = env
     job = add(agent, "https://job-boards.greenhouse.io/acme/jobs/999", "greenhouse")
     agent.advance()
-    assert job["status"] == "handed_off" and logged[0][0] == "recommended"
+    assert job["status"] == "handed_off" and logged[0][0] == "attempted"
 
 
 def test_form_that_changes_after_approval_is_not_submitted(env):
@@ -171,4 +171,4 @@ def test_form_that_changes_after_approval_is_not_submitted(env):
     pages[GH] = GREENHOUSE.replace("<p id=\"err\">", '<div><label for="x">Security clearance *</label><input id="x" name="x" required></div><p id="err">')
     tg.tap("Submit")
     agent.handle(tg.poll()[0])
-    assert job["status"] == "handed_off" and logged[0][0] == "recommended" and "clearance" in logged[0][1]["reason"].lower()
+    assert job["status"] == "handed_off" and logged[0][0] == "attempted" and "clearance" in logged[0][1]["reason"].lower()

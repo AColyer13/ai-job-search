@@ -7,6 +7,7 @@ the same way, from the page's own labels and inputs, so one reader covers them. 
 `submit` is a separate call that the caller makes only after Adam approved on Telegram.
 """
 import re
+import time
 import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -398,16 +399,63 @@ def confirmed(page, before_url=""):
     return bool(SUCCESS_TEXT.search(_scan_text(page)) or SUCCESS_TEXT.search(_page_text(page)))
 
 
-def submit(page):
+CODE_BOXES = (
+    "input[autocomplete='one-time-code']:visible, input[id*='security' i]:visible, input[name*='security' i]:visible, "
+    "input[aria-label*='security' i]:visible, input[aria-label*='verification' i]:visible"
+)
+SINGLE_CHARACTER_BOXES = "input[maxlength='1']:visible"
+
+
+def enter_code(page, code):
+    """Type an emailed security code into the box, or the row of one-character boxes, the page shows. True when typed."""
+    try:
+        singles = page.locator(SINGLE_CHARACTER_BOXES)
+        if singles.count() >= len(code) > 1:  # Greenhouse draws one box per character
+            for i, ch in enumerate(code):
+                singles.nth(i).fill(ch)
+            return True
+        box = page.locator(CODE_BOXES).first
+        if box.count():
+            box.fill(code)
+            return True
+    except Exception:  # noqa: BLE001 - a page that will not take the code is reported, not guessed at
+        return False
+    return False
+
+
+def _find_submit(page):
+    button = page.locator("button[type=submit]:visible, input[type=submit]:visible").first
+    if not button.count():
+        button = page.get_by_role("button", name=re.compile(r"submit|apply", re.I)).first
+    return button
+
+
+def submit(page, code_getter=None):
     """Click the form's submit button and watch for the result. Call only after Adam approved.
 
     Returns ("submitted", "") when a confirmation shows, ("blocked", reason) when a CAPTCHA or a code
     prompt appears, ("invalid", messages) when the form refused it, or ("unknown", note) otherwise.
     "unknown" means the click went through but no confirmation was seen, so the application may exist.
+
+    code_getter(since) -> (code, note) reads the emailed security code, so a site that mails one after Submit
+    (Greenhouse) is finished by the script: the code is typed in and Submit is pressed once more.
     """
-    button = page.locator("button[type=submit]:visible, input[type=submit]:visible").first
-    if not button.count():
-        button = page.get_by_role("button", name=re.compile(r"submit|apply", re.I)).first
+    clicked = time.time()
+    status, detail = _press_submit(page)
+    if status == "blocked" and detail == "email verification code" and code_getter:
+        code, note = code_getter(clicked)
+        if not code:
+            return "blocked", f"email verification code: {note or 'no code arrived'}"
+        if not enter_code(page, code):
+            return "blocked", "email verification code: the page had no box I could type it in"
+        status, detail = _press_submit(page)
+        if status == "blocked" and detail == "email verification code":
+            return "blocked", "email verification code: the site did not accept the code"
+    return status, detail
+
+
+def _press_submit(page):
+    button = _find_submit(page)
     if not button.count():
         return "invalid", "no submit button found"
     before = page.url
@@ -437,7 +485,7 @@ def submit(page):
     return "unknown", "no confirmation page appeared within %d seconds" % (SUBMIT_WAIT_MS // 1000)
 
 
-def assist(page, url, answers, wait_seconds=1200, auto_submit=False, on_blocked=None):
+def assist(page, url, answers, wait_seconds=1200, auto_submit=False, on_blocked=None, code_getter=None):
     """Open the form in a visible browser, type the approved answers, and wait for a person to finish it.
 
     Sites with a robot check (Ashby, Lever) cannot be submitted by a script, and this code never solves
@@ -447,19 +495,25 @@ def assist(page, url, answers, wait_seconds=1200, auto_submit=False, on_blocked=
     With auto_submit the script presses Submit itself, as any browser user would, and only falls back to
     waiting for a person when the site answers with a robot check, a validation error or no confirmation.
     on_blocked(status, detail) is called then, so the person can be told the window needs them.
+
+    With auto_submit and no on_blocked nobody is pulled in: a refusal returns ("blocked", reason) at once so the
+    caller can log it for fixing.
     """
     try:
         form = discover(page, url)
         errors = fill(page, form, answers)
         missing = [f.label for f in form.fields if f.required and f.key not in answers]
         if auto_submit and not missing:
-            status, detail = submit(page)
+            status, detail = submit(page, code_getter=code_getter)
             if status == "submitted":
                 return "submitted", ""
+            if not on_blocked:
+                return "blocked", f"{status}: {detail}"
             page.bring_to_front()
-            if on_blocked:
-                on_blocked(status, detail)
+            on_blocked(status, detail)
         else:
+            if auto_submit and not on_blocked:
+                return "blocked", "incomplete: " + "; ".join(missing[:3] + [f"{k}: {v}" for k, v in list(errors.items())[:2]])
             page.bring_to_front()
             if auto_submit and on_blocked:
                 on_blocked("incomplete", "; ".join(missing[:3]))

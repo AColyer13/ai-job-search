@@ -9,6 +9,9 @@ opens each posting and sorts it:
     unsent       the apply agent filled the form and asked on Telegram, but Adam never tapped Submit.
                  The AI could have applied. Whoever applies later (a lump-sum run by another AI, or
                  a Telegram request) logs it `applied`, and that moves it out of this bucket.
+    attempted    the apply agent opened the form, filled it and tried to submit, but the site stopped it (a robot
+                 check, an email code it could not read, a form quirk). No person was pulled in: the reason is
+                 logged so the cause can be fixed, and the job waits here until someone applies and logs it `applied`.
 
 Every job the agent touches goes in through this script, so the Word file and
 daily/applied_for.json never drift apart:
@@ -16,6 +19,7 @@ daily/applied_for.json never drift apart:
     python job_scraper/applied_log.py add --url URL --status applied --method "Greenhouse form"
     python job_scraper/applied_log.py add --url URL --status recommended --reason "Needs an account"
     python job_scraper/applied_log.py add --url URL --status unsent --reason "No Submit tap in 4.5 hours"
+    python job_scraper/applied_log.py add --url URL --status attempted --reason "Lever robot check refused the click"
     python job_scraper/applied_log.py add --url URL --status applied --by Adam   # he did a recommended one
     python job_scraper/applied_log.py list [--open]    # what is already logged
     python job_scraper/applied_log.py render           # rewrite the Word file
@@ -74,7 +78,9 @@ ROLE_TYPES = {
     "customer_engineer": "customer engineering",
     "qa": "qa",
 }
-STATUSES = ("applied", "recommended", "unsent")
+STATUSES = ("applied", "recommended", "unsent", "attempted")
+SLOTS = ("applied", "attempted", "unsent", "recommended")
+SLOT_DATE = {"applied": "date_applied", "attempted": "date_attempted", "unsent": "date_unsent", "recommended": "date_recommended"}
 FIT_ORDER = {"high": 0, "medium": 1, "low": 2}
 MONTH_NAMES = (
     "January", "February", "March", "April", "May", "June",
@@ -172,6 +178,7 @@ def add_entry(entries, *, url, status, day, by="AI", store=None, **fields):
         entry["status"] = "recommended"  # the branches below move it on to `status`
         entry["date_recommended"] = ""
         entry["date_unsent"] = ""
+        entry["date_attempted"] = ""
         entry["date_applied"] = ""
         entry["applied_by"] = ""
         entries[key] = entry
@@ -186,9 +193,19 @@ def add_entry(entries, *, url, status, day, by="AI", store=None, **fields):
         entry["date_applied"] = day
         entry["reason"] = ""
         message = f"logged as applied by {by} ({month_label(month_key(day))})"
+    elif status == "attempted":
+        if entry["status"] == "applied":
+            return key, f"already applied on {entry['date_applied']} by {entry['applied_by']}; not moved back to attempted"
+        entry["status"] = "attempted"
+        entry["date_attempted"] = entry.get("date_attempted") or day
+        if fields.get("reason"):
+            entry["reason"] = fields["reason"]
+        message = f"logged as AI tried to apply, could not finish ({month_label(month_key(entry['date_attempted']))})"
     elif status == "unsent":
         if entry["status"] == "applied":
             return key, f"already applied on {entry['date_applied']} by {entry['applied_by']}; not moved back to unsent"
+        if entry["status"] == "attempted":
+            return key, "already logged as AI tried to apply, could not finish; left as is"
         entry["status"] = "unsent"
         entry["date_unsent"] = entry.get("date_unsent") or day
         if fields.get("reason"):
@@ -197,6 +214,8 @@ def add_entry(entries, *, url, status, day, by="AI", store=None, **fields):
     else:
         if entry["status"] == "applied":
             return key, f"already applied on {entry['date_applied']} by {entry['applied_by']}; not moved back to recommended"
+        if entry["status"] == "attempted":
+            return key, "already logged as AI tried to apply, could not finish; left as is"
         if entry["status"] == "unsent":
             return key, "already logged as AI could have applied, not sent; left as is"
         entry["date_recommended"] = entry.get("date_recommended") or day
@@ -487,16 +506,14 @@ def _sort_key(entry, date_field):
 
 
 def months(entries):
-    """{month key: {'applied': [...], 'unsent': [...], 'recommended': [...]}} for every month with an entry."""
+    """{month key: {'applied': [...], 'attempted': [...], 'unsent': [...], 'recommended': [...]}} for every month with an entry."""
     grouped = {}
     for entry in entries.values():
-        slot = entry["status"] if entry["status"] in ("applied", "unsent") else "recommended"
-        field = {"applied": "date_applied", "unsent": "date_unsent", "recommended": "date_recommended"}[slot]
-        grouped.setdefault(month_key(entry[field]), {"applied": [], "unsent": [], "recommended": []})[slot].append(entry)
+        slot = entry["status"] if entry["status"] in SLOTS else "recommended"
+        grouped.setdefault(month_key(entry[SLOT_DATE[slot]]), {name: [] for name in SLOTS})[slot].append(entry)
     for bucket in grouped.values():
-        bucket["applied"].sort(key=lambda e: _sort_key(e, "date_applied"))
-        bucket["unsent"].sort(key=lambda e: _sort_key(e, "date_unsent"))
-        bucket["recommended"].sort(key=lambda e: _sort_key(e, "date_recommended"))
+        for slot in SLOTS:
+            bucket[slot].sort(key=lambda e, f=SLOT_DATE[slot]: _sort_key(e, f))
     return dict(sorted(grouped.items(), reverse=True))
 
 
@@ -541,6 +558,12 @@ def _entry_blocks(entry, number, rel_id):
                 blocks.append(_p(f"{label} submitted: {entry[key]}", space_after=40))
         if entry.get("date_recommended"):
             blocks.append(_p(f"Recommended on {entry['date_recommended']}.", space_after=40))
+    elif entry["status"] == "attempted":
+        blocks.append(_p(f"AI tried to apply on {entry['date_attempted']} and could not finish. Nobody was asked; "
+                         "the cause is in the error log so it can be fixed.", space_after=40))
+        blocks.append(_p(f"What stopped it: {entry.get('reason') or 'not recorded'}", space_after=40))
+        blocks.append(_p("To finish: apply by hand or let the next fix retry it, then log it applied. "
+                         "That moves it to Applied automatically.", space_after=40))
     elif entry["status"] == "unsent":
         blocks.append(_p(f"AI prepared this on {entry['date_unsent']} and asked you on Telegram. No Submit tap came, "
                          "so it was not sent. The AI could have applied.", space_after=40))
@@ -566,12 +589,15 @@ def write_doc(entries, path=None, today=None):
     applied_total = sum(len(b["applied"]) for b in grouped.values())
     open_total = sum(len(b["recommended"]) for b in grouped.values())
     unsent_total = sum(len(b["unsent"]) for b in grouped.values())
+    tried_total = sum(len(b["attempted"]) for b in grouped.values())
     body = [
         _p("Applied for", bold=True, size=32, space_after=120),
         _p(f"Updated {today}. {applied_total} applied, {open_total} for you to apply to by hand, "
-           f"{unsent_total} the AI prepared but you did not send.", space_after=60),
+           f"{tried_total} the AI tried and could not finish, {unsent_total} the AI prepared but you did not send.", space_after=60),
         _p("Applied: an application was submitted, and the line says who submitted it. "
            "Recommended, you apply: a good fit the agent cannot submit (an account, login, CAPTCHA, assessment or an answer only you can give). "
+           "AI tried to apply, could not finish: the agent submitted the form and the site stopped it (a robot check, an email code, a form quirk); "
+           "no one was pulled in, the cause is logged to be fixed, and it moves to Applied once someone applies. "
            "AI could have applied, not sent: the agent filled the form and asked on Telegram, but no Submit tap came; "
            "send it from Telegram or have another AI apply, and it moves to Applied. Newest month first.", space_after=120),
     ]
@@ -580,7 +606,7 @@ def write_doc(entries, path=None, today=None):
     if not grouped:
         body.append(_p("Nothing logged yet.", space_after=80))
     else:
-        rows = [[_p(text, bold=True, space_after=0) for text in ("Month", "Applied by AI", "Applied by you", "AI prepared, not sent", "You apply by hand")]]
+        rows = [[_p(text, bold=True, space_after=0) for text in ("Month", "Applied by AI", "Applied by you", "AI tried, not finished", "AI prepared, not sent", "You apply by hand")]]
         for key, bucket in grouped.items():
             by_ai = sum(1 for e in bucket["applied"] if e["applied_by"] == "AI")
             by_you = len(bucket["applied"]) - by_ai
@@ -588,13 +614,15 @@ def write_doc(entries, path=None, today=None):
                 _anchor_p(_anchor(key), month_label(key)),
                 _p(str(by_ai), space_after=0),
                 _p(str(by_you), space_after=0),
+                _p(str(len(bucket["attempted"])), space_after=0),
                 _p(str(len(bucket["unsent"])), space_after=0),
                 _p(str(len(bucket["recommended"])), space_after=0),
             ])
-        body.append(_table(rows, [2400, 1700, 1700, 1900, 1900]))
+        body.append(_table(rows, [2000, 1400, 1400, 1600, 1600, 1600]))
     for bookmark_id, (key, bucket) in enumerate(grouped.items(), 1):
         body.append(_section_heading(bookmark_id, _anchor(key), month_label(key)))
-        for slot, heading in (("applied", "Applied"), ("unsent", "AI could have applied, not sent"),
+        for slot, heading in (("applied", "Applied"), ("attempted", "AI tried to apply, could not finish"),
+                              ("unsent", "AI could have applied, not sent"),
                               ("recommended", "Recommended, you apply by hand")):
             body.append(_p(f"{heading} ({len(bucket[slot])})", bold=True, size=26, space_after=60))
             if not bucket[slot]:
@@ -612,11 +640,11 @@ def write_doc(entries, path=None, today=None):
 def _print_entries(entries, only_open=False):
     grouped = months(entries)
     for key, bucket in grouped.items():
-        for slot in ("applied", "unsent", "recommended"):
+        for slot in SLOTS:
             if only_open and slot == "applied":
                 continue
             for e in bucket[slot]:
-                who = {"applied": f"by {e.get('applied_by')}", "unsent": "unsent"}.get(slot, "you apply")
+                who = {"applied": f"by {e.get('applied_by')}", "unsent": "unsent", "attempted": "AI tried"}.get(slot, "you apply")
                 print(f"{key} {slot:<11} {who:<9} {e.get('fit') or '-':<6} {e.get('title')} | {e.get('company')} | {e.get('url')}")
     if not grouped:
         print("nothing logged yet")
@@ -636,7 +664,7 @@ def main(argv=None):
     add.add_argument("--fit", choices=tuple(FIT_ORDER))
     add.add_argument("--score", type=int)
     add.add_argument("--method", help='how it was submitted, e.g. "Greenhouse form"')
-    add.add_argument("--reason", help="recommended or unsent: why Adam has to apply by hand, or why it was not sent")
+    add.add_argument("--reason", help="recommended, unsent or attempted: why Adam has to apply by hand, why it was not sent, or what stopped the AI")
     add.add_argument("--resume", help="applied only: path of the resume file that was submitted (goes in the tracker's cv_file)")
     add.add_argument("--cover-letter", dest="cover_letter", help="applied only: path of the cover letter that was submitted")
     add.add_argument("--note")
@@ -650,7 +678,7 @@ def main(argv=None):
     st.add_argument("--note", help="what the email said and its subject line")
     sub.add_parser("migrate-tracker", help="add the yield columns to job_search_tracker.csv (safe to repeat)")
     lst = sub.add_parser("list", help="print what is logged")
-    lst.add_argument("--open", action="store_true", help="only jobs not yet applied to (recommended and unsent)")
+    lst.add_argument("--open", action="store_true", help="only jobs not yet applied to (recommended, unsent and attempted)")
     sub.add_parser("render", help="rewrite the Word file from the log")
     args = ap.parse_args(argv)
 

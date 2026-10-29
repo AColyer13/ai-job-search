@@ -352,3 +352,88 @@ def test_assist_with_auto_submit_asks_for_a_person_when_an_answer_is_missing(pag
     finally:
         page.unroute(url)
     assert status[0] == "timeout" and blocked == ["incomplete"]
+
+
+def code_page(boxes):
+    """A form that, on the first Submit, asks for the emailed security code and accepts only AB12cd34."""
+    inputs = ('<input maxlength="1">' * 8) if boxes == 8 else '<input name="security_code">'
+    return ('<form id="f"><button type="submit">Submit application</button>'
+            f'<div id="code" style="display:none"><p>Enter the security code we sent to your email</p>{inputs}</div></form>'
+            "<script>(()=>{let asked=false;document.getElementById('f').addEventListener('submit',e=>{e.preventDefault();"
+            "if(!asked){asked=true;document.getElementById('code').style.display='block';return;}"
+            "const v=[...document.querySelectorAll('#code input')].map(x=>x.value).join('');"
+            "if(v==='AB12cd34'){document.body.innerHTML='<h1>Thank you for applying</h1>';}"
+            "else{document.getElementById('code').insertAdjacentHTML('beforeend','<p>Try again</p>');}});})()</script>")
+
+
+@pytest.mark.parametrize("boxes", [8, 1])
+def test_a_security_code_from_email_is_typed_in_and_submit_pressed_again(page, boxes):
+    page.set_content(code_page(boxes))
+    seen = []
+
+    def getter(since):
+        seen.append(since)
+        return "AB12cd34", ""
+
+    assert af.submit(page, code_getter=getter) == ("submitted", "")
+    assert len(seen) == 1 and seen[0] > 0
+
+
+def test_a_wrong_code_is_reported_not_retried(page):
+    page.set_content(code_page(8))
+    status, detail = af.submit(page, code_getter=lambda since: ("ZZ99zz99", ""))
+    assert status == "blocked" and "did not accept the code" in detail
+
+
+def test_no_code_in_the_mailbox_is_reported_with_the_reason(page):
+    page.set_content(code_page(8))
+    status, detail = af.submit(page, code_getter=lambda since: ("", "no code email arrived"))
+    assert status == "blocked" and "no code email arrived" in detail
+
+
+def test_without_a_code_reader_the_prompt_still_blocks(page):
+    page.set_content(code_page(8))
+    assert af.submit(page) == ("blocked", "email verification code")
+
+
+def test_assist_with_auto_submit_and_nobody_to_ask_returns_blocked_at_once(page):
+    url = "https://jobs.lever.co/a/b/apply"
+    serve_page(page, url, GREENHOUSE)
+    try:
+        status, detail = af.assist(page, "https://jobs.lever.co/a/b", {"first name": "Adam"}, 600, auto_submit=True)
+    finally:
+        page.unroute(url)
+    assert status == "blocked" and detail.startswith("incomplete")
+
+
+VIRTU = "will you now or ever in the future require visa sponsorship from your employer"
+
+
+@pytest.mark.parametrize("label,concept", [
+    ("Will you now or in the future require sponsorship?", "sponsorship"),
+    ("Will you now or ever in the future require visa sponsorship from your employer?*", "sponsorship"),
+    ("Do you require visa sponsorship to work in the US?", "sponsorship"),
+    ("Are you legally authorized to work in the United States?", "work authorization"),
+    ("Are you authorized to work in the US without sponsorship?", ""),  # mixes the two questions: asked, never guessed
+    ("Are you not authorized to work in the US?", ""),  # negated
+    ("Why do you want to work here?", ""),
+])
+def test_concept_of(label, concept):
+    assert apply_answers.concept_of(label) == concept
+
+
+def test_a_saved_sponsorship_answer_carries_to_every_wording():
+    bank = {"will you now or in the future require sponsorship": {"label": "Will you now or in the future require sponsorship?", "answer": "No"}}
+    f = make(VIRTU, "radio", label="Will you now or ever in the future require visa sponsorship from your employer?*", options=["Yes", "No"])
+    assert apply_answers.resolve(f, PROFILE, bank)[:3] == ("fill", "No", "saved")
+
+
+def test_two_different_saved_answers_to_one_concept_are_asked_not_picked():
+    bank = {"do you require sponsorship": {"label": "Do you require sponsorship?", "answer": "No"},
+            "will you require visa sponsorship": {"label": "Will you require visa sponsorship?", "answer": "Yes"}}
+    assert apply_answers.saved_by_concept("Will you ever need sponsorship?", bank) is None
+
+
+def test_a_saved_work_authorization_answer_is_not_used_for_the_sponsorship_question():
+    bank = {"are you authorized to work in the us": {"label": "Are you authorized to work in the US?", "answer": "Yes"}}
+    assert apply_answers.saved_by_concept("Do you require visa sponsorship?", bank) is None

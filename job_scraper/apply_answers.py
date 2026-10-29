@@ -105,6 +105,33 @@ def save_to_bank(key, label, answer, bank=None, path=None):
     return True
 
 
+# The same yes/no question is worded a dozen ways ("Will you now or in the future require sponsorship...?",
+# "Will you now or ever in the future require visa sponsorship from your employer?"). Adam answers it once and the
+# answer carries to every wording. A question that mixes the two ("authorized to work without sponsorship") or
+# negates the phrase is not matched: it is asked, never guessed.
+CONCEPTS = (
+    ("sponsorship", re.compile(r"\bsponsor", re.I)),
+    ("work authorization", re.compile(r"\b(legally |currently )?(authori[sz]ed|eligible|permitted|allowed|right) to work\b|work authori[sz]ation", re.I)),
+)
+
+
+def concept_of(label):
+    """'sponsorship', 'work authorization' or '' for the yes/no question a label asks."""
+    hits = [name for name, pattern in CONCEPTS if pattern.search(label or "")]
+    if len(hits) != 1 or re.search(r"\b(not|n't|without|unless|except)\b", label or "", re.I):
+        return ""
+    return hits[0]
+
+
+def saved_by_concept(label, bank):
+    """Adam's saved answer to the same question worded differently, else None."""
+    concept = concept_of(label)
+    if not concept:
+        return None
+    answers = {entry.get("answer") for entry in bank.values() if concept_of(entry.get("label")) == concept}
+    return answers.pop() if len(answers) == 1 else None  # two different saved answers: ask, never pick one
+
+
 def _profile_value(field, name, profile):
     value = profile.get(name, "")
     if name == "location" and field.kind == "combobox":
@@ -140,6 +167,9 @@ def resolve(field, profile, bank, standard=None):
         return ("draft", None, "") if field.required else ("skip", None, "")
     if key in bank:
         return "fill", bank[key]["answer"], "saved"
+    same_question = saved_by_concept(label, bank)
+    if same_question is not None and field.kind in ("radio", "select", "combobox", "text"):
+        return "fill", same_question, "saved"
     if field.kind in ("textarea", "text") and not field.options:
         said = match_standard(label, standard_answers() if standard is None else standard)
         if said and (field.required or ESSAY.search(label)):

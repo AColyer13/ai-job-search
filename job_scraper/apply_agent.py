@@ -65,6 +65,7 @@ import agent_runner  # noqa: E402
 import apply_answers  # noqa: E402
 import apply_forms  # noqa: E402
 import daily_digest  # noqa: E402
+import mail_codes  # noqa: E402
 import telegram_notify  # noqa: E402
 from posting_text import greenhouse_form_url  # noqa: E402
 
@@ -84,7 +85,60 @@ MAX_BUTTON_OPTIONS = 8
 ROBOT_CHECK_ATS = ("ashby", "lever")  # their Submit is guarded by a robot check, so Adam makes the last click
 ROBOT_CHECK = re.compile(r"captcha|robot check", re.I)
 ASSIST_MINUTES = 20
+
+
+def setting(name, default=""):
+    """An APPLY_* setting. The project's .env wins, then the environment, so `APPLY_AUTO_SUBMIT=0` in .env takes effect."""
+    value = telegram_notify.read_env().get(name)
+    if value in (None, ""):
+        value = os.environ.get(name)
+    return default if value in (None, "") else value
+
+
+def email_code_getter(job):
+    """The function submit() calls to read the security code a site just emailed Adam."""
+    return lambda since: mail_codes.fetch_code(since)
 ISSUES_PATH = daily_digest.DAILY / "apply_issues.jsonl"
+ERRORS_PATH = daily_digest.DAILY / "apply_errors.jsonl"
+ERROR_REPEAT_SECONDS = 600  # the same error inside this window is counted, not written again
+_ERRORS_SEEN = {}
+
+
+def record_error(where, err, job=None, path=None, now=None):
+    """Append one error to daily/apply_errors.jsonl, the other half of the self-improvement loop.
+
+    daily/apply_issues.jsonl holds what needed a person (a question, a handoff); this holds what broke: an exception,
+    a failed write, a provider that did not answer. Each row carries where it happened, the exception type, the
+    message, the file:line it came from and the job it hit. The same error repeating (a Telegram timeout every five
+    seconds) is written once per ERROR_REPEAT_SECONDS with a repeats count. Never raises. Returns True when written.
+    """
+    now = time.time() if now is None else now
+    path = Path(path or ERRORS_PATH)
+    kind = type(err).__name__ if isinstance(err, BaseException) else "Error"
+    message = str(err)[:300]
+    origin = ""
+    tb = getattr(err, "__traceback__", None)
+    while tb is not None and tb.tb_next is not None:
+        tb = tb.tb_next
+    if tb is not None:
+        origin = f"{Path(tb.tb_frame.f_code.co_filename).name}:{tb.tb_lineno} in {tb.tb_frame.f_code.co_name}"
+    key = (str(path), where, kind, message[:80])
+    last, suppressed = _ERRORS_SEEN.get(key, (None, 0))
+    if last is not None and now - last < ERROR_REPEAT_SECONDS:
+        _ERRORS_SEEN[key] = (last, suppressed + 1)
+        return False
+    _ERRORS_SEEN[key] = (now, 0)
+    job = job or {}
+    row = {"ts": datetime.now().isoformat(timespec="seconds"), "where": where, "type": kind, "message": message,
+           "origin": origin, "company": job.get("company"), "title": job.get("title"), "ats": job.get("ats"),
+           "repeats": suppressed}
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except OSError:
+        return False
+    return True
 ATS_LABEL = {"greenhouse": "Greenhouse form", "lever": "Lever form", "ashby": "Ashby form"}
 
 
@@ -209,16 +263,15 @@ def run_assist(job_id, minutes=ASSIST_MINUTES, state_path=None, browser=None):
     path = Path(state_path or STATE_PATH)
     job = json.loads(path.read_text(encoding="utf-8"))[job_id]
     result = {"status": "error", "detail": ""}
-    extra = {}
-    if job.get("assist_auto"):
-        def on_blocked(status, detail):
-            path.with_name(f"apply_assist_{job_id}.json").write_text(json.dumps({"status": "needs_you", "detail": detail or status}), encoding="utf-8")
-        extra = {"auto_submit": True, "on_blocked": on_blocked}
+    # Adam, 2026-10-29: when the AI can run the whole thing, nobody is pulled in. A refusal comes back as "blocked"
+    # and the job is logged as AI tried to apply, with the reason, so the cause can be fixed.
+    extra = {"auto_submit": True, "code_getter": email_code_getter(job)} if job.get("assist_auto") else {}
     try:
         with (browser or open_browser)(True) as page:
             result["status"], result["detail"] = apply_forms.assist(page, job["url"], job["answers"], minutes * 60, **extra)
     except Exception as e:  # noqa: BLE001
         result["detail"] = type(e).__name__
+        record_error("assist", e, job, path=path.with_name("apply_errors.jsonl"))
     path.with_name(f"apply_assist_{job_id}.json").write_text(json.dumps(result), encoding="utf-8")
     return result
 
@@ -244,12 +297,13 @@ class Agent:
         self.profile = profile
         self.letter_dir = Path(letter_dir or LETTER_DIR)
         self.shot_dir = Path(shot_dir or SHOT_DIR)
-        self.wait_seconds = float(os.environ.get("APPLY_WAIT_HOURS") or 4.5) * 3600
-        self.unsent_seconds = float(os.environ.get("APPLY_UNSENT_HOURS") or 4.5) * 3600
-        self.nudge_seconds = float(os.environ.get("APPLY_NUDGE_HOURS") or 3) * 3600
+        self.wait_seconds = float(setting("APPLY_WAIT_HOURS") or 4.5) * 3600
+        self.unsent_seconds = float(setting("APPLY_UNSENT_HOURS") or 4.5) * 3600
+        self.nudge_seconds = float(setting("APPLY_NUDGE_HOURS") or 3) * 3600
         # Adam, 2026-10-29: a human is needed only for a question that has never been answered. APPLY_AUTO_SUBMIT=0 puts the Submit tap back.
-        self.auto_submit = (os.environ.get("APPLY_AUTO_SUBMIT", "1") != "0") if auto_submit is None else auto_submit
+        self.auto_submit = (setting("APPLY_AUTO_SUBMIT", "1") != "0") if auto_submit is None else auto_submit
         self.issues_path = Path(bank_path).with_name("apply_issues.jsonl") if bank_path else ISSUES_PATH
+        self.errors_path = Path(bank_path).with_name("apply_errors.jsonl") if bank_path else ERRORS_PATH
         self.jobs = self._load()
 
     # ---- the applied log: a write that fails is kept on the job and retried, never dropped
@@ -258,7 +312,11 @@ class Agent:
             ok = bool(self.log_write(job, status, **kw))
         except Exception as e:  # noqa: BLE001 - a log failure must not stop the agent
             print(f"applied log write failed: {type(e).__name__}: {e}", file=sys.stderr)
+            self.note_error("applied_log", e, job)
             ok = False
+        else:
+            if not ok:
+                self.note_error("applied_log", f"the {status} write returned failure", job)
         if ok:
             job.pop("unlogged", None)
         else:
@@ -315,6 +373,7 @@ class Agent:
             return self.tg.send(text, buttons)
         except telegram_notify.TelegramError as e:
             print(f"telegram send failed: {e}", file=sys.stderr)
+            self.note_error("telegram_send", e)
             return None
 
     def title_of(self, job):
@@ -395,16 +454,28 @@ class Agent:
         self.save()
 
     # ---- finishing a job
-    def handoff(self, job, reason, extra=""):
-        """Give the job to Adam: log it as Recommended with the reason and say so on Telegram."""
+    def handoff(self, job, reason, extra="", attempted=True):
+        """The AI could not finish this job.
+
+        attempted=True (the default): nobody is pulled in. It is logged as "AI tried to apply, could not finish" with the
+        reason, in the issues and errors logs, so the cause can be fixed; Adam gets a one-line FYI.
+        attempted=False: it is Adam's to do (he chose to apply by hand, declined a checkbox, did not answer a question,
+        or he was the one at the Chrome window): logged as Recommended and handed over.
+        """
         self.set_status(job, "handed_off")
         job["reason"] = reason
-        self.note_issue("handoff", job, reason)
-        logged = self.log(job, "recommended", reason=reason)
+        self.note_issue("attempted" if attempted else "handoff", job, reason)
+        logged = self.log(job, "attempted" if attempted else "recommended", reason=reason)
         link = self.forms.application_url(job["url"]) if job.get("url") else ""
-        self.say(f"✋ <b>Over to you:</b> {self.title_of(job)}\n{esc(reason)}{extra}\n"
-                 + (f'<a href="{esc(link)}">Open the application</a>' if link else "")
-                 + ("" if logged else "\n⚠ I could not write it to the applied log, so note it yourself."))
+        if attempted:
+            self.say(f"🤖 <b>Could not finish:</b> {self.title_of(job)}\n{esc(clip(reason, 200))}{extra}\n"
+                     'Nothing needed from you. It is under "AI tried to apply" in the applied log, with the cause, to fix.'
+                     + (f'\n<a href="{esc(link)}">Open the application</a> if you would rather apply yourself.' if link else "")
+                     + ("" if logged else "\n⚠ I could not write it to the applied log."))
+        else:
+            self.say(f"✋ <b>Over to you:</b> {self.title_of(job)}\n{esc(reason)}{extra}\n"
+                     + (f'<a href="{esc(link)}">Open the application</a>' if link else "")
+                     + ("" if logged else "\n⚠ I could not write it to the applied log, so note it yourself."))
         self.save()
 
     def skip(self, job):
@@ -429,8 +500,9 @@ class Agent:
                 plan = [(f, *apply_answers.resolve(f, profile, bank, standard)) for f in form.fields]
                 letter = self._draft_all(job, plan, page, profile)
         except self.forms.FormError as e:
-            return self.handoff(job, str(e))
+            return self.handoff(job, str(e), attempted="closed or gone" not in str(e))  # a dead posting is nothing to fix
         except Exception as e:  # noqa: BLE001 - browser trouble must not stop the agent
+            self.note_error("read_form", e, job)
             return self.handoff(job, f"Could not read the form ({type(e).__name__}).")
         if letter is False:
             return None
@@ -454,6 +526,8 @@ class Agent:
                 text, provider = apply_answers.draft(question, posting, self.runner,
                                                      "cover letter" if is_letter else "answer")
                 if text is None:
+                    if provider.startswith(("no AI provider", "draft made claims")):
+                        self.note_error("ai_draft", provider, job)
                     if provider.startswith("no AI provider"):
                         self.handoff(job, f"{provider}. Required: {clip(f.label, 80)}")
                         return False
@@ -503,6 +577,30 @@ class Agent:
         for job in waiting:
             self.send_now(job)
         return len(waiting)
+
+    # ---- the errors log: everything that broke, so the code can be fixed
+    def note_error(self, where, err, job=None):
+        return record_error(where, err, job, path=self.errors_path, now=self.now())
+
+    def errors_text(self, limit=8):
+        try:
+            rows = [json.loads(line) for line in self.errors_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        except (OSError, ValueError):
+            rows = []
+        if not rows:
+            return "No errors logged yet."
+        counts, latest = {}, {}
+        for r in rows:
+            key = (r.get("where"), r.get("type"), (r.get("message") or "")[:70])
+            counts[key] = counts.get(key, 0) + 1 + int(r.get("repeats") or 0)
+            latest[key] = r
+        top = sorted(counts.items(), key=lambda kv: -kv[1])[:limit]
+        lines = [f"<b>What broke ({len(rows)} logged)</b>"]
+        for key, n in top:
+            r = latest[key]
+            lines.append(f"{n}× {esc(str(key[0]))} · {esc(str(key[1]))}: {esc(clip(key[2], 70))}"
+                         + (f" ({esc(r['origin'])})" if r.get("origin") else ""))
+        return "\n".join(lines)
 
     # ---- the issues log: every question and every handoff, so the rules can be fixed
     def note_issue(self, kind, job, detail="", label=""):
@@ -556,7 +654,7 @@ class Agent:
         value = raw
         if meta["kind"] == "checkbox" and not meta["options"]:
             if normalize_yes_no(raw) is not True:
-                return self.handoff(job, f"You declined a required checkbox: {clip(meta['label'], 100)}") or "handed off"
+                return self.handoff(job, f"You declined a required checkbox: {clip(meta['label'], 100)}", attempted=False) or "handed off"
             value = True
         elif meta["options"]:
             value = self.forms.best_option(meta["options"], raw)
@@ -618,6 +716,7 @@ class Agent:
                 with self.browser() as page:
                     job["answers"][key] = self._letter_pdf(job, body, profile, page)
             except Exception as e:  # noqa: BLE001
+                self.note_error("cover_letter_pdf", e, job)
                 return self.say(f"I could not rebuild the cover letter PDF ({esc(type(e).__name__)}). Try again.")
         else:
             job["answers"][key] = body
@@ -655,11 +754,12 @@ class Agent:
                 if form.blocker:
                     status, detail = "blocked", form.blocker
                 else:
-                    status, detail = self.forms.submit(page)
+                    status, detail = self.forms.submit(page, code_getter=email_code_getter(job))
                     self.forms.screenshot(page, shots / f"{job['id']}-after.png")
         except self.forms.FormError as e:
             return self.handoff(job, f"Submit stopped: {e}")
         except Exception as e:  # noqa: BLE001
+            self.note_error("submit", e, job)
             return self.handoff(job, f"Something broke before the result was known ({type(e).__name__}). "
                                 "Check your email for a confirmation before applying again.")
         self.finish_submit(job, status, detail)
@@ -672,6 +772,7 @@ class Agent:
         try:
             self.assist_launcher(job["id"])
         except OSError as e:
+            self.note_error("launch_assist", e, job)
             return self.handoff(job, f"I could not open Chrome on your PC ({type(e).__name__}).")
         link = self.forms.application_url(job["url"]) if job.get("url") else ""
         if auto:
@@ -692,28 +793,19 @@ class Agent:
                 result = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 if self.now() - job.get("assist_started", 0) > ASSIST_MINUTES * 60 + 300:
-                    self.handoff(job, "I lost track of the Chrome window. If you did not press Submit, apply with the link.")
+                    self.handoff(job, "I lost track of the Chrome window. If you did not press Submit, apply with the link.", attempted=bool(job.get("assist_auto")))
                 continue
             status, detail = result.get("status"), result.get("detail") or ""
-            if status == "needs_you":  # Chrome is waiting on a robot check; the final result file replaces this one
-                if not job.get("human_clicked"):
-                    job["human_clicked"] = True
-                    self.note_issue("needs_you", job, detail)
-                    self.save()
-                    link = self.forms.application_url(job["url"]) if job.get("url") else ""
-                    self.say(f"🖥 <b>Your turn, one click.</b> {self.title_of(job)}\n"
-                             f"The site stopped me ({esc(clip(detail, 120)) or 'robot check'}). The filled form is open in Chrome on your PC: "
-                             f"clear the check and press Submit, and I will log it. I wait {ASSIST_MINUTES} minutes.\n"
-                             + (f'<a href="{esc(link)}">Open it yourself instead</a>' if link else ""))
-                continue
             path.unlink(missing_ok=True)
             if status == "submitted":
                 self.finish_submit(job, "submitted", "")
             elif status == "closed":
-                self.handoff(job, "The Chrome window was closed before the application was sent. If you did press Submit, the confirmation email logs it at the next 7:00 or 19:00 sync.")
+                self.handoff(job, "The Chrome window was closed before the application was sent. If you did press Submit, the confirmation email logs it at the next 7:00 or 19:00 sync.", attempted=False)
             elif status == "timeout":
                 self.handoff(job, f"No confirmation within {ASSIST_MINUTES} minutes, so I stopped waiting. If you did press Submit, the confirmation email logs it at the next 7:00 or 19:00 sync."
-                                  + (f" Not filled: {clip(detail, 120)}." if detail else ""))
+                                  + (f" Not filled: {clip(detail, 120)}." if detail else ""), attempted=False)
+            elif status == "blocked":  # the site refused the script's own Submit (robot check, code, validation): logged, nobody asked
+                self.handoff(job, f"Chrome pressed Submit and the site stopped it ({clip(detail, 160) or 'no reason shown'}).")
             else:
                 self.handoff(job, f"Chrome could not finish the form ({clip(detail, 120) or 'unknown error'}).")
 
@@ -775,7 +867,7 @@ class Agent:
             return ack("That one was not sent. Send /unsent for fresh buttons.")
         if kind == "h":
             ack("Over to you")
-            return self.handoff(job, "You chose to apply by hand.")
+            return self.handoff(job, "You chose to apply by hand.", attempted=False)
         if kind == "a" and job["status"] == "asking" and len(parts) > 2:
             options = job["fields"][job["asked"]].get("shown_options") or []
             try:
@@ -826,6 +918,8 @@ class Agent:
             return self.say(self.answers_text())
         if low.startswith("/audit"):
             return self.say(self.audit_text())
+        if low.startswith("/errors"):
+            return self.say(self.errors_text())
         if low.startswith("/issues"):
             return self.say(self.issues_text())
         if self.is_question(text, job):
@@ -913,7 +1007,7 @@ class Agent:
     # ---- questions from Adam
     def context_for_question(self):
         entries = self.log_entries().values()
-        buckets = {"applied": [], "unsent": [], "recommended": []}
+        buckets = {"applied": [], "attempted": [], "unsent": [], "recommended": []}
         for e in entries:
             buckets.setdefault(e.get("status"), []).append(f"{e.get('title')} | {e.get('company')} | {e.get('fit')} | {e.get('url')}")
         lines = ["Apply agent state: " + re.sub(r"<[^>]+>", "", html.unescape(self.status_text()))]
@@ -943,6 +1037,7 @@ Adam's question: {question}
         self.say("Looking into it…")
         result = self.runner(prompt, cwd=ROOT, timeout=240, max_turns=8, allowed_tools=["Read", "Grep", "Glob"])
         if not result.ok:
+            self.note_error("ai_provider", "; ".join(f"{n}: {w}" for n, w in result.attempts) or "no provider answered")
             return self.say("No AI provider answered that ("
                             + esc("; ".join(f"{n}: {w}" for n, w in result.attempts)[:200]) + "). Try again later.")
         return self.say(esc(result.text.strip()[:3500]))
@@ -966,7 +1061,7 @@ Adam's question: {question}
             if job["status"] == "ready" and waited > self.unsent_seconds:
                 self.mark_unsent(job, waited)
             elif waited > self.wait_seconds:
-                self.handoff(job, f"No answer to my question in {self.wait_seconds / 3600:g} hours, so I stopped waiting.")
+                self.handoff(job, f"No answer to my question in {self.wait_seconds / 3600:g} hours, so I stopped waiting.", attempted=False)
             elif waited > self.nudge_seconds and not job.get("nudged"):
                 since, job["nudged"] = job["updated"], True
                 (self.ask if job["status"] == "asking" else self.approval)(job, prefix=f"⏰ Still waiting on you ({waited / 3600:.0f}h)\n")
@@ -996,8 +1091,11 @@ Adam's question: {question}
         unsent = [j for j in self.jobs.values() if j["status"] == "unsent"]
         if unsent:
             rows += ["", f"<b>Prepared, not sent ({len(unsent)}):</b> send /unsent for Submit buttons"]
-        by_hand = [e for e in self.log_entries().values() if e.get("status") == "recommended"]
-        rows += ["", f"<b>You apply by hand:</b> {len(by_hand)} in the applied log (daily/applied_for.docx)"]
+        logged = list(self.log_entries().values())
+        tried = [e for e in logged if e.get("status") == "attempted"]
+        by_hand = [e for e in logged if e.get("status") == "recommended"]
+        rows += ["", f"<b>AI tried, could not finish:</b> {len(tried)} (causes in /issues and daily/applied_for.docx)",
+                 f"<b>You apply by hand:</b> {len(by_hand)} in the applied log (daily/applied_for.docx)"]
         counts = {}
         for j in self.jobs.values():
             counts[j["status"]] = counts.get(j["status"], 0) + 1
@@ -1030,6 +1128,7 @@ Adam's question: {question}
                     self.take_queue_request(fits=fits, limit=limit)
                 except Exception as e:  # noqa: BLE001 - a bad day file must not stop the listener
                     print(f"queue request failed: {type(e).__name__}: {e}", file=sys.stderr)
+                    self.note_error("queue_request", e)
             self.drop_regraded_low()
             self.collect_assists()
             if self.now() - self.retry_last > 60:
@@ -1049,6 +1148,7 @@ Adam's question: {question}
                 events = self.tg.poll(0 if worked else wait)
             except telegram_notify.TelegramError as e:
                 print(f"telegram poll failed: {e}", file=sys.stderr)
+                self.note_error("telegram_poll", e)
                 time.sleep(5)
                 continue
             for ev in events:
@@ -1066,10 +1166,32 @@ def normalize_yes_no(text):
 
 # ---------------------------------------------------------------- lock and CLI
 
+def _lock_holder_alive(path):
+    """False when the lock names a process that no longer exists, so a killed agent does not block the restart for 30 minutes."""
+    try:
+        pid = int(re.findall(r"\d+", Path(path).read_text(encoding="utf-8"))[-1])
+    except (OSError, IndexError, ValueError):
+        return True
+    if os.name != "nt":
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except OSError:
+            pass
+        return True
+    import ctypes
+    handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return False
+    ctypes.windll.kernel32.CloseHandle(handle)
+    return True
+
+
 def acquire_lock(path=None, listener=False):
     """Take the single-agent lock. The always-on listener writes "listen <pid>" so a search can tell it from a run."""
     path = Path(path or LOCK_PATH)
-    if path.exists() and time.time() - path.stat().st_mtime < LOCK_STALE_SECONDS:
+    if path.exists() and time.time() - path.stat().st_mtime < LOCK_STALE_SECONDS and _lock_holder_alive(path):
         return False
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(f"listen {os.getpid()}" if listener else str(os.getpid()), encoding="utf-8")
@@ -1155,6 +1277,9 @@ def main(argv=None):
                 queue_now()
             agent.serve(minutes=args.minutes, idle_exit=args.idle_exit or args.cmd == "run",
                         listen=listen, fits=fits, limit=args.limit)
+        except Exception as e:  # noqa: BLE001 - keep the cause where the next session will read it, then let the restart loop run
+            agent.note_error("crash", e)
+            raise
         finally:
             release_lock()
         return 0

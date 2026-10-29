@@ -331,3 +331,18 @@ def test_a_later_call_fills_the_resume_into_an_existing_tracker_row(tmp_path):
     assert applied_log.fill_tracker_blanks(other, path) == "nothing to fill"
     (row,) = list(_csv.DictReader(path.open(encoding="utf-8", newline="")))
     assert row["cv_file"].endswith("Adam_Colyer_Resume_2026-10.pdf")
+
+
+def test_attempted_is_its_own_bucket_and_applied_moves_it_out():
+    entries = {}
+    url = "https://boards.greenhouse.io/x/jobs/1"
+    key, msg = applied_log.add_entry(entries, url=url, title="T", company="C", status="attempted", day="2026-10-29",
+                                     reason="email verification code: no code arrived")
+    assert entries[key]["status"] == "attempted" and "tried to apply" in msg
+    assert applied_log.months(entries)["2026-10"]["attempted"][0]["reason"].startswith("email verification code")
+    applied_log.add_entry(entries, url=url, title="T", company="C", status="unsent", day="2026-10-30")  # never downgrades it
+    assert entries[key]["status"] == "attempted"
+    applied_log.add_entry(entries, url=url, title="T", company="C", status="applied", by="Adam", day="2026-10-30")
+    assert entries[key]["status"] == "applied"
+    _, msg = applied_log.add_entry(entries, url=url, title="T", company="C", status="attempted", day="2026-10-31")
+    assert entries[key]["status"] == "applied" and "already applied" in msg  # an applied job never goes back
