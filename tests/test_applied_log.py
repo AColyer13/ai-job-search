@@ -271,3 +271,47 @@ def test_word_file_lists_the_unsent_bucket(tmp_path):
     ElementTree.fromstring(xml)
     for text in ("AI could have applied, not sent (1)", "No Submit tap in 4.5 hours", "1 the AI prepared but you did not send"):
         assert text in xml
+
+
+def _tracker_with(tmp_path, *rows):
+    path = tmp_path / "tracker.csv"
+    for n, row in enumerate(rows):
+        applied_log.append_tracker_row(_applied_entry(url=f"https://jobs.example.com/{n}", **row), path=path)
+    return path
+
+
+def _row(path, company):
+    import csv
+    return next(r for r in csv.DictReader(path.open(encoding="utf-8-sig")) if r["company"] == company)
+
+
+def test_status_moves_one_row_and_fills_the_first_reply_once(tmp_path):
+    path = _tracker_with(tmp_path, {"company": "Acme", "title": "Backend Engineer"}, {"company": "Beta", "title": "Backend Engineer"})
+    applied_log.set_tracker_status(company="Acme", to="interview", reply_date="2026-10-02", note="phone screen", path=path)
+    applied_log.set_tracker_status(company="Acme", to="interview", reply_date="2026-10-09", note="second round", path=path)
+    acme = _row(path, "Acme")
+    assert acme["status"] == "interview"
+    assert acme["first_response_date"] == "2026-10-02"  # never overwritten
+    assert "2026-10-02: phone screen" in acme["notes"] and "2026-10-09: second round" in acme["notes"]
+    assert _row(path, "Beta")["status"] == "applied"
+
+
+def test_status_is_idempotent_and_does_not_repeat_a_note(tmp_path):
+    path = _tracker_with(tmp_path, {"company": "Acme", "title": "Backend Engineer"})
+    kw = dict(company="Acme", to="rejected", reply_date="2026-10-02", note="no thanks", path=path)
+    applied_log.set_tracker_status(**kw)
+    assert "nothing to change" in applied_log.set_tracker_status(**kw)
+    assert _row(path, "Acme")["notes"].count("no thanks") == 1
+
+
+def test_status_refuses_hired_a_closed_row_and_an_ambiguous_match(tmp_path):
+    path = _tracker_with(tmp_path, {"company": "Acme", "title": "Backend Engineer"}, {"company": "Acme", "title": "Data Engineer"})
+    with pytest.raises(applied_log.LogError):
+        applied_log.set_tracker_status(company="Acme", role="Backend", to="hired", path=path)
+    with pytest.raises(applied_log.LogError):
+        applied_log.set_tracker_status(company="Acme", to="interview", path=path)  # two Acme rows
+    applied_log.set_tracker_status(company="Acme", role="Backend", to="rejected", reply_date="2026-10-02", path=path)
+    with pytest.raises(applied_log.LogError):
+        applied_log.set_tracker_status(company="Acme", role="Backend", to="interview", path=path)  # closed
+    with pytest.raises(applied_log.LogError):
+        applied_log.set_tracker_status(company="Nobody", to="interview", path=path)

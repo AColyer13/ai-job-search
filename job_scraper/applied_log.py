@@ -19,6 +19,8 @@ daily/applied_for.json never drift apart:
     python job_scraper/applied_log.py add --url URL --status applied --by Adam   # he did a recommended one
     python job_scraper/applied_log.py list [--open]    # what is already logged
     python job_scraper/applied_log.py render           # rewrite the Word file
+    python job_scraper/applied_log.py status --company Axis --role "Sales Engineer" --to rejected \\
+        --reply-date 2026-10-14 --note "Rejection email, subject ..."   # where an applied job stands now
 
 Title, company, location and fit come from daily/latest.json when the URL is
 there; pass --title and --company for a job that is not. The same job under a
@@ -351,6 +353,78 @@ def append_tracker_row(entry, path=None):
     return "added"
 
 
+# What an email can move a tracker row to. `hired` and `offer declined` are Adam's call, so they are not here.
+EMAIL_STATUSES = ("applied", "interview", "offer", "rejected", "no response", "withdrawn")
+# A row in one of these is closed: an email does not reopen it.
+CLOSED_STATUSES = ("hired", "rejected", "offer declined", "withdrawn")
+# A reply from the employer (what yield_report.py counts as a response).
+REPLY_STATUSES = ("interview", "offer", "rejected")
+
+
+def set_tracker_status(*, company=None, role=None, url=None, to, reply_date=None, note=None, today=None, path=None):
+    """Move one tracker row to `to`, fill first_response_date if it is empty and append a dated note.
+
+    The row is found by `url` (the source column) or by company plus role words; more or fewer than one match
+    is an error, so a status never lands on the wrong job. Returns a one-line description of what changed.
+    Never overwrites first_response_date, never touches another row, never reopens a closed row.
+    """
+    import pipeline
+
+    path = path or TRACKER_PATH
+    if to not in EMAIL_STATUSES:
+        raise LogError(f"status must be one of {', '.join(EMAIL_STATUSES)} (hired and offer declined are Adam's to record)")
+    if reply_date:
+        date.fromisoformat(reply_date)
+    raw = path.read_bytes().decode("utf-8")
+    bom = raw.startswith("﻿")
+    raw = raw.lstrip("﻿")
+    eol = "\r\n" if "\r\n" in raw else "\n"
+    rows = list(csv.reader(io.StringIO(raw)))
+    header = rows[0]
+    col = {name: header.index(name) for name in ("company", "role", "status", "notes", "source", "first_response_date")}
+
+    def cell(row, name):
+        return row[col[name]] if col[name] < len(row) else ""
+
+    matches = []
+    for i, row in enumerate(rows[1:], 1):
+        if url and cell(row, "source") == url:
+            matches.append(i)
+        elif company and pipeline.company_key(cell(row, "company")) == pipeline.company_key(company):
+            if role is None or pipeline._norm_words(role) == pipeline._norm_words(cell(row, "role")) \
+                    or pipeline._norm_words(role) in pipeline._norm_words(cell(row, "role")):
+                matches.append(i)
+    if len(matches) != 1:
+        found = ", ".join(f"{cell(rows[i], 'company')} / {cell(rows[i], 'role')}" for i in matches) or "none"
+        raise LogError(f"expected exactly one tracker row for that job, found {len(matches)} ({found}); be more specific")
+    row = rows[matches[0]]
+    row.extend([""] * (len(header) - len(row)))
+    name = f"{row[col['company']]} / {row[col['role']]}"
+    current = row[col["status"]].strip().lower()
+    if current in CLOSED_STATUSES and current != to:
+        raise LogError(f"{name} is already {current}; an email does not reopen it. Use /outcome if that is wrong.")
+    changes = []
+    if current != to:
+        row[col["status"]] = to
+        changes.append(f"status {current or 'blank'} -> {to}")
+    if reply_date and to in REPLY_STATUSES and not row[col["first_response_date"]].strip():
+        row[col["first_response_date"]] = reply_date
+        changes.append(f"first_response_date {reply_date}")
+    if note:
+        stamp = f"{reply_date or today or date.today().isoformat()}: {note}"
+        if stamp not in row[col["notes"]]:
+            row[col["notes"]] = (row[col["notes"]].rstrip() + "; " if row[col["notes"]].strip() else "") + stamp
+            changes.append("note added")
+    if not changes:
+        return f"{name}: already {to}, nothing to change"
+    buf = io.StringIO()
+    csv.writer(buf, lineterminator=eol).writerows(rows)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_bytes((("﻿" if bom else "") + buf.getvalue()).encode("utf-8"))
+    os.replace(tmp, path)
+    return f"{name}: " + ", ".join(changes)
+
+
 def _merge_notes(entry, fields):
     for name in ("method", "note", "reason", "resume", "cover_letter"):
         if fields.get(name):
@@ -522,6 +596,13 @@ def main(argv=None):
     add.add_argument("--cover-letter", dest="cover_letter", help="applied only: path of the cover letter that was submitted")
     add.add_argument("--note")
     add.add_argument("--no-tracker", action="store_true", help="do not add an applied job to job_search_tracker.csv")
+    st = sub.add_parser("status", help="record where an applied job stands now (from an interview, assessment, offer or rejection email)")
+    st.add_argument("--company")
+    st.add_argument("--role", help="words from the role title; needed when the company has more than one row")
+    st.add_argument("--url", help="the tracker row's source URL, instead of company and role")
+    st.add_argument("--to", required=True, choices=EMAIL_STATUSES)
+    st.add_argument("--reply-date", dest="reply_date", help="ISO date on the employer's email (Central time); also fills first_response_date when empty")
+    st.add_argument("--note", help="what the email said and its subject line")
     sub.add_parser("migrate-tracker", help="add the yield columns to job_search_tracker.csv (safe to repeat)")
     lst = sub.add_parser("list", help="print what is logged")
     lst.add_argument("--open", action="store_true", help="only jobs not yet applied to (recommended and unsent)")
@@ -544,6 +625,13 @@ def main(argv=None):
             print(f"{e['title']} | {e['company']}: {message}")
             if e["status"] == "applied" and not args.no_tracker:
                 print(f"job_search_tracker.csv: {append_tracker_row(e)}")
+        elif args.cmd == "status":
+            if not (args.url or args.company):
+                raise LogError("give --company (and --role) or --url")
+            print("job_search_tracker.csv: " + set_tracker_status(
+                company=args.company, role=args.role, url=args.url, to=args.to,
+                reply_date=args.reply_date, note=args.note))
+            return 0
         elif args.cmd == "migrate-tracker":
             print(f"job_search_tracker.csv: {migrate_tracker(entries=entries, store=daily_digest.load_store())} rows brought up to date")
             return 0

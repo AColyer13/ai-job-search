@@ -10,7 +10,7 @@ Follow these steps **in order**.
 
 ## Step 0: Prerequisites
 
-Confirm the Gmail MCP tools (`mcp__claude_ai_Gmail__*`) are available. If not, tell the user to connect the Gmail integration (claude.ai Settings → Connectors → Gmail) and stop - do not attempt this via Bash, IMAP, or any other channel.
+Confirm the Gmail MCP tools are available (`mcp__claude_ai_Gmail__*`, or the same tools under a connector-id prefix such as `mcp__<uuid>__search_threads` / `get_thread`; load them with ToolSearch if deferred). Note: the scheduled task `gmail-apply-log-sync` (7:00 and 19:00) already does the unattended version of this command, recording statuses with `python job_scraper/applied_log.py status ...` under Adam's standing permission (CLAUDE.md, "Automatic Gmail sync"); this manual command is for a deeper pass with the approval gate. If not, tell the user to connect the Gmail integration (claude.ai Settings → Connectors → Gmail) and stop - do not attempt this via Bash, IMAP, or any other channel.
 
 ---
 
