@@ -183,6 +183,8 @@ class Agent:
         self.log_entries = log_entries or load_log_entries
         self.fit_of = fit_of or store_fit
         self.bank_path = bank_path
+        # the running list of questions and answers sits next to the answer bank (the real one under daily/ by default)
+        self.answer_log_path = Path(bank_path).with_name("apply_answer_log.json") if bank_path else None
         self.profile = profile
         self.letter_dir = Path(letter_dir or LETTER_DIR)
         self.shot_dir = Path(shot_dir or SHOT_DIR)
@@ -314,7 +316,8 @@ class Agent:
                 job["form_url"] = form.url
                 if form.blocker:
                     return self.handoff(job, f"The page needs a human step ({form.blocker}).")
-                plan = [(f, *apply_answers.resolve(f, profile, bank)) for f in form.fields]
+                standard = apply_answers.standard_answers()
+                plan = [(f, *apply_answers.resolve(f, profile, bank, standard)) for f in form.fields]
                 letter = self._draft_all(job, plan, page, profile)
         except self.forms.FormError as e:
             return self.handoff(job, str(e))
@@ -405,6 +408,7 @@ class Agent:
         job["answers"][key] = value
         if not isinstance(value, bool):
             apply_answers.save_to_bank(key, meta["label"], value, path=self.bank_path)
+            apply_answers.log_answer(meta["label"], value, "Adam", job, path=self.answer_log_path)
         job["pending"].remove(key)
         job["asked"] = None
         self.save()
@@ -496,6 +500,9 @@ class Agent:
         profile = self.profile or apply_answers.load_profile()
         if status == "submitted":
             self.set_status(job, "applied")
+            for d in job["drafts"].values():  # what was actually sent, so the next draft can reuse it
+                apply_answers.log_answer(d["label"], d["text"], "Adam edited" if d["provider"] == "you" else f"AI draft ({d['provider']})",
+                                         job, path=self.answer_log_path)
             logged = self.log(job, "applied", cover_letter=job.get("cover_letter"), resume=profile["resume_pdf"],
                               note=f"Approved on Telegram; {len(job['drafts'])} draft(s)" if job["drafts"] else "Approved on Telegram")
             self.say(f"<b>Submitted:</b> {self.title_of(job)}\nLogged as Applied." if logged
@@ -573,6 +580,8 @@ class Agent:
             return self.say(self.status_text())
         if low.startswith(("/unsent", "/apply")) or self.wants_unsent(low):
             return self.offer_unsent()
+        if low.startswith("/answers"):
+            return self.say(self.answers_text())
         if self.is_question(text, job):
             return self.answer_question(re.sub(r"^/ask\s*", "", text, flags=re.I))
         if not job:
@@ -583,6 +592,19 @@ class Agent:
             return self.after_answer(job, text)
         if job["status"] == "ready":
             return self.replace_draft(job, text)
+
+    def answers_text(self, limit=8):
+        """The latest entries of the running question-and-answer list (/answers)."""
+        entries = apply_answers.recent_answers(limit, self.answer_log_path)
+        standard = apply_answers.standard_answers()
+        rows = [f"<b>Questions I can answer without asking you:</b> {len(standard) + len(apply_answers.load_bank(self.bank_path))}"
+                f" (standard answers in documents/cv/application_facts.md, plus saved ones)."]
+        if not entries:
+            return rows[0] + "\nNo question has been logged yet."
+        rows.append(f"\n<b>Last {len(entries)} logged (full list: daily/apply_answer_log.json):</b>")
+        for e in reversed(entries):
+            rows.append(f"\n<b>{esc(clip(e['question'], 90))}</b> ({esc(e['source'])}, {e['date']})\n{esc(clip(e['answer'], 220))}")
+        return "\n".join(rows)
 
     # ---- not sent, and picking it up again
     def mark_unsent(self, job, waited):

@@ -419,6 +419,57 @@ def test_listen_mode_serve_picks_up_a_request_between_polls(env, monkeypatch):
     assert [j["title"] for j in agent.jobs.values()] == ["A"]
 
 
+def _fld(key, kind="textarea", label=None, required=True):
+    return apply_forms.Field(kind=kind, label=label or key, key=key, required=required, options=[])
+
+
+def test_standard_answers_come_from_the_facts_file_and_fill_matching_questions():
+    standard = apply_answers.standard_answers()
+    assert len(standard) >= 4
+    fld = _fld("whats something you want to share about yourself that isnt obvious from your resume",
+               label="What's something you want to share about yourself that isn't obvious from your resume?")
+    outcome, value, source = apply_answers.resolve(fld, apply_answers.DEFAULT_PROFILE, {}, standard)
+    assert (outcome, source) == ("fill", "standard") and "VR headset" in value
+    # a close rewording still matches; a different question does not
+    reworded = _fld("why are you passionate about testing and qa", label="Why are you passionate about testing and QA?")
+    assert apply_answers.resolve(reworded, apply_answers.DEFAULT_PROFILE, {}, standard)[2] == "standard"
+    other = _fld("why do you want to work here", label="Why do you want to work here?")
+    assert apply_answers.resolve(other, apply_answers.DEFAULT_PROFILE, {}, standard)[0] == "draft"
+
+
+def test_answer_log_keeps_each_question_once_and_feeds_the_next_draft(tmp_path):
+    log = tmp_path / "log.json"
+    job = {"title": "QA Engineer", "company": "Acme"}
+    assert apply_answers.log_answer("Why QA?", "Because quality.", "Adam", job, path=log) is True
+    assert apply_answers.log_answer("why qa", "Because quality.", "Adam", job, path=log) is False  # same question and answer
+    assert apply_answers.log_answer("Why QA?", "", "Adam", job, path=log) is False
+    assert apply_answers.recent_answers(5, log)[0]["job"] == "QA Engineer | Acme"
+    prompt = apply_answers.draft_prompt("Why us?", {"title": "T", "company": "C"}, "answer",
+                                        history=apply_answers.recent_answers(5, log))
+    assert "Q: Why QA?" in prompt and "Because quality." in prompt
+
+
+def test_cover_letter_prompt_starts_from_adams_own_letter():
+    prompt = apply_answers.draft_prompt("Write a cover letter", {"title": "T", "company": "C"}, "cover letter", history=[])
+    assert "<base_cover_letter>" in prompt and "nearly five years in B2B software sales" in prompt
+    assert "<base_cover_letter>" not in apply_answers.draft_prompt("Why us?", {"title": "T", "company": "C"}, "answer", history=[])
+
+
+def test_adams_answer_and_the_sent_drafts_are_logged_and_shown_by_answers_command(env):
+    fields = BASIC + [field("desired salary", "text", "Desired salary"),
+                      field("why do you want to work here", "textarea", "Why do you want to work here?")]
+    agent, tg, forms, job = make_agent(env, fields)
+    agent.advance()
+    agent.on_text("120000")
+    tg.tap("Submit")
+    agent.handle(tg.poll()[0])
+    log = apply_answers.recent_answers(10, env.tmp / "apply_answer_log.json")
+    sources = {e["question"]: e["source"] for e in log}
+    assert sources["Desired salary"] == "Adam" and sources["Why do you want to work here?"].startswith("AI draft")
+    agent.on_text("/answers")
+    assert "Desired salary" in tg.sent[-1][0] and "120000" in tg.sent[-1][0]
+
+
 def test_selftest_needs_the_tap():
     tg = FakeTelegram()
     tg.poll = lambda wait=0: [{"type": "button", "data": "t:selftest", "callback_id": "c"}]
