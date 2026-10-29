@@ -307,6 +307,51 @@ def migrate_tracker(path=None, entries=None, store=None):
     return len(rows) - 1
 
 
+def fill_tracker_blanks(entry, path=None):
+    """Fill the CV, cover letter and resume_version cells of a job's existing tracker row when they are blank.
+
+    A confirmation email (or another AI) can log a job before the agent that sent it records which resume went out.
+    The resume then arrives on a later call, and the row that is already there should pick it up. Only blank cells
+    change; nothing else in the file is touched. Returns a short description.
+    """
+    import pipeline
+
+    path = path or TRACKER_PATH
+    if not path.exists():
+        return "no tracker"
+    raw = path.read_bytes().decode("utf-8")
+    bom = raw.startswith("﻿")
+    raw = raw.lstrip("﻿")
+    eol = "\r\n" if "\r\n" in raw else "\n"
+    rows = list(csv.reader(io.StringIO(raw)))
+    header = rows[0]
+    if any(name not in header for name in ("cv_file", "cover_letter_file", "resume_version", "source", "company", "role")):
+        return "tracker columns missing"
+    col = {name: header.index(name) for name in header}
+    want = (pipeline.company_key(entry.get("company")), pipeline._norm_words(entry.get("title")))
+    values = {"cv_file": entry.get("resume") or "", "cover_letter_file": entry.get("cover_letter") or "",
+              "resume_version": entry.get("resume_version") or resume_version(entry.get("resume"))}
+    changed = []
+    for row in rows[1:]:
+        row.extend([""] * (len(header) - len(row)))
+        same = (pipeline.company_key(row[col["company"]]), pipeline._norm_words(row[col["role"]])) == want
+        if not (same or (entry.get("url") and row[col["source"]] == entry["url"])):
+            continue
+        for name, value in values.items():
+            if value and not row[col[name]].strip():
+                row[col[name]] = value
+                changed.append(name)
+        break
+    if not changed:
+        return "nothing to fill"
+    buf = io.StringIO()
+    csv.writer(buf, lineterminator=eol).writerows(rows)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_bytes((("﻿" if bom else "") + buf.getvalue()).encode("utf-8"))
+    os.replace(tmp, path)
+    return "filled " + ", ".join(changed)
+
+
 def append_tracker_row(entry, path=None):
     """Add an applied entry to job_search_tracker.csv, the file /rank, /scrape and /gmail-sync read as the
     record of applications. Returns "added", or "already in the tracker" when the company and role are there.
@@ -624,7 +669,10 @@ def main(argv=None):
             e = entries[key]
             print(f"{e['title']} | {e['company']}: {message}")
             if e["status"] == "applied" and not args.no_tracker:
-                print(f"job_search_tracker.csv: {append_tracker_row(e)}")
+                result = append_tracker_row(e)
+                if result == "already in the tracker" and (e.get("resume") or e.get("cover_letter")):
+                    result += f"; {fill_tracker_blanks(e)}"
+                print(f"job_search_tracker.csv: {result}")
         elif args.cmd == "status":
             if not (args.url or args.company):
                 raise LogError("give --company (and --role) or --url")

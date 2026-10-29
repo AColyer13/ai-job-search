@@ -437,18 +437,32 @@ def submit(page):
     return "unknown", "no confirmation page appeared within %d seconds" % (SUBMIT_WAIT_MS // 1000)
 
 
-def assist(page, url, answers, wait_seconds=1200):
+def assist(page, url, answers, wait_seconds=1200, auto_submit=False, on_blocked=None):
     """Open the form in a visible browser, type the approved answers, and wait for a person to finish it.
 
     Sites with a robot check (Ashby, Lever) cannot be submitted by a script, and this code never solves
     one. Adam presses Submit and clears the check himself. Returns ("submitted", ""), ("closed", "") when
     the window was closed first, ("timeout", "") or ("error", text).
+
+    With auto_submit the script presses Submit itself, as any browser user would, and only falls back to
+    waiting for a person when the site answers with a robot check, a validation error or no confirmation.
+    on_blocked(status, detail) is called then, so the person can be told the window needs them.
     """
     try:
         form = discover(page, url)
         errors = fill(page, form, answers)
         missing = [f.label for f in form.fields if f.required and f.key not in answers]
-        page.bring_to_front()
+        if auto_submit and not missing:
+            status, detail = submit(page)
+            if status == "submitted":
+                return "submitted", ""
+            page.bring_to_front()
+            if on_blocked:
+                on_blocked(status, detail)
+        else:
+            page.bring_to_front()
+            if auto_submit and on_blocked:
+                on_blocked("incomplete", "; ".join(missing[:3]))
         before, waited = page.url, 0
         while waited < wait_seconds * 1000:
             page.wait_for_timeout(1500)

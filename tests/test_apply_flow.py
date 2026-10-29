@@ -57,7 +57,7 @@ def env(tmp_path, chromium):
                               log=lambda job, status, **kw: logged.append((status, kw)) or True, browser=browser,
                               profile={**apply_answers.DEFAULT_PROFILE, "resume_pdf": str(resume)},
                               bank_path=tmp_path / "bank.json", letter_dir=tmp_path / "letters",
-                              shot_dir=tmp_path / "shots", assist_launcher=lambda jid: agent.launched.append(jid))
+                              shot_dir=tmp_path / "shots", assist_launcher=lambda jid: agent.launched.append(jid), auto_submit=False)
     agent.launched = []  # Chrome on Adam's PC is never opened by a test
     return agent, tg, logged, pages
 

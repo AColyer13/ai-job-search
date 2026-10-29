@@ -130,8 +130,10 @@ def resolve(field, profile, bank, standard=None):
     for pattern, name in RULES:
         # Profile text only goes into a box that takes text. A radio or checkbox group, or a list of choices,
         # can mention "LinkedIn" in its label without being the LinkedIn field.
-        if field.kind in ("radio", "checkbox") or (field.options and name in ("linkedin", "github", "portfolio")):
+        if field.kind in ("radio", "checkbox"):
             break
+        if field.options and name in ("linkedin", "github", "portfolio"):
+            continue  # only this rule is skipped; a list of choices can still be the country or state
         if re.search(pattern, key) and profile.get(name):
             return "fill", _profile_value(field, name, profile), "profile"
     if re.search(r"cover letter", key):

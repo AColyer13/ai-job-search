@@ -315,3 +315,19 @@ def test_status_refuses_hired_a_closed_row_and_an_ambiguous_match(tmp_path):
         applied_log.set_tracker_status(company="Acme", role="Backend", to="interview", path=path)  # closed
     with pytest.raises(applied_log.LogError):
         applied_log.set_tracker_status(company="Nobody", to="interview", path=path)
+
+
+def test_a_later_call_fills_the_resume_into_an_existing_tracker_row(tmp_path):
+    import csv as _csv
+    path = tmp_path / "job_search_tracker.csv"
+    applied_log.append_tracker_row(_applied_entry(), path)  # logged first by email sync, no resume known
+    entry = _applied_entry(resume=r"C:\resumes\Adam_Colyer_Resume_2026-10.pdf", cover_letter="cover.pdf")
+    assert applied_log.append_tracker_row(entry, path) == "already in the tracker"
+    assert applied_log.fill_tracker_blanks(entry, path) == "filled cv_file, cover_letter_file, resume_version"
+    (row,) = list(_csv.DictReader(path.open(encoding="utf-8", newline="")))
+    assert row["cv_file"] == r"C:\resumes\Adam_Colyer_Resume_2026-10.pdf" and row["cover_letter_file"] == "cover.pdf"
+    # a filled cell is never overwritten, and a second call changes nothing
+    other = _applied_entry(resume=r"C:\resumes\Other.pdf")
+    assert applied_log.fill_tracker_blanks(other, path) == "nothing to fill"
+    (row,) = list(_csv.DictReader(path.open(encoding="utf-8", newline="")))
+    assert row["cv_file"].endswith("Adam_Colyer_Resume_2026-10.pdf")

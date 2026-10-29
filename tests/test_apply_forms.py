@@ -324,3 +324,31 @@ def test_the_reCAPTCHA_image_challenge_counts_as_a_blocker_only_while_it_shows(p
     form = load(page, GREENHOUSE.replace("<p id=\"err\">", '<iframe title="challenge" src="about:blank?recaptcha=bframe" style="width:300px;height:200px"></iframe><p id="err">'))
     assert form.blocker == "CAPTCHA" or form.blocker == ""  # about:blank carries no src path, see the selector test below
     assert af.blocker_on_page(page) in ("CAPTCHA", "")
+
+
+def test_assist_with_auto_submit_presses_submit_and_returns_without_a_person(page, resume):
+    url = "https://jobs.lever.co/a/b/apply"
+    serve_page(page, url, GREENHOUSE)
+    form = load(page, GREENHOUSE)
+    profile = {**apply_answers.DEFAULT_PROFILE, "resume_pdf": resume}
+    answers = {f.key: v for f in form.fields for o, v, _ in [apply_answers.resolve(f, profile, {})] if o in ("fill", "consent")}
+    answers.update({"why do you want to work at acme": "Because of the product.",
+                    "are you legally authorized to work in the united states": "Yes", "do you require sponsorship": "No"})
+    blocked = []
+    try:
+        status = af.assist(page, "https://jobs.lever.co/a/b", answers, 5, auto_submit=True, on_blocked=lambda s, d: blocked.append((s, d)))
+    finally:
+        page.unroute(url)
+    assert status == ("submitted", "") and not blocked
+
+
+def test_assist_with_auto_submit_asks_for_a_person_when_an_answer_is_missing(page):
+    url = "https://jobs.lever.co/a/b/apply"
+    serve_page(page, url, GREENHOUSE)
+    blocked = []
+    try:
+        status = af.assist(page, "https://jobs.lever.co/a/b", {"first name": "Adam"}, 2, auto_submit=True,
+                           on_blocked=lambda s, d: blocked.append(s))
+    finally:
+        page.unroute(url)
+    assert status[0] == "timeout" and blocked == ["incomplete"]

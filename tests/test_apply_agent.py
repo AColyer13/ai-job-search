@@ -107,14 +107,15 @@ def env(tmp_path):
                            log=lambda job, status, **kw: logged.append((status, kw)) or True)
 
 
-def make_agent(env, fields, runner=None, **forms_kw):
+def make_agent(env, fields, runner=None, auto=False, **forms_kw):
     forms = FakeForms(fields, **forms_kw)
     tg = FakeTelegram()
     agent = apply_agent.Agent(tg, state_path=env.tmp / "state.json", forms=forms, runner=runner or Runner(),
                               log=env.log, browser=fake_browser, profile=env.profile,
                               bank_path=env.tmp / "bank.json", letter_dir=env.tmp / "letters",
                               shot_dir=env.tmp / "shots", log_entries=lambda: env.entries,
-                              fit_of=lambda url: env.fits.get(url))
+                              fit_of=lambda url: env.fits.get(url), auto_submit=auto,
+                              assist_launcher=lambda job_id: None)  # no test may start a real Chrome helper
     job = {"id": "j1", "url": URL, "title": "Engineer", "company": "Acme", "fit": "high", "fit_score": 90,
            "ats": "greenhouse", "description": "Build things", "status": "queued", "created": 0, "updated": 0,
            "answers": {}, "fields": {}, "pending": [], "drafts": {}, "asked": None, "ver": 0}
@@ -268,6 +269,8 @@ def test_an_unfinished_chrome_window_goes_to_recommended_never_applied(env, stat
     agent, tg, forms, job = start_assisted(env)
     finish_assist(agent, job, status, detail)
     assert job["status"] == "handed_off" and [s for s, _ in env.logged] == ["recommended"] and words in env.logged[0][1]["reason"]
+    if status in ("closed", "timeout"):  # he may have pressed Submit before the window went: the email is the proof
+        assert "confirmation email" in env.logged[0][1]["reason"]
 
 
 def test_a_lost_chrome_window_is_handed_off_after_the_wait(env):
@@ -747,3 +750,141 @@ def test_option_aliases_match_usa_and_mn_but_not_inside_other_words():
 def test_a_preferred_name_is_adams_first_name_not_a_question(label):
     f = apply_forms.Field(kind="text", label=label, key=apply_forms.normalize_label(label), required=True, options=[], selectors=["x"])
     assert apply_answers.resolve(f, apply_answers.DEFAULT_PROFILE, {})[:2] == ("fill", "Adam")
+
+
+# ---- auto-submit: a human is needed only for a question that was never answered
+
+def test_auto_submit_sends_without_a_tap_and_says_what_it_sent(env):
+    agent, tg, forms, job = make_agent(env, BASIC, auto=True)
+    agent.advance()
+    assert forms.submitted == 1 and job["status"] == "applied" and not job.get("asked_adam")
+    assert env.logged[0][0] == "applied"
+    assert "Applied" in tg.sent[-1][0] and "Resume" in tg.sent[-1][0]
+    assert not any("Ready" in t for t, _ in tg.sent)  # no summary waits for a tap
+
+
+def test_auto_submit_only_waits_for_a_question_not_for_a_tap(env):
+    fields = BASIC + [field("favourite colour")]
+    agent, tg, forms, job = make_agent(env, fields, auto=True)
+    agent.advance()
+    assert job["status"] == "asking" and forms.submitted == 0 and job["asked_adam"]
+    agent.on_text("blue")
+    assert forms.submitted == 1 and job["status"] == "applied"
+    agent.advance()
+    rows = [json.loads(line) for line in agent.issues_path.read_text(encoding="utf-8").splitlines()]
+    assert [r["kind"] for r in rows] == ["asked"] and "favourite colour" in rows[0]["label"]
+    assert "asked" in agent.issues_text()
+
+
+def test_the_tap_still_gates_the_send_when_auto_submit_is_off(env):
+    agent, tg, forms, job = make_agent(env, BASIC, auto=False)
+    agent.advance()
+    assert job["status"] == "ready" and forms.submitted == 0
+
+
+def test_summaries_waiting_for_a_tap_go_out_when_auto_submit_is_on(env):
+    agent, tg, forms, job = make_agent(env, BASIC, auto=False)
+    agent.advance()
+    assert job["status"] == "ready"
+    agent.auto_submit = True
+    assert agent.release_ready() == 1 and job["status"] == "applied" and forms.submitted == 1
+
+
+def test_a_robot_check_site_is_tried_in_chrome_quietly_and_pings_only_when_blocked(env):
+    agent, tg, forms, job = make_agent(env, BASIC, auto=True)
+    job["ats"], launched = "ashby", []
+    agent.assist_launcher = launched.append
+    agent.advance()
+    assert job["status"] == "assisting" and launched == ["j1"] and job["assist_auto"] and forms.submitted == 0
+    assert not any("Your turn" in t for t, _ in tg.sent)
+    result = agent.state_path.with_name("apply_assist_j1.json")
+    result.write_text(json.dumps({"status": "needs_you", "detail": "CAPTCHA"}))
+    agent.collect_assists()
+    agent.collect_assists()  # the same interim file must not ping twice
+    assert sum("Your turn" in t for t, _ in tg.sent) == 1 and job["status"] == "assisting"
+    finish_assist(agent, job, "submitted")
+    assert job["status"] == "applied"
+    assert apply_agent.how_submitted(job) == "AI filled it, Adam pressed Submit"
+
+
+def test_a_robot_check_site_that_accepts_the_click_is_logged_as_sent_automatically(env):
+    agent, tg, forms, job = make_agent(env, BASIC, auto=True)
+    job["ats"] = "lever"
+    agent.assist_launcher = lambda jid: None
+    agent.advance()
+    finish_assist(agent, job, "submitted")
+    assert job["status"] == "applied" and apply_agent.how_submitted(job) == "AI, sent automatically"
+    assert not any("Your turn" in t for t, _ in tg.sent)
+
+
+def test_run_assist_passes_the_auto_flag_and_reports_a_blocked_click(tmp_path):
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({"j1": {"url": "https://jobs.lever.co/a/b", "answers": {}, "assist_auto": True}}))
+
+    @contextlib.contextmanager
+    def browser(headed):
+        yield SimpleNamespace()
+
+    seen = {}
+
+    def fake_assist(page, url, answers, wait, auto_submit=False, on_blocked=None):
+        seen["auto"] = auto_submit
+        on_blocked("blocked", "CAPTCHA")
+        seen["interim"] = json.loads((tmp_path / "apply_assist_j1.json").read_text())
+        return "submitted", ""
+
+    real = apply_forms.assist
+    apply_forms.assist = fake_assist
+    try:
+        apply_agent.run_assist("j1", minutes=1, state_path=state, browser=browser)
+    finally:
+        apply_forms.assist = real
+    assert seen["auto"] and seen["interim"] == {"status": "needs_you", "detail": "CAPTCHA"}
+
+
+def test_a_failed_log_write_is_kept_and_retried(env):
+    agent, tg, forms, job = make_agent(env, BASIC)
+    calls = []
+
+    def flaky(j, status, **kw):
+        calls.append(status)
+        return len(calls) > 1  # the first write fails (Word has the file open), the retry works
+
+    agent.log_write = flaky
+    assert agent.log(job, "applied", note="x") is False
+    assert job["unlogged"] == {"status": "applied", "kw": {"note": "x"}}
+    assert agent.retry_unlogged() == 1
+    assert "unlogged" not in job and calls == ["applied", "applied"]
+
+
+def test_a_log_write_that_raises_is_kept_not_lost(env):
+    agent, tg, forms, job = make_agent(env, BASIC)
+
+    def boom(j, status, **kw):
+        raise OSError("locked")
+
+    agent.log_write = boom
+    assert agent.log(job, "recommended", reason="r") is False and job["unlogged"]["status"] == "recommended"
+
+
+def test_audit_command_reports_a_problem_and_then_all_clear(env):
+    agent, tg, forms, job = make_agent(env, BASIC)
+    job["status"] = "applied"
+    agent.audit_rows = lambda: []
+    agent.on_text("/audit")
+    assert "SENT BUT NOT LOGGED" in tg.sent[-1][0]
+    env.entries["k"] = {"url": URL, "title": "Engineer", "company": "Acme", "status": "applied", "applied_by": "AI", "resume": "r.pdf"}
+    agent.audit_rows = lambda: [{"company": "Acme", "role": "Engineer", "source": URL}]
+    agent.on_text("/audit")
+    assert "agree" in tg.sent[-1][0]
+
+
+def test_the_listener_alerts_once_about_a_lost_record(env):
+    agent, tg, forms, job = make_agent(env, BASIC)
+    job["status"] = "applied"
+    agent.audit_rows = lambda: []
+    agent.check_audit()
+    agent.check_audit()
+    alerts = [t for t, _ in tg.sent if "Tracking problem" in t]
+    assert len(alerts) == 1
+

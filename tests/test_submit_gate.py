@@ -107,7 +107,8 @@ def test_a_form_that_gained_a_required_question_is_handed_back_unsubmitted(env):
     assert forms.submitted == 0 and forms.filled == [] and job["status"] == "handed_off"
 
 
-def test_a_page_that_now_shows_a_captcha_is_handed_back_unsubmitted(env):
+def test_a_page_that_now_shows_a_captcha_is_never_submitted_by_the_script(env):
     agent, tg, forms, job = ready(env, blocker="CAPTCHA")
     tap(agent, job)
-    assert forms.submitted == 0 and job["status"] == "handed_off"
+    # the script does not click through a robot check: the filled form goes to Adam's Chrome window instead
+    assert forms.submitted == 0 and job["status"] == "assisting" and not env.logged
