@@ -29,6 +29,8 @@ BLOCKER_TEXT = (
 BLOCKER_SELECTORS = (
     ("iframe[src*='recaptcha/api2/anchor']:visible, iframe[src*='hcaptcha.com/captcha']:visible, "
      "iframe[src*='challenges.cloudflare.com']:visible, .h-captcha:visible, .cf-turnstile:visible", "CAPTCHA"),
+    # Lever draws the hCaptcha only when Submit is pressed, but its container and response field are on the page from the start.
+    (".h-captcha[data-sitekey], input[name='h-captcha-response']", "hCaptcha on the form"),
     ("input[type=password]:visible", "account or login required"),
 )
 SUCCESS_URL = re.compile(r"/confirmation|/thanks|/thank-you|/submitted|application_submitted", re.I)

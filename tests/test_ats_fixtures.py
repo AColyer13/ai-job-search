@@ -86,9 +86,14 @@ def test_required_profile_fields_are_filled_with_the_profile_values(page, ats):
     assert profile["email"] in typed
 
 
-def test_no_saved_form_shows_a_blocker_before_the_submit_click(page):
-    # Lever loads its hCaptcha only when Submit is pressed, so the pre-fill read cannot see it. The applied log shows a Lever
-    # hCaptcha rejection and no Lever success. This pins today's behavior; see research/constraints.md before relying on it.
-    for ats in ATS:
-        assert read(page, ats).blocker == "", ats
+def test_lever_hcaptcha_is_a_blocker_before_anything_is_typed(page):
+    # Lever's hCaptcha widget draws itself only when Submit is pressed, but its container and response field are on the page
+    # from the start. The applied log shows a Lever hCaptcha rejection and no Lever success.
     assert 'class="h-captcha"' in (FIXTURES / "lever.html").read_text(encoding="utf-8")
+    assert "hCaptcha" in read(page, "lever").blocker
+
+
+@pytest.mark.parametrize("ats", ("greenhouse", "ashby"))
+def test_forms_without_a_captcha_container_show_no_blocker(page, ats):
+    # Ashby carries an empty reCAPTCHA response box and still takes applications (9 in the log), so it must not count.
+    assert read(page, ats).blocker == ""
