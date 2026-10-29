@@ -27,6 +27,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import zipfile
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -1282,6 +1283,19 @@ def _notify_telegram(store, day):
 APPLY_MINUTES = 80  # the scheduled task stops after 2 hours; the search itself takes the rest
 
 
+LISTENER_STALE_SECONDS = 1800  # same as the agent's lock: a lock a second agent could not take is a live listener
+
+
+def _listener_running():
+    """True while the always-on apply listener holds a fresh lock ("listen <pid>" in daily/apply_agent.lock)."""
+    lock = DAILY / "apply_agent.lock"
+    try:
+        return (lock.read_text(encoding="utf-8").startswith("listen")
+                and time.time() - lock.stat().st_mtime < LISTENER_STALE_SECONDS)
+    except OSError:
+        return False
+
+
 def _start_apply_agent():
     """Run the apply agent after the search: it works today's fit jobs and asks Adam on Telegram.
 
@@ -1295,6 +1309,10 @@ def _start_apply_agent():
         if os.environ.get("PYTEST_CURRENT_TEST") or env.get("APPLY_AGENT", "1") == "0":
             return
         if not env.get("TELEGRAM_BOT_TOKEN") or not env.get("TELEGRAM_CHAT_ID"):
+            return
+        if _listener_running():  # the always-on listener owns the state file; hand it today's jobs and finish
+            (DAILY / "apply_queue_request.json").write_text(json.dumps({"day": date.today().isoformat()}), encoding="utf-8")
+            print("apply agent: listener is running, asked it to queue today's jobs")
             return
         print("apply agent: starting")
         with open(DAILY / "apply_agent.log", "a", encoding="utf-8") as log:

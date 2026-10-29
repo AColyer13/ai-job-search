@@ -3,7 +3,9 @@
 The rule under test: nothing is submitted until Adam taps Submit on the current summary.
 """
 import contextlib
+import json
 import sys
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -359,6 +361,62 @@ def test_lock_blocks_a_second_agent_until_stale(tmp_path):
     old = lock.stat().st_mtime - 3600
     os.utime(lock, (old, old))
     assert apply_agent.acquire_lock(lock) is True
+
+
+def test_listener_lock_is_marked_and_a_search_sees_it(tmp_path, monkeypatch):
+    import daily_digest
+    monkeypatch.setattr(daily_digest, "DAILY", tmp_path)
+    lock = tmp_path / "apply_agent.lock"
+    assert daily_digest._listener_running() is False
+    assert apply_agent.acquire_lock(lock) is True  # an ordinary run is not a listener
+    assert daily_digest._listener_running() is False
+    lock.unlink()
+    assert apply_agent.acquire_lock(lock, listener=True) is True
+    assert lock.read_text().startswith("listen ")
+    assert daily_digest._listener_running() is True
+    import os
+    old = lock.stat().st_mtime - 7200  # a listener that stopped touching its lock is not running
+    os.utime(lock, (old, old))
+    assert daily_digest._listener_running() is False
+
+
+def test_search_leaves_a_request_for_a_running_listener(tmp_path, monkeypatch):
+    import daily_digest
+    import telegram_notify
+    monkeypatch.setattr(daily_digest, "DAILY", tmp_path)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setattr(telegram_notify, "read_env", lambda: {"TELEGRAM_BOT_TOKEN": "t", "TELEGRAM_CHAT_ID": "1"})
+    started = []
+    monkeypatch.setattr(daily_digest.subprocess, "run", lambda *a, **k: started.append(a))
+    (tmp_path / "apply_agent.lock").write_text("listen 123")
+    daily_digest._start_apply_agent()
+    assert not started  # it did not start a second agent
+    assert json.loads((tmp_path / "apply_queue_request.json").read_text())["day"] == date.today().isoformat()
+
+
+def test_listener_queues_a_requested_day_once_and_keeps_going(env, monkeypatch):
+    agent, tg, forms, job = make_agent(env, BASIC)
+    agent.jobs.clear()
+    request = env.tmp / "request.json"
+    monkeypatch.setattr(apply_agent, "QUEUE_REQUEST_PATH", request)
+    monkeypatch.setattr(apply_agent, "candidates", lambda day=None: [{"url": URL, "title": "A", "fit": "high"}])
+    assert agent.take_queue_request() is False  # nothing asked for
+    request.write_text(json.dumps({"day": "2026-10-28"}))
+    assert agent.take_queue_request() is True
+    assert not request.exists()  # taken, so the next loop does not queue again
+    assert [j["title"] for j in agent.jobs.values()] == ["A"]
+    assert agent.take_queue_request() is False
+
+
+def test_listen_mode_serve_picks_up_a_request_between_polls(env, monkeypatch):
+    agent, tg, forms, job = make_agent(env, BASIC)
+    agent.jobs.clear()
+    request = env.tmp / "request.json"
+    monkeypatch.setattr(apply_agent, "QUEUE_REQUEST_PATH", request)
+    monkeypatch.setattr(apply_agent, "candidates", lambda day=None: [{"url": URL, "title": "A", "fit": "high"}])
+    request.write_text(json.dumps({"day": "2026-10-28"}))
+    agent.serve(minutes=0.0001, wait=0, listen=True)
+    assert [j["title"] for j in agent.jobs.values()] == ["A"]
 
 
 def test_selftest_needs_the_tap():

@@ -3,6 +3,7 @@
     python job_scraper/apply_agent.py queue [--day YYYY-MM-DD] [--fit high,medium] [--limit 10]
     python job_scraper/apply_agent.py serve [--for MINUTES] [--idle-exit] [--dry-run] [--headed]
     python job_scraper/apply_agent.py run   [--for MINUTES] [--dry-run]    queue, then serve until idle
+    python job_scraper/apply_agent.py listen                               always on: Telegram answers at any hour
     python job_scraper/apply_agent.py status
     python job_scraper/apply_agent.py selftest        send a button and wait for your tap
 
@@ -66,6 +67,7 @@ import telegram_notify  # noqa: E402
 ROOT = daily_digest.ROOT
 STATE_PATH = daily_digest.DAILY / "apply_state.json"
 LOCK_PATH = daily_digest.DAILY / "apply_agent.lock"
+QUEUE_REQUEST_PATH = daily_digest.DAILY / "apply_queue_request.json"
 SHOT_DIR = daily_digest.DAILY / "apply_shots"
 LETTER_DIR = ROOT / "cover_letters"
 OPEN = ("queued", "preparing", "asking", "ready", "submitting")
@@ -734,11 +736,32 @@ Adam's question: {question}
             counts[j["status"]] = counts.get(j["status"], 0) + 1
         return "\n".join(rows + ["", "Totals: " + ", ".join(f"{n} {s}" for s, n in sorted(counts.items()))])
 
-    def serve(self, minutes=None, idle_exit=False, wait=25):
+    def take_queue_request(self, fits=("high", "medium"), limit=10):
+        """Queue the day a scheduled search asked for (daily/apply_queue_request.json). Returns True if one was handled.
+
+        The always-on listener owns the state file, so a search that finds it running leaves a request here
+        instead of writing the state itself.
+        """
+        path = QUEUE_REQUEST_PATH
+        try:
+            day = json.loads(path.read_text(encoding="utf-8")).get("day")
+        except (OSError, ValueError):
+            return False
+        with contextlib.suppress(OSError):
+            path.unlink()
+        self.queue(candidates(day), limit=limit, fits=fits, hand_off_rest=True)
+        return True
+
+    def serve(self, minutes=None, idle_exit=False, wait=25, listen=False, fits=("high", "medium"), limit=10):
         deadline = self.now() + minutes * 60 if minutes else None
         self.recover()
         self.reconcile()
         while True:
+            if listen:
+                try:
+                    self.take_queue_request(fits=fits, limit=limit)
+                except Exception as e:  # noqa: BLE001 - a bad day file must not stop the listener
+                    print(f"queue request failed: {type(e).__name__}: {e}", file=sys.stderr)
             self.drop_regraded_low()
             touch_lock()
             self.expire()
@@ -768,12 +791,13 @@ def normalize_yes_no(text):
 
 # ---------------------------------------------------------------- lock and CLI
 
-def acquire_lock(path=None):
+def acquire_lock(path=None, listener=False):
+    """Take the single-agent lock. The always-on listener writes "listen <pid>" so a search can tell it from a run."""
     path = Path(path or LOCK_PATH)
     if path.exists() and time.time() - path.stat().st_mtime < LOCK_STALE_SECONDS:
         return False
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(str(os.getpid()), encoding="utf-8")
+    path.write_text(f"listen {os.getpid()}" if listener else str(os.getpid()), encoding="utf-8")
     return True
 
 
@@ -811,7 +835,7 @@ def selftest(tg, wait=180):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=("queue", "serve", "run", "status", "selftest"))
+    ap.add_argument("cmd", choices=("queue", "serve", "run", "listen", "status", "selftest"))
     ap.add_argument("--day")
     ap.add_argument("--fit", default=os.environ.get("APPLY_FIT", "high,medium"))
     ap.add_argument("--limit", type=int, default=10)
@@ -831,18 +855,26 @@ def main(argv=None):
         if args.cmd == "status":
             print(re.sub(r"<[^>]+>", "", html.unescape(agent.status_text())))
             return 0
-        if args.cmd in ("queue", "run"):
+        def queue_now():
             added = agent.queue(candidates(args.day), limit=args.limit, fits=fits, hand_off_rest=True)
             for j in added:
                 print(f"queued: {j['title']} | {j['company']} | {j['ats']}")
             print(f"{len(added)} job(s) queued")
-            if args.cmd == "queue":
-                return 0
-        if not acquire_lock():
+
+        # Take the lock before queueing: the process holding it owns the state file, and a second writer would
+        # overwrite its jobs.
+        listen = args.cmd == "listen"
+        if not acquire_lock(listener=listen):
             print("Another apply agent is running (daily/apply_agent.lock is fresh).")
             return 1
         try:
-            agent.serve(minutes=args.minutes, idle_exit=args.idle_exit or args.cmd == "run")
+            if args.cmd == "queue":
+                queue_now()
+                return 0
+            if args.cmd in ("run", "listen"):  # the listener never exits on its own
+                queue_now()
+            agent.serve(minutes=args.minutes, idle_exit=args.idle_exit or args.cmd == "run",
+                        listen=listen, fits=fits, limit=args.limit)
         finally:
             release_lock()
         return 0
