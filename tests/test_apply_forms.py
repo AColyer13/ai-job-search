@@ -281,8 +281,8 @@ def test_a_choice_question_that_mentions_linkedin_is_not_the_linkedin_field():
     assert apply_answers.resolve(required, PROFILE, {})[0] == "ask"
 
 
-def test_preferred_name_is_asked_not_guessed_and_a_country_line_gets_the_country():
-    assert apply_answers.resolve(make("preferred name"), PROFILE, {})[0] == "ask"
+def test_preferred_name_is_the_first_name_and_a_country_line_gets_the_country():
+    assert apply_answers.resolve(make("preferred name"), PROFILE, {})[:2] == ("fill", PROFILE["first_name"])
     where = make("please enter your current city state or province and country", label="Please enter your current city, state (or province), and country.")
     assert apply_answers.resolve(where, PROFILE, {})[1] == "Edina, MN, United States"
 
