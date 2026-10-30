@@ -367,17 +367,13 @@ def test_unconfirmed_submit_is_never_logged_as_applied(env, result, status):
     assert job["status"] == status and [s for s, _ in env.logged] == ["attempted"]
 
 
-def test_skip_and_i_will_do_it(env):
+def test_skip_and_there_is_no_i_will_do_it_button(env):
     agent, tg, forms, job = make_agent(env, BASIC)
     agent.advance()
+    assert not [label for label, _ in tg.last_buttons() if label.startswith("I'll do it")]
     tg.tap("Skip")
     agent.handle(tg.poll()[0])
     assert job["status"] == "skipped" and not env.logged
-    agent2, tg2, _, job2 = make_agent(env, BASIC)
-    agent2.advance()
-    tg2.tap("I'll do it")
-    agent2.handle(tg2.poll()[0])
-    assert job2["status"] == "handed_off" and env.logged[0][0] == "recommended"
 
 
 def test_a_summary_waiting_for_submit_does_not_hold_up_the_next_job(env):
@@ -1105,3 +1101,16 @@ def test_the_listener_does_not_poll_telegram_after_hours(env, monkeypatch):
         agent.serve(listen=True, wait=0)
     assert slept == [60] and polls == [local(30, 6, 0)]  # nothing at 17:00; the first poll is at 06:00
     assert job["status"] == "ready"  # prepared by the morning pass, not at night
+
+
+def test_a_reason_nothing_classifies_is_written_to_the_errors_log(env):
+    agent, tg, forms, job = make_agent(env, BASIC)
+    agent.handoff(job, "Only via Handshake with school alumni access.")
+    assert [(r["where"], r["job"]["id"] if isinstance(r.get("job"), dict) else r.get("job")) for r in _errors(agent)][0][0] == "not_applied_other"
+    assert "Handshake" in _errors(agent)[0]["message"]
+
+
+def test_a_known_reason_is_not_an_error(env):
+    agent, tg, forms, job = make_agent(env, BASIC)
+    agent.handoff(job, "This posting is closed or gone", attempted=False)
+    assert not agent.errors_path.exists() or not _errors(agent)

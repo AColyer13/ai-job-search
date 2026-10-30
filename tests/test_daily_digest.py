@@ -432,6 +432,10 @@ def test_the_daily_list_shows_a_green_check_or_a_red_x_from_the_applied_log():
     ("I clicked Submit but never saw a confirmation page.", "gap"),
     ("This posting is closed or gone", "closed"),
     ("Adam: a required GPA means move on from the job", "closed"),
+    ("Something broke before the result was known (RuntimeError).", "gap"),
+    ("No confirmation within 20 minutes, so I stopped waiting.", "gap"),
+    ("Only via Handshake with school alumni access", "other"),
+    ("", "other"),
 ])
 def test_not_applied_reasons_are_sorted_into_blocked_gap_or_closed(reason, kind):
     assert daily_digest.not_applied_kind(reason) == kind

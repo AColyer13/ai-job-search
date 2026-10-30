@@ -13,7 +13,7 @@ One job is worked at a time. For each:
     2. Answers come from your profile and from questions you already answered (daily/apply_answers.json).
        An essay or cover letter is drafted by the model from the resume. Anything only you know is asked
        on Telegram, with buttons when the form gives a list of choices.
-    3. You get the full summary with [Submit] [Skip] [I'll do it]. Nothing is sent before you tap Submit.
+    3. You get the full summary with [Submit] [Skip]. Nothing is sent before you tap Submit.
        Reply with text to replace a draft (start with "2:" to replace the second one).
     4. On Submit a fresh browser fills the form again, checks nothing new is required, clicks submit and
        reads the confirmation. The result is written to the applied log (applied, by AI).
@@ -513,6 +513,8 @@ class Agent:
         """
         self.set_status(job, "handed_off")
         job["reason"] = reason
+        if daily_digest.not_applied_kind(reason) == "other":  # Adam, 2026-10-29: any other reason is noted as an error so the rules get fixed
+            self.note_error("not_applied_other", f"not applied for a reason nothing classifies: {reason}", job)
         self.note_issue("attempted" if attempted else "handoff", job, reason)
         logged = self.log(job, "attempted" if attempted else "recommended", reason=reason)
         link = self.forms.application_url(job["url"]) if job.get("url") else ""
@@ -530,7 +532,7 @@ class Agent:
     @staticmethod
     def kind_label(reason):
         return {"blocked": "AI didn't apply, blocked", "gap": "AI didn't apply, not built yet",
-                "closed": "Not applied"}[daily_digest.not_applied_kind(reason)]
+                "closed": "Not applied", "other": "Not applied"}[daily_digest.not_applied_kind(reason)]
 
     def skip(self, job):
         self.set_status(job, "skipped")
@@ -709,7 +711,7 @@ class Agent:
             options = ["Yes", "No"]
         meta["shown_options"] = options
         buttons = [[(clip(o, 40), f"a:{job['id']}:{i}")] for i, o in enumerate(options)]
-        buttons.append([("Skip this job", f"x:{job['id']}"), ("I'll do it", f"h:{job['id']}")])
+        buttons.append([("Skip this job", f"x:{job['id']}")])
         hint = "" if options else "\nReply with your answer."
         self.say(f"{prefix}❓ {self.title_of(job)}\n<b>{esc(meta['label'])}</b>"
                  + (" (required)" if meta["required"] else "") + hint, buttons)
@@ -766,8 +768,7 @@ class Agent:
             lines += ["", f"<b>Draft {n}: {esc(clip(d['label'], 80))}</b> ({esc(d['provider'])})", esc(d["text"])]
         if drafts:
             lines += ["", 'Reply with text to replace draft 1, or start with "2:" for draft 2.']
-        buttons = [[("Submit", f"s:{job['id']}:{job['ver']}"), ("Skip", f"x:{job['id']}"),
-                    ("I'll do it", f"h:{job['id']}")]]
+        buttons = [[("Submit", f"s:{job['id']}:{job['ver']}"), ("Skip", f"x:{job['id']}")]]
         self.say("\n".join(lines), buttons)
 
     def replace_draft(self, job, text):
@@ -934,8 +935,7 @@ class Agent:
         if job["status"] == "unsent" and kind not in ("s", "h"):
             return ack("That one was not sent. Send /unsent for fresh buttons.")
         if kind == "h":
-            ack("Over to you")
-            return self.handoff(job, "You chose to apply by hand.", attempted=False)
+            return ack("That button was removed: the AI applies on its own.")
         if kind == "a" and job["status"] == "asking" and len(parts) > 2:
             options = job["fields"][job["asked"]].get("shown_options") or []
             try:
@@ -1024,7 +1024,7 @@ class Agent:
         job["unsent_at"] = self.now()
         logged = self.log(job, "unsent", reason=reason, cover_letter=job.get("cover_letter"),
                           note=f"AI prepared; unsent. state id {job['id']}")
-        buttons = [[("Review and submit", f"r:{job['id']}"), ("I'll do it", f"h:{job['id']}")]]
+        buttons = [[("Review and submit", f"r:{job['id']}")]]
         self.say(f"<b>Not sent:</b> {self.title_of(job)}\nNo Submit tap in {hours:.1f} hours, so I logged it as "
                  "\"Not applied\"" + ("." if logged else " (the log write failed, so note it yourself).")
                  + " Tap below to get the summary again, or send /unsent later.", buttons)
@@ -1070,7 +1070,7 @@ class Agent:
         self.say(f"{len(jobs)} job(s) the AI prepared but you did not send. Tap Review and submit for each; "
                  "nothing goes out until you tap Submit on its summary.")
         for job in jobs[:10]:
-            self.say(self.title_of(job), [[("Review and submit", f"r:{job['id']}"), ("I'll do it", f"h:{job['id']}")]])
+            self.say(self.title_of(job), [[("Review and submit", f"r:{job['id']}")]])
 
     # ---- questions from Adam
     def context_for_question(self):
@@ -1184,10 +1184,10 @@ Adam's question: {question}
         by_hand = [e for e in logged if e.get("status") == "recommended"]
         applied = [e for e in logged if e.get("status") == "applied"]
         kinds = [daily_digest.not_applied_kind(e.get("reason")) for e in logged if e.get("status") != "applied"]
-        blocked, gap, closed = kinds.count("blocked"), kinds.count("gap"), kinds.count("closed")
+        blocked, gap, closed, other = kinds.count("blocked"), kinds.count("gap"), kinds.count("closed"), kinds.count("other")
         rows += ["", f"<b>AI applied:</b> {sum(1 for e in applied if e.get('applied_by') != 'Adam')}   <b>Adam applied:</b> {sum(1 for e in applied if e.get('applied_by') == 'Adam')}",
                  f"<b>AI didn't apply:</b> {blocked} blocked (bot check, login, too many questions), {gap} not built yet (see /issues)",
-                 f"<b>Not applied:</b> {closed} closed or skipped"]
+                 f"<b>Not applied:</b> {closed + other} closed, skipped or other"]
         counts = {}
         for j in self.jobs.values():
             counts[j["status"]] = counts.get(j["status"], 0) + 1

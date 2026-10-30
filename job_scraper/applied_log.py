@@ -623,7 +623,7 @@ def write_doc(entries, path=None, today=None):
     return write_docx_package(path, body, rels)
 
 
-NOT_APPLIED_LABEL = {"blocked": "AI blocked", "gap": "AI gap", "closed": "Not applied"}
+NOT_APPLIED_LABEL = {"blocked": "AI blocked", "gap": "AI gap", "closed": "Not applied", "other": "Not applied"}
 
 
 def _print_entries(entries, only_open=False):

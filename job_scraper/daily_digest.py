@@ -909,28 +909,34 @@ def result_mark(job, entries):
         return "✅", f"{who} applied" + (f" on {entry['date_applied']}" if entry.get("date_applied") else "")
     why = (entry.get("reason") or "").strip()
     kind = not_applied_kind(why)
-    head = {"blocked": "AI didn't apply, blocked", "gap": "AI didn't apply, not built yet", "closed": "Not applied"}[kind]
+    head = {"blocked": "AI didn't apply, blocked", "gap": "AI didn't apply, not built yet", "closed": "Not applied", "other": "Not applied"}[kind]
     return "❌", head + (f": {_clip(why, 140)}" if why else "")
 
 
 BLOCK_MARKER = re.compile(r"too many unique questions", re.I)
-GAP_MARKER = re.compile(r"no answer yet for", re.I)
-CLOSED_WORDS = re.compile(r"closed|no longer|closed or gone|not found|404|expired|position (has been )?filled|gpa|move on|skipped|i'll do it|apply by hand", re.I)
+GAP_WORDS = re.compile(r"no answer yet for|no application form found|never saw a confirmation|required questions still empty|"
+                       r"which the agent cannot fill|could not read the form|chrome could not finish|no resume upload|something broke|resume pdf is missing|"
+                       r"declined a required checkbox|form changed after|could not fill a required|submit stopped|could not open chrome|lost track of the chrome|"
+                       r"chrome window was closed|no confirmation within|stopped waiting|agent stopped while submitting|site did not accept|site stopped it|"
+                       r"needs a human step|only you can give", re.I)
+CLOSED_WORDS = re.compile(r"(posting|job|position|role|page)[^.]{0,30}(closed|gone|no longer|filled|expired|not found)|closed or gone|"
+                          r"no longer (available|open|accepting|exists)|\bgpa\b|move on from the job|\bskipped\b|404", re.I)
 BLOCKED_WORDS = re.compile(r"robot|captcha|cloudflare|\bbot\b|log ?in|sign[- ]in|account|verification code|email code|security code|assessment|video|"
                            r"human step|refused the click|blocked|too many", re.I)
 
 
 def not_applied_kind(reason):
     """Why a job was not applied for: 'blocked' (bot check, login, too many unique questions), 'gap' (the project does not
-    handle something a form asked or did yet) or 'closed' (nothing to fix: the posting is gone, a rule says move on)."""
+    handle something a form asked or did yet), 'closed' (nothing to fix: the posting is gone, the GPA rule, skipped) or
+    'other' (any other reason; the agent writes these to the errors log so the rules can be fixed)."""
     text = reason or ""
-    if GAP_MARKER.search(text):
-        return "gap"
     if BLOCK_MARKER.search(text):
         return "blocked"
+    if GAP_WORDS.search(text):
+        return "blocked" if BLOCKED_WORDS.search(text) and not re.search(r"no answer yet for", text, re.I) else "gap"
     if CLOSED_WORDS.search(text):
         return "closed"
-    return "blocked" if BLOCKED_WORDS.search(text) else "gap"
+    return "blocked" if BLOCKED_WORDS.search(text) else "other"
 
 
 def _clip(text, n):
@@ -1246,7 +1252,7 @@ def write_latest(day, store, sources=None):
         "The first days after a posting goes up are when applications get read. A week is still worth acting on. At 14 days the listing is past the usual first review, and that is also as far back as the scraper looks.",
     ]
     latest_intro.append("Result: a green check means the job was applied for (by the AI, or by Adam, found in his email). "
-                        "A red X means not applied: \"AI didn't apply, blocked\" (bot check, login or too many unique questions), \"AI didn't apply, not built yet\" (the project does not handle something the form asked) or \"Not applied\" (closed or skipped). Adam applies to those himself; the X turns into a green check, \"Adam applied\", once his email shows he did. "
+                        "A red X means not applied: \"AI didn't apply, blocked\" (bot check, login or too many unique questions), \"AI didn't apply, not built yet\" (the project does not handle something the form asked) or \"Not applied\" (posting closed, the GPA rule, skipped, or any other reason, which is also written to the errors log so the app can correct itself). Adam applies to those himself; the X turns into a green check, \"Adam applied\", once his email shows he did. "
                         "No mark means nobody has tried it yet.")
     latest_intro.extend(_rule_lines())
     latest_intro.extend(_source_lines(sources))
