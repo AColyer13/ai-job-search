@@ -3,13 +3,13 @@
     python job_scraper/agent_runner.py "Reply with exactly: OK"
     python job_scraper/agent_runner.py --providers grok "Reply with exactly: OK"
 
-Providers (AGENT_PROVIDERS in .env, default "claude,grok,antigravity"):
+Providers (AGENT_PROVIDERS in .env, default "grok,claude,antigravity"):
 
-    claude   Claude Code headless (`claude -p`), signed in on Adam's subscription. ANTHROPIC_API_KEY is
-             removed from the child's environment so a stray key can never switch it to paid API billing.
     grok     Grok Build CLI (`grok -p -m GROK_MODEL`), signed in with grok.com. GROK_MODEL in .env,
              default grok-4.7. It has to be a cloud Grok model: the CLI's own default is a local Ollama
-             model, which is the "local" tier below.
+             model, which is the "local" tier below. Tried first unless AGENT_PROVIDERS says otherwise.
+    claude   Claude Code headless (`claude -p`), signed in on Adam's subscription. ANTHROPIC_API_KEY is
+             removed from the child's environment so a stray key can never switch it to paid API billing.
     antigravity  Google's Antigravity CLI (`agy -p ... --mode plan`), the replacement for the Gemini CLI, which
              Google no longer lets sign in. Installed at %LOCALAPPDATA%\agy\bin\agy.exe. Optional AGY_MODEL in
              .env; unset uses the CLI's default. "agy" and "gemini" in AGENT_PROVIDERS mean this provider.
@@ -36,7 +36,7 @@ CLAUDE = Path.home() / ".local" / "bin" / "claude.exe"
 GROK = Path.home() / ".grok" / "bin" / "grok.exe"
 AGY = Path.home() / "AppData" / "Local" / "agy" / "bin" / "agy.exe"
 MAX_ARG_CHARS = 28000  # Windows allows about 32,000 characters on a command line
-DEFAULT_PROVIDERS = ("claude", "grok", "antigravity")
+DEFAULT_PROVIDERS = ("grok", "claude", "antigravity")
 DEFAULT_TIMEOUT = 600
 
 

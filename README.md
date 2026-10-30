@@ -1,6 +1,6 @@
 # AI Job Search
 
-Finds and grades jobs on its own every hour. An AI agent (Claude Code or similar) does the applying only when asked, then logs each job. Candidate profile and agent rules are in [CLAUDE.md](CLAUDE.md) and [AGENTS.md](AGENTS.md).
+Finds and grades jobs on its own every hour. Grok is the default AI for drafts and questions, with Claude and Antigravity as fallbacks. It applies only when asked, then logs each job. Candidate profile and agent rules are in [CLAUDE.md](CLAUDE.md) and [AGENTS.md](AGENTS.md).
 
 ## Finding jobs
 

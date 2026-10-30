@@ -114,7 +114,7 @@ def test_antigravity_failures_raise(monkeypatch):
 
 def test_antigravity_is_third_in_the_default_chain_and_gemini_means_the_same(monkeypatch):
     monkeypatch.delenv("AGENT_PROVIDERS", raising=False)
-    assert [n for n, _ in agent_runner.provider_chain({})] == ["claude", "grok", "antigravity"]
+    assert [n for n, _ in agent_runner.provider_chain({})] == ["grok", "claude", "antigravity"]
     assert [n for n, _ in agent_runner.provider_chain({"AGENT_PROVIDERS": "claude,gemini"})] == ["claude", "antigravity"]
     chain = [("claude", failing("limit")), ("grok", failing("402")), ("antigravity", lambda *a, **k: "from agy")]
     result = agent_runner.run_agent("hi", providers=chain)
@@ -123,5 +123,5 @@ def test_antigravity_is_third_in_the_default_chain_and_gemini_means_the_same(mon
 
 def test_provider_chain_defaults_and_local_is_opt_in(monkeypatch):
     monkeypatch.delenv("AGENT_PROVIDERS", raising=False)
-    assert [n for n, _ in agent_runner.provider_chain({})] == ["claude", "grok", "antigravity"]
+    assert [n for n, _ in agent_runner.provider_chain({})] == ["grok", "claude", "antigravity"]
     assert [n for n, _ in agent_runner.provider_chain({"AGENT_PROVIDERS": "claude, grok, local"})] == ["claude", "grok", "local"]
