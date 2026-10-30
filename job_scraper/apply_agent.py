@@ -57,7 +57,7 @@ import re
 import sys
 import time
 import urllib.parse
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -75,7 +75,14 @@ LOCK_PATH = daily_digest.DAILY / "apply_agent.lock"
 QUEUE_REQUEST_PATH = daily_digest.DAILY / "apply_queue_request.json"
 SHOT_DIR = daily_digest.DAILY / "apply_shots"
 LETTER_DIR = ROOT / "cover_letters"
-OPEN = ("queued", "preparing", "asking", "ready", "submitting", "assisting")
+MAX_QUESTIONS = 2  # a job with this many unanswered questions goes to Adam to apply by hand
+
+def unfilled_reason(reason):
+    """True for the old handoff reason 'Applies on X, which the agent cannot fill (it knows Greenhouse, Lever and Ashby).'"""
+    return bool(re.match(r"Applies on .+, which the agent cannot fill", reason or ""))
+
+
+OPEN = ("queued", "preparing", "parked", "asking", "ready", "submitting", "assisting")
 WAITING = ("asking", "ready")
 SUBMITTABLE = ("ready", "unsent")  # a summary can still be sent after it was logged as not sent
 QUESTION_WORDS = ("who", "what", "when", "where", "why", "how", "which", "is ", "are ", "do ", "does ", "did ",
@@ -94,9 +101,54 @@ def setting(name, default=""):
     return default if value in (None, "") else value
 
 
+def clock_minutes(text, default):
+    """'6:00' or '16:30' as minutes after midnight."""
+    found = re.match(r"\s*(\d{1,2})(?::(\d{2}))?\s*$", str(text or ""))
+    return int(found.group(1)) * 60 + int(found.group(2) or 0) if found else default
+
+
+def active_hours():
+    """(start, end) in minutes after midnight, local time. Adam, 2026-10-29: the listener works 6:00 to 16:30 and is done after that."""
+    return clock_minutes(setting("APPLY_ACTIVE_START"), 6 * 60), clock_minutes(setting("APPLY_ACTIVE_END"), 16 * 60 + 30)
+
+
+def _day_window(day, hours):
+    start = datetime.combine(day, datetime.min.time()) + timedelta(minutes=hours[0])
+    return start.timestamp(), (start + timedelta(minutes=hours[1] - hours[0])).timestamp()
+
+
+def in_active_hours(ts, hours):
+    begin, end = _day_window(datetime.fromtimestamp(ts).date(), hours)
+    return begin <= ts < end
+
+
+def next_active_start(ts, hours):
+    """The epoch second at which the next active period begins (now, if it is already active)."""
+    day = datetime.fromtimestamp(ts).date()
+    for offset in range(3):
+        begin, end = _day_window(day + timedelta(days=offset), hours)
+        if ts < end:
+            return max(ts, begin)
+    return ts
+
+
+def off_hours_seconds(a, b, hours):
+    """Seconds between a and b that fall outside the active hours, so a question put at 4 pm is not 'unanswered' by 6 am."""
+    if b <= a:
+        return 0.0
+    active, day = 0.0, datetime.fromtimestamp(a).date()
+    while datetime.combine(day, datetime.min.time()).timestamp() <= b:
+        begin, end = _day_window(day, hours)
+        active += max(0.0, min(b, end) - max(a, begin))
+        day += timedelta(days=1)
+    return (b - a) - active
+
+
 def email_code_getter(job):
     """The function submit() calls to read the security code a site just emailed Adam."""
-    return lambda since: mail_codes.fetch_code(since)
+    return lambda since: mail_codes.fetch_code(since, company=job.get("company", ""))
+
+
 ISSUES_PATH = daily_digest.DAILY / "apply_issues.jsonl"
 ERRORS_PATH = daily_digest.DAILY / "apply_errors.jsonl"
 ERROR_REPEAT_SECONDS = 600  # the same error inside this window is counted, not written again
@@ -281,7 +333,7 @@ class Agent:
     def __init__(self, tg, state_path=None, forms=apply_forms, runner=agent_runner.run_agent,
                  log=log_result, browser=open_browser, profile=None, bank_path=None,
                  dry_run=False, headed=False, letter_dir=None, shot_dir=None, now=time.time, log_entries=None, fit_of=None,
-                 embed_resolver=None, assist_launcher=None, auto_submit=None, audit_rows=None):
+                 embed_resolver=None, assist_launcher=None, auto_submit=None, audit_rows=None, ask_adam=None):
         self.assist_launcher = assist_launcher or launch_assist
         self.tg, self.forms, self.runner, self.log_write = tg, forms, runner, log
         self.audit_rows, self.audit_alerted, self.audit_last, self.retry_last = audit_rows, set(), 0, 0
@@ -303,7 +355,18 @@ class Agent:
         self.auto_submit = (setting("APPLY_AUTO_SUBMIT", "1") != "0") if auto_submit is None else auto_submit
         self.issues_path = Path(bank_path).with_name("apply_issues.jsonl") if bank_path else ISSUES_PATH
         self.errors_path = Path(bank_path).with_name("apply_errors.jsonl") if bank_path else ERRORS_PATH
+        self.max_questions = MAX_QUESTIONS
+        # Adam, 2026-10-29: no human in the loop. A question the project cannot answer means the AI does not apply (it is logged and
+        # fixed in the rules); APPLY_ASK_ADAM=1 in .env brings back asking him on Telegram.
+        self.ask_adam = (setting("APPLY_ASK_ADAM") == "1") if ask_adam is None else ask_adam
+        self.active_hours = None  # (start, end) in minutes after midnight; set for the always-on listener only
         self.jobs = self._load()
+
+    def waited(self, job):
+        """Seconds a job has been waiting on Adam, not counting the hours the listener is off."""
+        since = job["updated"]
+        gone = off_hours_seconds(since, self.now(), self.active_hours) if self.active_hours else 0.0
+        return self.now() - since - gone
 
     # ---- the applied log: a write that fails is kept on the job and retried, never dropped
     def log(self, job, status, **kw):
@@ -386,7 +449,7 @@ class Agent:
         decides (a form it can fill, a login wall, a robot check), and a job it could not finish is logged as attempted.
         """
         import applied_log
-        applied = {daily_digest._key(e.get("url")) for e in self.log_entries().values()}
+        applied = {daily_digest._key(e.get("url")) for e in self.log_entries().values() if not unfilled_reason(e.get("reason"))}
         added = []
         for j in candidates:
             url = daily_digest.apply_link(j)
@@ -455,7 +518,7 @@ class Agent:
         link = self.forms.application_url(job["url"]) if job.get("url") else ""
         if attempted:
             self.say(f"🤖 <b>Could not finish:</b> {self.title_of(job)}\n{esc(clip(reason, 200))}{extra}\n"
-                     'Nothing needed from you. It is under "AI tried to apply" in the applied log, with the cause, to fix.'
+                     f'Nothing needed from you. The daily list marks it "{self.kind_label(reason)}", with the cause, to fix.'
                      + (f'\n<a href="{esc(link)}">Open the application</a> if you would rather apply yourself.' if link else "")
                      + ("" if logged else "\n⚠ I could not write it to the applied log."))
         else:
@@ -463,6 +526,11 @@ class Agent:
                      + (f'<a href="{esc(link)}">Open the application</a>' if link else "")
                      + ("" if logged else "\n⚠ I could not write it to the applied log, so note it yourself."))
         self.save()
+
+    @staticmethod
+    def kind_label(reason):
+        return {"blocked": "AI didn't apply, blocked", "gap": "AI didn't apply, not built yet",
+                "closed": "Not applied"}[daily_digest.not_applied_kind(reason)]
 
     def skip(self, job):
         self.set_status(job, "skipped")
@@ -483,7 +551,10 @@ class Agent:
                     return self.handoff(job, f"The page needs a human step ({form.blocker}).")
                 job["human_click"] = bool(form.blocker)  # a robot check: I do the rest, Adam makes the last click
                 standard = apply_answers.standard_answers()
-                plan = [(f, *apply_answers.resolve(f, profile, bank, standard)) for f in form.fields]
+                plan = [(f, *apply_answers.resolve(f, profile, bank, standard, job)) for f in form.fields]
+                giveup = next((why for _, outcome, _, why in plan if outcome == "giveup"), "")
+                if giveup:
+                    return self.handoff(job, f"{giveup} ({clip(next(f.label for f, o, _, _ in plan if o == 'giveup'), 60)}).")
                 letter = self._draft_all(job, plan, page, profile)
         except self.forms.FormError as e:
             return self.handoff(job, str(e), attempted="closed or gone" not in str(e))  # a dead posting is nothing to fix
@@ -493,6 +564,14 @@ class Agent:
         if letter is False:
             return None
         job["pending"] = [k for k, m in job["fields"].items() if m["outcome"] == "ask" and k not in job["answers"]]
+        if job["pending"] and (not self.ask_adam or len(job["pending"]) >= self.max_questions):
+            labels = "; ".join(clip(job["fields"][k]["label"], 60) for k in job["pending"][:4])
+            for k in job["pending"]:
+                self.note_issue("asked", job, label=job["fields"][k]["label"])  # /issues shows which rule to add
+            self.save()
+            if len(job["pending"]) >= self.max_questions:
+                return self.handoff(job, f"too many unique questions ({len(job['pending'])}): {labels}")
+            return self.handoff(job, f"the project has no answer yet for: {labels}")
         self.save()
         return self.next_step(job)
 
@@ -542,6 +621,9 @@ class Agent:
     # ---- asking
     def next_step(self, job):
         if job["pending"]:
+            other = self.asking()
+            if other is not None and other is not job:
+                return self.set_status(job, "parked")  # prepared, waiting its turn to ask; the rest of the queue keeps moving
             return self.ask(job)
         if self.auto_submit and not self.dry_run:
             return self.send_now(job)
@@ -944,7 +1026,7 @@ class Agent:
                           note=f"AI prepared; unsent. state id {job['id']}")
         buttons = [[("Review and submit", f"r:{job['id']}"), ("I'll do it", f"h:{job['id']}")]]
         self.say(f"<b>Not sent:</b> {self.title_of(job)}\nNo Submit tap in {hours:.1f} hours, so I logged it as "
-                 "\"AI could have applied, not sent\"" + ("." if logged else " (the log write failed, so note it yourself).")
+                 "\"Not applied\"" + ("." if logged else " (the log write failed, so note it yourself).")
                  + " Tap below to get the summary again, or send /unsent later.", buttons)
 
     def reconcile(self):
@@ -1029,6 +1111,21 @@ Adam's question: {question}
         return self.say(esc(result.text.strip()[:3500]))
 
     # ---- loop
+    def reopen_unfilled(self):
+        """Jobs handed back before 2026-10-29 only because the link was not Greenhouse, Lever or Ashby are tried now.
+
+        Adam: the link never decides what the AI can do. Returns how many went back in the queue.
+        """
+        reopened = 0
+        for job in self.jobs.values():
+            if job["status"] == "handed_off" and unfilled_reason(job.get("reason")):
+                job["status"], job["reason"], job["updated"] = "queued", "", self.now()
+                job["answers"], job["fields"], job["pending"], job["drafts"], job["asked"] = {}, {}, [], {}, None
+                reopened += 1
+        if reopened:
+            self.save()
+        return reopened
+
     def recover(self):
         """A job left 'submitting' by a crash may or may not have gone through. Never retry it."""
         for job in list(self.jobs.values()):
@@ -1043,7 +1140,7 @@ Adam's question: {question}
         for job in list(self.jobs.values()):
             if job["status"] not in WAITING:
                 continue
-            waited = self.now() - job["updated"]
+            waited = self.waited(job)
             if job["status"] == "ready" and waited > self.unsent_seconds:
                 self.mark_unsent(job, waited)
             elif waited > self.wait_seconds:
@@ -1055,13 +1152,18 @@ Adam's question: {question}
                 self.save()
 
     def advance(self):
-        """Start the next queued job unless a question of mine is still unanswered. True if it did something.
+        """Prepare the next queued job, or put the next parked question to Adam. True if it did something.
 
-        A finished summary waiting for your Submit tap does not hold the line up: every Submit button
-        carries its own job, so any number of summaries can wait while the rest keep being prepared.
+        A question out for hours must not stall the day's other jobs (25 sat queued behind one on 2026-10-29), so jobs
+        keep being prepared while it is open: one that needs an answer is parked and asked once the line is free,
+        one question at a time because a typed reply must belong to one question. A finished summary waiting for
+        your Submit tap does not hold the line up either: every Submit button carries its own job.
         """
-        if self.asking():
-            return False
+        if not self.asking():
+            parked = min((j for j in self.jobs.values() if j["status"] == "parked"), key=lambda j: j["updated"], default=None)
+            if parked:
+                self.ask(parked)
+                return True
         queued = next((j for j in self.jobs.values() if j["status"] == "queued"), None)
         if not queued:
             return False
@@ -1080,8 +1182,12 @@ Adam's question: {question}
         logged = list(self.log_entries().values())
         tried = [e for e in logged if e.get("status") == "attempted"]
         by_hand = [e for e in logged if e.get("status") == "recommended"]
-        rows += ["", f"<b>AI tried, could not finish:</b> {len(tried)} (causes in /issues and daily/applied_for.docx)",
-                 f"<b>You apply by hand:</b> {len(by_hand)} in the applied log (daily/applied_for.docx)"]
+        applied = [e for e in logged if e.get("status") == "applied"]
+        kinds = [daily_digest.not_applied_kind(e.get("reason")) for e in logged if e.get("status") != "applied"]
+        blocked, gap, closed = kinds.count("blocked"), kinds.count("gap"), kinds.count("closed")
+        rows += ["", f"<b>AI applied:</b> {sum(1 for e in applied if e.get('applied_by') != 'Adam')}   <b>Adam applied:</b> {sum(1 for e in applied if e.get('applied_by') == 'Adam')}",
+                 f"<b>AI didn't apply:</b> {blocked} blocked (bot check, login, too many questions), {gap} not built yet (see /issues)",
+                 f"<b>Not applied:</b> {closed} closed or skipped"]
         counts = {}
         for j in self.jobs.values():
             counts[j["status"]] = counts.get(j["status"], 0) + 1
@@ -1106,9 +1212,22 @@ Adam's question: {question}
     def serve(self, minutes=None, idle_exit=False, wait=25, listen=False, fits=("high", "medium"), limit=10):
         deadline = self.now() + minutes * 60 if minutes else None
         self.recover()
+        reopened = self.reopen_unfilled()
+        if reopened:
+            self.say(f"🔁 Trying {reopened} job{'s' if reopened != 1 else ''} again that I had handed back only because of the site's address.")
         self.reconcile()
         self.release_ready()
+        slept = False
         while True:
+            if listen and self.active_hours and not in_active_hours(self.now(), self.active_hours):
+                if not slept:
+                    slept = True
+                    wake = datetime.fromtimestamp(next_active_start(self.now(), self.active_hours))
+                    print(f"{datetime.now():%H:%M} outside active hours; not polling Telegram until {wake:%a %H:%M}.", file=sys.stderr)
+                touch_lock()
+                time.sleep(min(60, max(1, next_active_start(self.now(), self.active_hours) - self.now())))
+                continue
+            slept = False
             if listen:
                 try:
                     self.take_queue_request(fits=fits, limit=limit)
@@ -1252,6 +1371,8 @@ def main(argv=None):
         # Take the lock before queueing: the process holding it owns the state file, and a second writer would
         # overwrite its jobs.
         listen = args.cmd == "listen"
+        if listen:
+            agent.active_hours = active_hours()
         if not acquire_lock(listener=listen):
             print("Another apply agent is running (daily/apply_agent.lock is fresh).")
             return 1

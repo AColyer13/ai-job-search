@@ -33,6 +33,7 @@ LOG_PATH = daily_digest.DAILY / "apply_answer_log.json"
 
 DEFAULT_PROFILE = {
     "first_name": "Adam",
+    "preferred_name": "Adam",  # Adam, 2026-10-29: what he goes by; every "preferred / nickname / what should we call you" field
     "last_name": "Colyer",
     "full_name": "Adam Colyer",
     "email": "adamcolyer@gmail.com",
@@ -48,12 +49,18 @@ DEFAULT_PROFILE = {
     "portfolio": "https://acolyer13.github.io/WebPortfolio/",
     "current_company": "Mercor",
     "current_title": "AI Generalist Expert",
+    "school": "University of St. Thomas",
+    "degree": "Bachelor's Degree",
+    "major": "Marketing",
+    "graduation_year": "2019",
+    "start_date": "Immediately",  # Adam, 2026-10-29: Mercor is a contract, nothing holds him
     "resume_pdf": r"C:\Users\adamc\OneDrive\Resumes\Adam_Colyer_Resume_2026-10.pdf",
 }
 
 # (pattern on the normalized label, profile key). First match wins.
 RULES = (
-    (r"^(first|given) name|^(preferred|nick) ?(first )?name|^what (should|do) we call you", "first_name"),
+    (r"^(preferred|nick) ?(first )?name|\bpreferred (first )?name\b|\bgo by\b|^what (should|do) we call you", "preferred_name"),
+    (r"^(first|given) name", "first_name"),
     (r"^(last|family) name|^surname", "last_name"),
     (r"^(full |legal |your )?name$|^name\b.*\bfull\b", "full_name"),
     (r"\be mail\b|^email", "email"),
@@ -64,11 +71,24 @@ RULES = (
     (r"^current (company|employer)|^(company|employer)$", "current_company"),
     (r"^current (job )?title", "current_title"),
     (r"^country", "country"),
-    (r"^(state|province)\b", "state"),
+    (r"^(state|province)\b|\b(what|which) state (will|do|are|would) you|state (will you be|are you|do you) (working|located|based|living|residing)|state of residence", "state"),
     (r"^(zip|postal)", "zip"),
     (r"^(current )?(street |mailing |home )?address( line 1)?$|^street", "address"),
+    (r"start date|earliest (possible )?start|when (can|could|would) you (start|begin)|notice period|available to start|availability to start", "start_date"),
+    (r"^(school|university|college)( name)?$|^institution", "school"),
+    (r"^degree( type)?$|^highest (level of )?(education|degree)|^level of education", "degree"),
+    (r"^(discipline|major|field of study)", "major"),
+    (r"graduation (date|year)|year (of )?graduat|when did you graduate", "graduation_year"),
     (r"^(current )?location|\bcity\b|where do you (currently )?(live|reside)|where are you (currently )?(located|based)", "location"),
 )
+# Adam, 2026-10-29: voluntary demographic questions get the "decline" choice; relocation and on-site/hybrid are a yes;
+# pay is "open / negotiable" unless the posting states a range.
+EEO = re.compile(r"\b(gender|race|ethnic\w*|hispanic|latin[oa]|veteran|disabilit\w*|sexual orientation|transgender|lgbt\w*|protected)\b", re.I)
+DECLINE = re.compile(r"decline|prefer not|do(n't| not) wish|not to (say|answer|disclose|identify|specify)|choose not|rather not|not (wish|want) to", re.I)
+WILLING = re.compile(r"\brelocat|\b(work|working|be|come|commute)\b.{0,25}\b(on ?-?site|in[- ]office|in[- ]person|hybrid)\b|\b(on ?-?site|in[- ]office|hybrid)\b.{0,25}\b(work|role|position|basis|schedule)\b", re.I)
+UNWILLING = re.compile(r"\b(not|n't|unable|unwilling|except|unless|prefer|which|what|where|how many)\b", re.I)
+SALARY = re.compile(r"salary|compensation|pay (expect|range|requirement)|(expected|desired|target) (pay|base|rate)|rate expectation", re.I)
+RANGE = re.compile(r"\$\s?\d{2,3}(?:,\d{3})+(?:\s?(?:-|\u2013|\u2014|to)\s?\$?\s?\d{2,3}(?:,\d{3})+)?", re.I)
 CONSENT = re.compile(r"privacy|terms|agree|acknowledg|consent|policy|certify|accurate", re.I)
 OPTIONAL_CONSENT = re.compile(r"future (job )?(opportunit|roles|positions)|marketing|newsletter|contact me about", re.I)
 ESSAY = re.compile(r"\bwhy\b|describe|tell us|tell me|explain|interest|motivat|what (makes|excites|draws|attracts)|how (would|do) you|"
@@ -115,9 +135,17 @@ CONCEPTS = (
 )
 
 
+REQUIRES_SPONSOR = re.compile(r"\b(require|need)\b[^?]{0,120}\bsponsor", re.I)
+STRONG_AUTHORIZED = re.compile(r"\b(authori[sz]ed|eligible|permitted|allowed|right) to work\b", re.I)
+TIME_ZONE = re.compile(r"time ?zone", re.I)
+CENTRAL = re.compile(r"central|\bcst\b|\bcdt\b|\bct\b|america/chicago", re.I)
+
+
 def concept_of(label):
     """'sponsorship', 'work authorization' or '' for the yes/no question a label asks."""
     hits = [name for name, pattern in CONCEPTS if pattern.search(label or "")]
+    if len(hits) == 2 and REQUIRES_SPONSOR.search(label or "") and not STRONG_AUTHORIZED.search(label or ""):
+        hits = ["sponsorship"]  # "require X to sponsor or support a visa or work authorization" asks about sponsorship
     if len(hits) != 1 or re.search(r"\b(not|n't|without|unless|except)\b", label or "", re.I):
         return ""
     return hits[0]
@@ -141,7 +169,67 @@ def _profile_value(field, name, profile):
     return value
 
 
-def resolve(field, profile, bank, standard=None):
+def posting_pay(description):
+    """The pay range the posting itself states ('$120,000 - $150,000'), else ''."""
+    found = RANGE.search(description or "")
+    return re.sub(r"\s+", " ", found.group()).strip() if found else ""
+
+
+ADULT = re.compile(r"\b(at least|over|older than|minimum age of)\s+(18|eighteen)\b|\b(18|eighteen)\s*(years|yrs)?\s*(of age )?(or older|or over|\+)|legal (working )?age", re.I)
+BACKGROUND = re.compile(r"(consent|agree|willing|able|comfortable|submit|undergo|authori[sz]e).{0,60}(background|reference) (check|screen|investigation)", re.I)
+HEARD = re.compile(r"how did you (hear|find|learn)|where did you (hear|find|learn)|source of (your )?application", re.I)
+HEARD_OPTION = (re.compile(r"linkedin", re.I), re.compile(r"job (board|site|posting)|indeed|online|internet|website", re.I))
+YEARS = re.compile(r"\byears?\b.{0,40}\bexperience\b|\bexperience\b.{0,40}\byears\b|how many years", re.I)
+SALES_TOPIC = re.compile(r"\b(sales|selling|business development|account (executive|management)|b2b|saas sales|prospecting|demos?)\b", re.I)
+ENGINEERING_TOPIC = re.compile(r"\b(software|engineering|python|react|typescript|javascript|node|full[- ]?stack|front[- ]?end|back[- ]?end|llm|machine learning|ai\b|sql|java|programming|coding|developer|(software|web|app|application) development|cloud|aws|api|git|docker)\b", re.I)
+GPA = re.compile(r"\bgpa\b|grade point", re.I)
+
+
+def standing_answer(field, job=None):
+    """Adam's standing choices for demographic, relocation and pay questions: (value, source) or None."""
+    label, options = field.label or "", list(field.options)
+    if field.kind in ("file", "checkbox"):
+        return None
+    if ADULT.search(label) and not re.search(r"\b(not|under)\b", label, re.I):
+        return ("Yes", "profile") if not options or any(normalize_label(o) == "yes" for o in options) else None
+    if BACKGROUND.search(label) and not re.search(r"\b(not|unable|unwilling)\b", label, re.I):
+        return ("Yes", "profile") if not options or any(normalize_label(o) == "yes" for o in options) else None
+    if HEARD.search(label):
+        if not options:
+            return ("LinkedIn", "profile") if field.kind in ("text", "textarea") else None
+        for pattern in HEARD_OPTION:  # LinkedIn when it is listed, else a generic job-board choice
+            pick = next((o for o in options if pattern.search(o)), None)
+            if pick:
+                return pick, "profile"
+        return None
+    if YEARS.search(label) and not options and field.kind in ("text", "textarea"):
+        if SALES_TOPIC.search(label) and not ENGINEERING_TOPIC.search(label):
+            return "5", "profile"  # Adam, 2026-10-29: "nearly 5" years of B2B sales
+        if ENGINEERING_TOPIC.search(label) and not SALES_TOPIC.search(label):
+            return "1", "profile"  # "1 year plus" for engineering skills
+        return None
+    if EEO.search(label):
+        if options:
+            pick = next((o for o in options if DECLINE.search(o)), None)
+            return (pick, "profile") if pick else None
+        return ("Decline to self-identify", "profile") if field.kind in ("text", "textarea") else None
+    if SALARY.search(label):
+        if options or field.kind not in ("text", "textarea"):
+            return None
+        return (posting_pay((job or {}).get("description")) or "Open / negotiable", "profile")
+    if TIME_ZONE.search(label):  # Adam lives in Edina, MN
+        if options:
+            pick = next((o for o in options if CENTRAL.search(o)), None)
+            return (pick, "profile") if pick else None
+        return ("Central Time (CT)", "profile") if field.kind in ("text", "textarea") else None
+    if WILLING.search(label) and not UNWILLING.search(label):
+        if options:
+            return ("Yes", "profile") if any(normalize_label(o) == "yes" for o in options) else None
+        return ("Yes", "profile") if field.kind in ("text", "textarea") else None
+    return None
+
+
+def resolve(field, profile, bank, standard=None, job=None):
     """(outcome, value, source) for one field. See the module doc for the outcomes."""
     key, label = field.key, field.label or ""
     if field.kind == "file":
@@ -167,6 +255,11 @@ def resolve(field, profile, bank, standard=None):
         return ("draft", None, "") if field.required else ("skip", None, "")
     if key in bank:
         return "fill", bank[key]["answer"], "saved"
+    if GPA.search(label) and field.required and field.kind in ("text", "textarea", "select", "combobox", "radio"):
+        return "giveup", None, "Adam: a required GPA means move on from the job"
+    standing = standing_answer(field, job)
+    if standing and field.required:  # an optional one stays skipped; an answer Adam saved (above) wins over these
+        return "fill", standing[0], standing[1]
     same_question = saved_by_concept(label, bank)
     if same_question is not None and field.kind in ("radio", "select", "combobox", "text"):
         return "fill", same_question, "saved"

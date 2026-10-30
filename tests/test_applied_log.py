@@ -121,17 +121,18 @@ def _document_xml(path):
         return zf.read("word/document.xml").decode("utf-8")
 
 
-def test_word_file_has_a_heading_and_both_lists_per_month(tmp_path):
+def test_word_file_lists_only_applied_jobs_newest_month_first(tmp_path):
     entries = {}
     add(entries, "https://boards.example.com/acme/1", "applied", "2026-10-27", method="Greenhouse form")
     add(entries, "https://boards.example.com/beta/2", "recommended", "2026-11-03", reason="Needs an account")
+    add(entries, "https://boards.example.com/delta/4", "attempted", "2026-11-03", reason="Robot check", title="Dev", company="Delta")
     path = applied_log.write_doc(entries, tmp_path / "applied_for.docx", today="2026-11-03")
     xml = _document_xml(path)
     ElementTree.fromstring(xml)  # well-formed
-    for text in ("October 2026", "November 2026", "Applied by AI on 2026-10-27 via Greenhouse form.",
-                 "Why by hand: Needs an account", "1 applied, 1 for you to apply to by hand"):
+    for text in ("October 2026", "AI applied on 2026-10-27", "1 applied: 1 AI applied, 0 Adam applied"):
         assert text in xml
-    assert xml.index("November 2026") < xml.index("October 2026")
+    for text in ("November 2026", "Needs an account", "Robot check", "by hand"):
+        assert text not in xml  # a job nobody has applied for is not on the list
     with zipfile.ZipFile(path) as zf:
         assert "https://jobs.acme.com/se-1" in zf.read("word/_rels/document.xml.rels").decode("utf-8")
 
@@ -263,14 +264,14 @@ def test_a_recommended_job_can_become_unsent():
     assert entry["status"] == "unsent" and entry["date_recommended"] == "2026-10-27"
 
 
-def test_word_file_lists_the_unsent_bucket(tmp_path):
+def test_an_email_confirmed_application_by_adam_is_marked_in_the_list(tmp_path):
     entries = {}
-    add(entries, "https://boards.example.com/acme/1", "unsent", "2026-10-28", reason="No Submit tap in 4.5 hours")
-    path = applied_log.write_doc(entries, tmp_path / "applied_for.docx", today="2026-10-28")
-    xml = _document_xml(path)
-    ElementTree.fromstring(xml)
-    for text in ("AI could have applied, not sent (1)", "No Submit tap in 4.5 hours", "1 the AI prepared but you did not send"):
-        assert text in xml
+    add(entries, "https://boards.example.com/acme/1", "attempted", "2026-10-28", reason="Robot check")
+    add(entries, "https://boards.example.com/acme/1", "applied", "2026-10-30", by="Adam")
+    (entry,) = entries.values()
+    entry["email_confirmed"] = True
+    xml = _document_xml(applied_log.write_doc(entries, tmp_path / "applied_for.docx", today="2026-10-30"))
+    assert "Adam applied on 2026-10-30 (confirmed in Gmail)" in xml and "0 AI applied, 1 Adam applied" in xml
 
 
 def _tracker_with(tmp_path, *rows):
@@ -338,7 +339,7 @@ def test_attempted_is_its_own_bucket_and_applied_moves_it_out():
     url = "https://boards.greenhouse.io/x/jobs/1"
     key, msg = applied_log.add_entry(entries, url=url, title="T", company="C", status="attempted", day="2026-10-29",
                                      reason="email verification code: no code arrived")
-    assert entries[key]["status"] == "attempted" and "tried to apply" in msg
+    assert entries[key]["status"] == "attempted" and "not applied" in msg
     assert applied_log.months(entries)["2026-10"]["attempted"][0]["reason"].startswith("email verification code")
     applied_log.add_entry(entries, url=url, title="T", company="C", status="unsent", day="2026-10-30")  # never downgrades it
     assert entries[key]["status"] == "attempted"

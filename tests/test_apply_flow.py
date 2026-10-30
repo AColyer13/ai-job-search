@@ -58,6 +58,7 @@ def env(tmp_path, chromium):
                               profile={**apply_answers.DEFAULT_PROFILE, "resume_pdf": str(resume)},
                               bank_path=tmp_path / "bank.json", letter_dir=tmp_path / "letters",
                               shot_dir=tmp_path / "shots", assist_launcher=lambda jid: agent.launched.append(jid), auto_submit=False)
+    agent.max_questions = 99  # these forms ask two questions; the several-questions rule has its own test
     agent.launched = []  # Chrome on Adam's PC is never opened by a test
     return agent, tg, logged, pages
 
@@ -176,3 +177,32 @@ def test_form_that_changes_after_approval_is_not_submitted(env):
     tg.tap("Submit")
     agent.handle(tg.poll()[0])
     assert job["status"] == "handed_off" and logged[0][0] == "attempted" and "clearance" in logged[0][1]["reason"].lower()
+
+
+def test_with_asking_on_a_job_with_several_unanswered_questions_still_goes_to_adam(env):
+    agent, tg, logged, pages = env
+    agent.max_questions = 2  # asking is on in tests; several questions still mean Adam applies by hand
+    job = add(agent, GH, "greenhouse")
+    agent.advance()
+    assert job["status"] == "handed_off" and logged[0][0] == "attempted"
+    assert "too many unique questions" in logged[0][1]["reason"]
+
+
+def test_by_default_no_one_is_asked_a_missing_answer_is_a_gap_the_ai_logs(env):
+    agent, tg, logged, pages = env
+    agent.ask_adam = False
+    agent.max_questions = 5
+    job = add(agent, GH, "greenhouse")
+    agent.advance()
+    assert job["status"] == "handed_off" and logged[0][0] == "attempted"
+    assert "no answer yet for" in logged[0][1]["reason"]
+    assert not any(row for _, rows in tg.sent for r in (rows or []) for row in r if row[1].startswith("a:"))  # nothing was asked
+
+
+def test_too_many_unique_questions_is_blocked_not_a_gap(env):
+    agent, tg, logged, pages = env
+    agent.ask_adam = False
+    agent.max_questions = 2
+    job = add(agent, GH, "greenhouse")
+    agent.advance()
+    assert job["status"] == "handed_off" and "too many unique questions" in logged[0][1]["reason"]

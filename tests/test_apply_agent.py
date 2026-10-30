@@ -174,22 +174,22 @@ def test_question_with_options_uses_buttons_and_saves_the_answer(env):
 
 
 def test_typed_answer_is_matched_to_an_option(env):
-    fields = BASIC + [field("degree", "select", "Degree", options=["Bachelor's Degree", "Master's Degree"])]
+    fields = BASIC + [field("highest honor", "select", "Highest honor", options=["Bachelor's Degree", "Master's Degree"])]
     agent, tg, forms, job = make_agent(env, fields)
     agent.advance()
     agent.on_text("masters")
     assert "does not match" in tg.sent[-1][0] or job["status"] == "asking"
     agent.on_text("Master's Degree")
-    assert job["answers"]["degree"] == "Master's Degree"
+    assert job["answers"]["highest honor"] == "Master's Degree"
 
 
 def test_free_text_question_takes_a_reply_and_is_not_saved_when_job_specific(env):
-    fields = BASIC + [field("desired salary", "text", "Desired salary")]
+    fields = BASIC + [field("who referred you", "text", "Who referred you?")]
     agent, tg, forms, job = make_agent(env, fields)
     agent.advance()
     agent.on_text("120000")
-    assert job["answers"]["desired salary"] == "120000" and job["status"] == "ready"
-    assert "desired salary" not in apply_answers.load_bank(env.tmp / "bank.json")
+    assert job["answers"]["who referred you"] == "120000" and job["status"] == "ready"
+    assert "who referred you" not in apply_answers.load_bank(env.tmp / "bank.json")
 
 
 def test_cover_letter_file_is_drafted_rendered_and_attached(env):
@@ -390,19 +390,26 @@ def test_a_summary_waiting_for_submit_does_not_hold_up_the_next_job(env):
     assert first_submit and first_submit[0].startswith("s:j2:")
 
 
-def test_an_unanswered_question_holds_the_line_so_replies_match_one_question(env):
-    agent, tg, forms, job = make_agent(env, BASIC + [field("desired salary", "text", "Desired salary")])
+def test_an_unanswered_question_does_not_stall_the_queue_but_only_one_question_is_out(env):
+    agent, tg, forms, job = make_agent(env, BASIC + [field("who referred you", "text", "Who referred you?")])
     second = dict(job, id="j2", url=URL + "4", status="queued", answers={}, fields={}, drafts={}, pending=[])
-    agent.jobs["j2"] = second
+    third = dict(job, id="j3", url=URL + "5", status="queued", answers={}, fields={}, drafts={}, pending=[])
+    agent.jobs["j2"], agent.jobs["j3"] = second, third
     assert agent.advance() is True and job["status"] == "asking"
-    assert agent.advance() is False and second["status"] == "queued"
+    assert agent.advance() is True and second["status"] == "parked"  # prepared, not asked: a reply must belong to one question
+    assert agent.advance() is True and third["status"] == "parked"
+    assert [j["id"] for j in agent.jobs.values() if j["status"] == "asking"] == ["j1"]
     agent.on_text("120000")
-    assert job["status"] == "ready" and agent.advance() is True
+    assert job["status"] == "ready"
+    assert agent.advance() is True and second["status"] == "asking" and third["status"] == "parked"  # next in line, oldest first
+    agent.on_text("Pat")
+    assert second["answers"]["who referred you"] == "Pat" and third["answers"].get("who referred you") is None
+    assert agent.advance() is True and third["status"] == "asking"
 
 
 def test_a_question_left_unanswered_hands_the_job_back(env):
     clock = [1000.0]
-    agent, tg, forms, job = make_agent(env, BASIC + [field("desired salary", "text", "Desired salary")])
+    agent, tg, forms, job = make_agent(env, BASIC + [field("who referred you", "text", "Who referred you?")])
     agent.now = lambda: clock[0]
     agent.advance()
     clock[0] += 5 * 3600
@@ -540,7 +547,7 @@ def test_cover_letter_prompt_starts_from_adams_own_letter():
 
 
 def test_adams_answer_and_the_sent_drafts_are_logged_and_shown_by_answers_command(env):
-    fields = BASIC + [field("desired salary", "text", "Desired salary"),
+    fields = BASIC + [field("who referred you", "text", "Who referred you?"),
                       field("why do you want to work here", "textarea", "Why do you want to work here?")]
     agent, tg, forms, job = make_agent(env, fields)
     agent.advance()
@@ -549,9 +556,9 @@ def test_adams_answer_and_the_sent_drafts_are_logged_and_shown_by_answers_comman
     agent.handle(tg.poll()[0])
     log = apply_answers.recent_answers(10, env.tmp / "apply_answer_log.json")
     sources = {e["question"]: e["source"] for e in log}
-    assert sources["Desired salary"] == "Adam" and sources["Why do you want to work here?"].startswith("AI draft")
+    assert sources["Who referred you?"] == "Adam" and sources["Why do you want to work here?"].startswith("AI draft")
     agent.on_text("/answers")
-    assert "Desired salary" in tg.sent[-1][0] and "120000" in tg.sent[-1][0]
+    assert "Who referred you?" in tg.sent[-1][0] and "120000" in tg.sent[-1][0]
 
 
 def test_selftest_needs_the_tap():
@@ -578,7 +585,7 @@ def test_fit_jobs_on_other_sites_are_queued_like_any_other_with_one_message(env,
 
 def test_one_reminder_after_a_quiet_spell_and_the_deadline_keeps_running(env):
     clock = [1000.0]
-    agent, tg, forms, job = make_agent(env, BASIC + [field("desired salary", "text", "Desired salary")])
+    agent, tg, forms, job = make_agent(env, BASIC + [field("who referred you", "text", "Who referred you?")])
     agent.now = lambda: clock[0]
     agent.advance()
     start, sent = job["updated"], len(tg.sent)
@@ -626,7 +633,7 @@ def test_no_submit_tap_in_four_and_a_half_hours_logs_it_as_unsent(env):
     assert job["status"] == "unsent" and forms.submitted == 0
     status, kw = env.logged[-1]
     assert status == "unsent" and "no Submit tap" in kw["reason"] and "j1" in kw["reason"]
-    assert "AI could have applied" in tg.sent[-1][0] and any(d.startswith("r:j1") for _, d in tg.last_buttons())
+    assert "Not applied" in tg.sent[-1][0] and any(d.startswith("r:j1") for _, d in tg.last_buttons())
 
 
 def test_an_unsent_job_can_still_be_submitted_from_its_old_button_or_unsent_command(env):
@@ -684,13 +691,13 @@ def test_a_free_text_question_spawns_an_agent_and_the_answer_goes_to_telegram(en
 
 
 def test_a_reply_to_an_open_question_is_an_answer_even_without_a_question_mark(env):
-    agent, tg, forms, job = make_agent(env, BASIC + [field("desired salary", "text", "Desired salary")])
+    agent, tg, forms, job = make_agent(env, BASIC + [field("who referred you", "text", "Who referred you?")])
     tg.agent = agent
     agent.runner = lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not spawn an agent"))
     agent.advance()
     assert job["status"] == "asking"
     text_in(agent, "120000")
-    assert job["answers"]["desired salary"] == "120000"
+    assert job["answers"]["who referred you"] == "120000"
 
 
 def test_question_with_no_provider_says_so(env):
@@ -713,9 +720,9 @@ def test_the_queue_message_lists_every_job_and_promises_no_hand_off_by_link(env)
 
 def test_status_separates_the_buckets(env):
     agent, tg, forms, job = make_agent(env, BASIC)
-    env.entries["r"] = {"url": "x", "status": "recommended"}
+    env.entries["r"] = {"url": "x", "status": "recommended", "reason": "Adam chose I'll do it"}
     text = agent.status_text()
-    assert "AI is handling" in text and "You apply by hand:</b> 1" in text
+    assert "AI is handling" in text and "Not applied:</b> 1" in text
 
 
 def test_a_queued_job_the_scorer_now_grades_low_is_skipped_without_preparing(env):
@@ -1001,3 +1008,100 @@ def test_a_lock_left_by_a_dead_process_does_not_block_the_restart(tmp_path):
     lock.write_text("listen 999999")  # no such process
     assert apply_agent.acquire_lock(lock, listener=True) is True
     assert apply_agent.acquire_lock(lock, listener=True) is False  # now held by this live process
+
+
+def test_a_required_gpa_moves_on_from_the_job_without_asking_anyone(env):
+    agent, tg, forms, job = make_agent(env, BASIC + [field("gpa", "text", "GPA")])
+    agent.advance()
+    assert job["status"] == "handed_off" and env.logged[0][0] == "attempted" and "GPA" in env.logged[0][1]["reason"]
+    assert forms.submitted == 0 and not any("Question" in t for t, _ in tg.sent)
+
+
+def test_jobs_handed_back_only_for_their_address_are_tried_again(env):
+    agent, tg, forms, job = make_agent(env, BASIC)
+    old = "Applies on himalayas.app, which the agent cannot fill (it knows Greenhouse, Lever and Ashby)."
+    job.update(status="handed_off", reason=old)
+    kept = dict(job, id="j2", url=URL + "9", status="handed_off", reason="The posting is closed or gone.")
+    agent.jobs["j2"] = kept
+    assert agent.reopen_unfilled() == 1
+    assert job["status"] == "queued" and job["reason"] == "" and kept["status"] == "handed_off"
+
+
+def test_queue_retries_an_old_cannot_fill_recommendation_but_not_one_adam_chose(env):
+    agent, tg, forms, job = make_agent(env, BASIC)
+    agent.jobs.clear()
+    stale = "https://himalayas.app/companies/a/jobs/one"
+    chosen = "https://himalayas.app/companies/b/jobs/two"
+    env.entries.update({
+        "a": {"url": stale, "status": "recommended", "reason": "Applies on himalayas.app, which the agent cannot fill (it knows Greenhouse)."},
+        "b": {"url": chosen, "status": "recommended", "reason": "I'll do it myself."}})
+    cands = [{"url": stale, "title": "A", "company": "A", "fit": "high"}, {"url": chosen, "title": "B", "company": "B", "fit": "high"}]
+    assert [j["title"] for j in agent.queue(cands)] == ["A"]
+
+
+# ---- active hours: the listener works 6:00 to 16:30 local time and is done after that (Adam, 2026-10-29)
+
+HOURS = (6 * 60, 16 * 60 + 30)
+
+
+def local(day, hour, minute=0):
+    from datetime import datetime
+    return datetime(2026, 10, day, hour, minute).timestamp()
+
+
+def test_active_hours_cover_six_to_four_thirty():
+    assert apply_agent.in_active_hours(local(29, 6, 0), HOURS)
+    assert apply_agent.in_active_hours(local(29, 16, 29), HOURS)
+    assert not apply_agent.in_active_hours(local(29, 16, 30), HOURS)
+    assert not apply_agent.in_active_hours(local(29, 5, 59), HOURS)
+
+
+def test_next_start_is_six_the_next_morning_after_hours():
+    from datetime import datetime
+    assert datetime.fromtimestamp(apply_agent.next_active_start(local(29, 17), HOURS)) == datetime(2026, 10, 30, 6, 0)
+    assert datetime.fromtimestamp(apply_agent.next_active_start(local(29, 3), HOURS)) == datetime(2026, 10, 29, 6, 0)
+    assert apply_agent.next_active_start(local(29, 9), HOURS) == local(29, 9)
+
+
+def test_a_night_does_not_count_as_waiting():
+    off = apply_agent.off_hours_seconds(local(29, 16, 0), local(30, 7, 0), HOURS)
+    assert off == (local(30, 6, 0) - local(29, 16, 30))  # 16:30 to 06:00, nothing else
+    assert apply_agent.off_hours_seconds(local(29, 8), local(29, 12), HOURS) == 0
+
+
+def test_a_question_asked_at_four_is_not_stale_at_six_next_morning(env):
+    agent, tg, forms, job = make_agent(env, BASIC)
+    agent.active_hours = HOURS
+    job["status"], job["updated"] = "asking", local(29, 16, 0)
+    agent.now = lambda: local(30, 6, 5)  # 14 hours later by the clock, 35 minutes of listening time
+    assert agent.waited(job) < 3600
+    agent.expire()
+    assert job["status"] == "asking"
+    agent.active_hours = None  # the old behaviour: 14 hours is long enough to give up
+    agent.expire()
+    assert job["status"] == "handed_off"
+
+
+def test_the_listener_does_not_poll_telegram_after_hours(env, monkeypatch):
+    agent, tg, forms, job = make_agent(env, BASIC)
+    agent.active_hours = HOURS
+    polls = []
+
+    def poll(timeout=0):
+        polls.append(clock["t"])
+        raise SystemExit  # one poll is all the test needs to see
+
+    tg.poll = poll
+    clock = {"t": local(29, 17, 0)}
+    agent.now = lambda: clock["t"]
+    slept = []
+
+    def fake_sleep(seconds):
+        slept.append(seconds)
+        clock["t"] = local(30, 6, 0)
+
+    monkeypatch.setattr(apply_agent.time, "sleep", fake_sleep)
+    with pytest.raises(SystemExit):
+        agent.serve(listen=True, wait=0)
+    assert slept == [60] and polls == [local(30, 6, 0)]  # nothing at 17:00; the first poll is at 06:00
+    assert job["status"] == "ready"  # prepared by the morning pass, not at night

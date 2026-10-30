@@ -40,8 +40,9 @@ Applied jobs (by the AI or by Adam) also get a row in job_search_tracker.csv, th
 file /rank, /scrape and /gmail-sync read as the record of applications. Recommended
 jobs do not, so they stay visible to the next search. Pass --no-tracker to skip it.
 
-The Word file groups entries by month, newest month first. A job sits in the
-month it was applied for, or the month it was recommended while still open.
+The Word file (daily/applied_for.docx) lists only applied jobs, by the AI or by Adam, grouped by month, newest first.
+Jobs the AI tried and could not finish stay in the JSON log and show a red X on the daily list (daily/latest.docx);
+logging one applied turns it into a green check. `add` and `render` rebuild latest.docx so the marks follow the log.
 """
 import argparse
 import csv
@@ -200,7 +201,7 @@ def add_entry(entries, *, url, status, day, by="AI", store=None, **fields):
         entry["date_attempted"] = entry.get("date_attempted") or day
         if fields.get("reason"):
             entry["reason"] = fields["reason"]
-        message = f"logged as AI tried to apply, could not finish ({month_label(month_key(entry['date_attempted']))})"
+        message = f"logged as not applied ({month_label(month_key(entry['date_attempted']))})"
     elif status == "unsent":
         if entry["status"] == "applied":
             return key, f"already applied on {entry['date_applied']} by {entry['applied_by']}; not moved back to unsent"
@@ -210,7 +211,7 @@ def add_entry(entries, *, url, status, day, by="AI", store=None, **fields):
         entry["date_unsent"] = entry.get("date_unsent") or day
         if fields.get("reason"):
             entry["reason"] = fields["reason"]
-        message = f"logged as AI could have applied, not sent ({month_label(month_key(entry['date_unsent']))})"
+        message = f"logged as not applied ({month_label(month_key(entry['date_unsent']))})"
     else:
         if entry["status"] == "applied":
             return key, f"already applied on {entry['date_applied']} by {entry['applied_by']}; not moved back to recommended"
@@ -221,7 +222,7 @@ def add_entry(entries, *, url, status, day, by="AI", store=None, **fields):
         entry["date_recommended"] = entry.get("date_recommended") or day
         if fields.get("reason"):
             entry["reason"] = fields["reason"]
-        message = f"logged as recommended, you apply ({month_label(month_key(entry['date_recommended']))})"
+        message = f"logged as not applied ({month_label(month_key(entry['date_recommended']))})"
     _merge_notes(entry, fields)
     if not is_new:
         message = "updated: " + message
@@ -549,7 +550,7 @@ def _entry_blocks(entry, number, rel_id):
         _p(f"{entry.get('company') or 'Company not listed'} | {entry.get('location') or 'Location not listed'}", space_after=40),
     ]
     if entry["status"] == "applied":
-        line = f"Applied by {entry['applied_by']} on {entry['date_applied']}"
+        line = f"✅ {entry['applied_by']} applied on {entry['date_applied']}" + (" (confirmed in Gmail)" if entry.get("email_confirmed") else "")
         if entry.get("method"):
             line += f" via {entry['method']}"
         blocks.append(_p(line + ".", space_after=40))
@@ -559,7 +560,7 @@ def _entry_blocks(entry, number, rel_id):
         if entry.get("date_recommended"):
             blocks.append(_p(f"Recommended on {entry['date_recommended']}.", space_after=40))
     elif entry["status"] == "attempted":
-        blocks.append(_p(f"AI tried to apply on {entry['date_attempted']} and could not finish. Nobody was asked; "
+        blocks.append(_p(f"Not applied: the AI tried on {entry['date_attempted']} and could not finish. Nobody was asked; "
                          "the cause is in the error log so it can be fixed.", space_after=40))
         blocks.append(_p(f"What stopped it: {entry.get('reason') or 'not recorded'}", space_after=40))
         blocks.append(_p("To finish: apply by hand or let the next fix retry it, then log it applied. "
@@ -583,58 +584,46 @@ def _entry_blocks(entry, number, rel_id):
 
 
 def write_doc(entries, path=None, today=None):
+    """daily/applied_for.docx: only jobs that were applied for, by the AI or by Adam. Jobs the AI could not finish stay in the
+    log (and show a red X on the daily list) until an application is confirmed; they are not listed here."""
     path = path or DOC_PATH
     today = today or date.today().isoformat()
-    grouped = months(entries)
-    applied_total = sum(len(b["applied"]) for b in grouped.values())
-    open_total = sum(len(b["recommended"]) for b in grouped.values())
-    unsent_total = sum(len(b["unsent"]) for b in grouped.values())
-    tried_total = sum(len(b["attempted"]) for b in grouped.values())
+    applied = {k: e for k, e in entries.items() if e.get("status") == "applied"}
+    grouped = months(applied)
+    by_ai_total = sum(1 for e in applied.values() if e.get("applied_by") == "AI")
     body = [
         _p("Applied for", bold=True, size=32, space_after=120),
-        _p(f"Updated {today}. {applied_total} applied, {open_total} for you to apply to by hand, "
-           f"{tried_total} the AI tried and could not finish, {unsent_total} the AI prepared but you did not send.", space_after=60),
-        _p("Applied: an application was submitted, and the line says who submitted it. "
-           "Recommended, you apply: a good fit the agent cannot submit (an account, login, CAPTCHA, assessment or an answer only you can give). "
-           "AI tried to apply, could not finish: the agent submitted the form and the site stopped it (a robot check, an email code, a form quirk); "
-           "no one was pulled in, the cause is logged to be fixed, and it moves to Applied once someone applies. "
-           "AI could have applied, not sent: the agent filled the form and asked on Telegram, but no Submit tap came; "
-           "send it from Telegram or have another AI apply, and it moves to Applied. Newest month first.", space_after=120),
+        _p(f"Updated {today}. {len(applied)} applied: {by_ai_total} AI applied, {len(applied) - by_ai_total} Adam applied.", space_after=60),
+        _p("Only jobs that were applied for are listed, and each line says who applied. Adam's own applications are found in his email "
+           "(a confirmation message) and added here. Newest month first.", space_after=120),
     ]
     rels = []
     link_n = 10
     if not grouped:
         body.append(_p("Nothing logged yet.", space_after=80))
     else:
-        rows = [[_p(text, bold=True, space_after=0) for text in ("Month", "Applied by AI", "Applied by you", "AI tried, not finished", "AI prepared, not sent", "You apply by hand")]]
+        rows = [[_p(text, bold=True, space_after=0) for text in ("Month", "AI applied", "Adam applied")]]
         for key, bucket in grouped.items():
             by_ai = sum(1 for e in bucket["applied"] if e["applied_by"] == "AI")
-            by_you = len(bucket["applied"]) - by_ai
             rows.append([
                 _anchor_p(_anchor(key), month_label(key)),
                 _p(str(by_ai), space_after=0),
-                _p(str(by_you), space_after=0),
-                _p(str(len(bucket["attempted"])), space_after=0),
-                _p(str(len(bucket["unsent"])), space_after=0),
-                _p(str(len(bucket["recommended"])), space_after=0),
+                _p(str(len(bucket["applied"]) - by_ai), space_after=0),
             ])
-        body.append(_table(rows, [2000, 1400, 1400, 1600, 1600, 1600]))
+        body.append(_table(rows, [3000, 2200, 2200]))
     for bookmark_id, (key, bucket) in enumerate(grouped.items(), 1):
         body.append(_section_heading(bookmark_id, _anchor(key), month_label(key)))
-        for slot, heading in (("applied", "Applied"), ("attempted", "AI tried to apply, could not finish"),
-                              ("unsent", "AI could have applied, not sent"),
-                              ("recommended", "Recommended, you apply by hand")):
-            body.append(_p(f"{heading} ({len(bucket[slot])})", bold=True, size=26, space_after=60))
-            if not bucket[slot]:
-                body.append(_p("None.", space_after=120))
-            for number, entry in enumerate(bucket[slot], 1):
-                rel_id = None
-                if entry.get("url"):
-                    rel_id = f"rId{link_n}"
-                    link_n += 1
-                    rels.append((rel_id, entry["url"]))
-                body.extend(_entry_blocks(entry, number, rel_id))
+        for number, entry in enumerate(bucket["applied"], 1):
+            rel_id = None
+            if entry.get("url"):
+                rel_id = f"rId{link_n}"
+                link_n += 1
+                rels.append((rel_id, entry["url"]))
+            body.extend(_entry_blocks(entry, number, rel_id))
     return write_docx_package(path, body, rels)
+
+
+NOT_APPLIED_LABEL = {"blocked": "AI blocked", "gap": "AI gap", "closed": "Not applied"}
 
 
 def _print_entries(entries, only_open=False):
@@ -644,8 +633,8 @@ def _print_entries(entries, only_open=False):
             if only_open and slot == "applied":
                 continue
             for e in bucket[slot]:
-                who = {"applied": f"by {e.get('applied_by')}", "unsent": "unsent", "attempted": "AI tried"}.get(slot, "you apply")
-                print(f"{key} {slot:<11} {who:<9} {e.get('fit') or '-':<6} {e.get('title')} | {e.get('company')} | {e.get('url')}")
+                label = ("Adam applied" if e.get("applied_by") == "Adam" else "AI applied") if slot == "applied" else NOT_APPLIED_LABEL[daily_digest.not_applied_kind(e.get("reason"))]
+                print(f"{key} {label:<13} {e.get('fit') or '-':<6} {e.get('title')} | {e.get('company')} | {e.get('url')}")
     if not grouped:
         print("nothing logged yet")
 
@@ -668,6 +657,7 @@ def main(argv=None):
     add.add_argument("--resume", help="applied only: path of the resume file that was submitted (goes in the tracker's cv_file)")
     add.add_argument("--cover-letter", dest="cover_letter", help="applied only: path of the cover letter that was submitted")
     add.add_argument("--note")
+    add.add_argument("--email", action="store_true", help="applied only: a confirmation email in Gmail proves it")
     add.add_argument("--no-tracker", action="store_true", help="do not add an applied job to job_search_tracker.csv")
     st = sub.add_parser("status", help="record where an applied job stands now (from an interview, assessment, offer or rejection email)")
     st.add_argument("--company")
@@ -693,6 +683,8 @@ def main(argv=None):
                 fit=args.fit, fit_score=args.score, method=args.method,
                 reason=args.reason, note=args.note, resume=args.resume, cover_letter=args.cover_letter,
             )
+            if args.email and entries[key].get("status") == "applied":
+                entries[key]["email_confirmed"] = True
             save_log(entries)
             e = entries[key]
             print(f"{e['title']} | {e['company']}: {message}")
@@ -720,6 +712,8 @@ def main(argv=None):
     written = write_doc(entries)
     if written:
         print(written)
+    if args.cmd in ("add", "render"):
+        daily_digest.refresh_latest()  # the daily list's green checks and red Xs follow the log
     return 0
 
 

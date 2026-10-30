@@ -117,3 +117,23 @@ def test_it_waits_for_the_email_to_arrive():
 def test_credentials_are_read_from_env_and_spaces_in_an_app_password_are_dropped():
     assert mail_codes.credentials({"GMAIL_IMAP_USER": "a@b.co", "GMAIL_IMAP_PASSWORD": "abcd efgh ijkl mnop"}) == ("a@b.co", "abcdefghijklmnop")
     assert mail_codes.credentials({"GMAIL_IMAP_USER": "a@b.co"}) is None
+
+
+def test_another_sites_code_is_taken_only_when_the_mail_names_the_company():
+    now = time.time()
+    raws = [
+        message("Acme Careers <no-reply@acme-hr.example>", "Your sign-in code", "Your code is 482913 for your Acme Robotics application.", now - 3),
+        message("Bank <alerts@bank.example>", "Your verification code", "Your verification code is 111222", now - 2),
+    ]
+    code, _ = mail_codes.fetch_code(now - 20, company="Acme Robotics Inc", creds=("a@b.co", "pw"), connect=lambda host: FakeBox(raws), timeout=0)
+    assert code == "482913"
+    code, note = mail_codes.fetch_code(now - 20, company="Globex", creds=("a@b.co", "pw"), connect=lambda host: FakeBox(raws), timeout=0)
+    assert code == "" and "no code" in note
+
+
+@pytest.mark.parametrize("subject,body,code", [
+    ("Sign in to Acme", "Your code is 654321", "654321"),
+    ("Login", "Your login code: Qw3rTy9Z", "Qw3rTy9Z"),
+])
+def test_more_code_phrasings(subject, body, code):
+    assert mail_codes.extract_code(subject, body) == code

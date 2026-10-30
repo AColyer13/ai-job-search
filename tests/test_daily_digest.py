@@ -1,4 +1,5 @@
 """Prune rules for daily/latest.txt. No network."""
+import pytest
 import sys
 from datetime import date
 from pathlib import Path
@@ -404,3 +405,33 @@ def test_publish_writes_only_the_two_word_files():
 
     assert "html_report" not in inspect.getsource(daily_digest)
     assert "dashboard" not in inspect.getsource(daily_digest._publish).lower()
+
+
+def test_the_daily_list_shows_a_green_check_or_a_red_x_from_the_applied_log():
+    job = {"title": "Solutions Engineer", "company": "Acme", "url": "https://jobs.acme.com/se-1", "fit": "high", "location": "Remote"}
+    other = {"title": "QA Engineer", "company": "Beta", "url": "https://jobs.beta.com/qa-2", "fit": "high", "location": "Remote"}
+    fresh = {"title": "Support", "company": "Gamma", "url": "https://jobs.gamma.com/s-3", "fit": "high", "location": "Remote"}
+    entries = {
+        daily_digest._key(job["url"]): {"status": "applied", "applied_by": "Adam", "date_applied": "2026-10-30", "url": job["url"]},
+        daily_digest._key(other["url"]): {"status": "attempted", "reason": "robot check on the form", "url": other["url"]},
+    }
+    assert daily_digest.result_mark(job, entries) == ("✅", "Adam applied on 2026-10-30")
+    mark, text = daily_digest.result_mark(other, entries)
+    assert mark == "❌" and text.startswith("AI didn't apply, blocked") and "robot check" in text
+    assert daily_digest.result_mark(fresh, entries) is None  # nobody has tried it yet
+    xml = "".join(daily_digest._job_blocks(other, None, 1, entries))
+    assert "❌" in xml and 'w:val="C00000"' in xml
+
+
+@pytest.mark.parametrize("reason,kind", [
+    ("too many unique questions (3): a; b; c", "blocked"),
+    ("a robot check (Cloudflare or similar) blocked the page; the agent does not get around robot checks", "blocked"),
+    ("no application form found on the page (account or login required)", "blocked"),
+    ("the project has no answer yet for: describe your account setup", "gap"),
+    ("no application form found on the page", "gap"),
+    ("I clicked Submit but never saw a confirmation page.", "gap"),
+    ("This posting is closed or gone", "closed"),
+    ("Adam: a required GPA means move on from the job", "closed"),
+])
+def test_not_applied_reasons_are_sorted_into_blocked_gap_or_closed(reason, kind):
+    assert daily_digest.not_applied_kind(reason) == kind

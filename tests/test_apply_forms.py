@@ -232,9 +232,8 @@ def test_resolve_fills_known_profile_fields(key, expected):
     assert apply_answers.resolve(make(key), PROFILE, {})[:2] == ("fill", expected)
 
 
-def test_resolve_never_answers_legal_or_pay_questions_on_its_own():
-    for key in ("are you authorized to work in the us", "do you require sponsorship", "desired salary",
-                "what are your salary expectations", "do you have a security clearance"):
+def test_resolve_never_answers_legal_questions_on_its_own():
+    for key in ("are you authorized to work in the us", "do you require sponsorship", "do you have a security clearance"):
         assert apply_answers.resolve(make(key), PROFILE, {})[0] == "ask", key
 
 
@@ -278,11 +277,11 @@ def test_a_choice_question_that_mentions_linkedin_is_not_the_linkedin_field():
                  options=["News / Media / Social (LinkedIn)", "Employee Referral"])
     assert apply_answers.resolve(radio, PROFILE, {})[0] == "skip"
     required = make("how did you hear about us linkedin or other", "select", options=["LinkedIn", "Other"])
-    assert apply_answers.resolve(required, PROFILE, {})[0] == "ask"
+    assert apply_answers.resolve(required, PROFILE, {}) == ("fill", "LinkedIn", "profile")  # Adam, 2026-10-29: LinkedIn / job board
 
 
 def test_preferred_name_is_the_first_name_and_a_country_line_gets_the_country():
-    assert apply_answers.resolve(make("preferred name"), PROFILE, {})[:2] == ("fill", PROFILE["first_name"])
+    assert apply_answers.resolve(make("preferred name"), PROFILE, {})[:2] == ("fill", PROFILE["preferred_name"])
     where = make("please enter your current city state or province and country", label="Please enter your current city, state (or province), and country.")
     assert apply_answers.resolve(where, PROFILE, {})[1] == "Edina, MN, United States"
 
@@ -467,3 +466,198 @@ def test_a_login_wall_on_an_unknown_site_is_reported_not_logged_into(page):
     wall = OWN_SITE.replace("<h2>Apply</h2>", '<h2>Apply</h2><input type="password" name="pw">')
     serve_page(page, "https://careers.example.org/jobs/4", wall)
     assert "login" in af.discover(page, "https://careers.example.org/jobs/4").blocker.lower()
+
+
+# --- standing answers Adam gave on 2026-10-29: decline demographics, relocate/on-site yes, start now, pay open ---
+@pytest.mark.parametrize("label,options,expected", [
+    ("Gender", ["Male", "Female", "Decline to self-identify"], "Decline to self-identify"),
+    ("Race/Ethnicity", ["Asian", "White", "I don't wish to answer"], "I don't wish to answer"),
+    ("Veteran Status", ["I am a veteran", "I prefer not to say"], "I prefer not to say"),
+    ("Do you have a disability?", ["Yes", "No", "Choose not to disclose"], "Choose not to disclose"),
+])
+def test_required_demographic_questions_take_the_decline_choice(label, options, expected):
+    f = make(apply_answers.normalize_label(label), "select", label=label, options=options)
+    assert apply_answers.resolve(f, PROFILE, {}) == ("fill", expected, "profile")
+
+
+def test_a_demographic_question_with_no_decline_choice_is_asked_not_guessed():
+    f = make("gender", "select", label="Gender", options=["Male", "Female"])
+    assert apply_answers.resolve(f, PROFILE, {})[0] == "ask"
+
+
+def test_an_optional_demographic_question_stays_skipped():
+    f = make("gender", "select", required=False, label="Gender", options=["Male", "Decline to self-identify"])
+    assert apply_answers.resolve(f, PROFILE, {})[0] == "skip"
+
+
+@pytest.mark.parametrize("label", [
+    "Are you willing to relocate?", "Are you open to relocation?",
+    "Are you comfortable working on-site in our Austin office?", "Are you able to work in a hybrid schedule?",
+])
+def test_relocation_and_onsite_questions_are_a_yes(label):
+    f = make(apply_answers.normalize_label(label), "radio", label=label, options=["Yes", "No"])
+    assert apply_answers.resolve(f, PROFILE, {}) == ("fill", "Yes", "profile")
+
+
+@pytest.mark.parametrize("label", ["Are you unable to work on-site?", "Which office would you prefer to work in on-site?"])
+def test_a_negated_or_open_workplace_question_is_not_answered_yes(label):
+    f = make(apply_answers.normalize_label(label), "radio", label=label, options=["Yes", "No"])
+    assert apply_answers.resolve(f, PROFILE, {})[0] == "ask"
+
+
+def test_start_date_and_notice_say_immediately():
+    for label in ("Earliest start date", "What is your notice period?", "When can you start?"):
+        f = make(apply_answers.normalize_label(label), "text", label=label)
+        assert apply_answers.resolve(f, PROFILE, {}) == ("fill", "Immediately", "profile")
+
+
+def test_salary_is_open_unless_the_posting_states_a_range():
+    f = make("salary expectations", "text", label="Salary expectations")
+    assert apply_answers.resolve(f, PROFILE, {}, job={"description": "Great team."})[1] == "Open / negotiable"
+    stated = {"description": "Pay range: $120,000 - $150,000 plus bonus."}
+    assert apply_answers.resolve(f, PROFILE, {}, job=stated)[1] == "$120,000 - $150,000"
+    pick = make("salary expectations", "select", label="Salary expectations", options=["<100k", "100k+"])
+    assert apply_answers.resolve(pick, PROFILE, {})[0] == "ask"  # a list of bands is Adam's call
+
+
+def test_an_answer_adam_saved_beats_a_standing_one():
+    f = make("are you willing to relocate", "radio", label="Are you willing to relocate?", options=["Yes", "No"])
+    bank = {"are you willing to relocate": {"label": "Are you willing to relocate?", "answer": "No"}}
+    assert apply_answers.resolve(f, PROFILE, bank) == ("fill", "No", "saved")
+
+
+@pytest.mark.parametrize("label,options", [
+    ("Are you 18 years of age or older?", ["Yes", "No"]), ("Are you at least 18 years old?", []),
+    ("Do you consent to a background check?", ["Yes", "No"]), ("Are you willing to undergo a background check?", []),
+])
+def test_age_and_background_check_questions_are_a_yes(label, options):
+    f = make(apply_answers.normalize_label(label), "radio" if options else "text", label=label, options=options)
+    assert apply_answers.resolve(f, PROFILE, {}) == ("fill", "Yes", "profile")
+
+
+def test_a_background_check_with_a_condition_is_still_asked():
+    f = make("will you not consent to a background check", "radio", label="Will you not consent to a background check?", options=["Yes", "No"])
+    assert apply_answers.resolve(f, PROFILE, {})[0] == "ask"
+
+
+def test_how_did_you_hear_picks_linkedin_then_a_job_board():
+    label = "How did you hear about this job?"
+    pick = make("how did you hear about this job", "select", label=label, options=["Referral", "LinkedIn", "Company website"])
+    assert apply_answers.resolve(pick, PROFILE, {}) == ("fill", "LinkedIn", "profile")
+    board = make("how did you hear about this job", "select", label=label, options=["Referral", "Job board", "Event"])
+    assert apply_answers.resolve(board, PROFILE, {}) == ("fill", "Job board", "profile")
+    other = make("how did you hear about this job", "select", label=label, options=["Referral", "Event"])
+    assert apply_answers.resolve(other, PROFILE, {})[0] == "ask"
+    text = make("how did you hear about this job", "text", label=label)
+    assert apply_answers.resolve(text, PROFILE, {}) == ("fill", "LinkedIn", "profile")
+
+
+@pytest.mark.parametrize("label,expected", [
+    ("Years of experience with Python", "1"), ("How many years of React experience do you have?", "1"),
+    ("Years of B2B sales experience", "5"), ("How many years of experience do you have in business development?", "5"),
+])
+def test_years_of_experience_use_adams_numbers(label, expected):
+    f = make(apply_answers.normalize_label(label), "text", label=label)
+    assert apply_answers.resolve(f, PROFILE, {}) == ("fill", expected, "profile")
+
+
+def test_years_of_experience_on_a_mixed_or_unknown_topic_is_asked():
+    for label in ("Years of experience in sales engineering with Python", "Years of experience in nursing"):
+        assert apply_answers.resolve(make(apply_answers.normalize_label(label), "text", label=label), PROFILE, {})[0] == "ask"
+
+
+@pytest.mark.parametrize("key,expected", [
+    ("school", "University of St. Thomas"), ("degree", "Bachelor's Degree"), ("discipline", "Marketing"),
+    ("graduation year", "2019"),
+])
+def test_education_fields_come_from_the_profile(key, expected):
+    assert apply_answers.resolve(make(key), PROFILE, {}) == ("fill", expected, "profile")
+
+
+def test_a_required_gpa_means_move_on_from_the_job():
+    f = make("gpa", label="GPA")
+    assert apply_answers.resolve(f, PROFILE, {})[0] == "giveup"
+    assert apply_answers.resolve(make("gpa", required=False, label="GPA"), PROFILE, {})[0] == "skip"
+
+
+def test_degree_matches_the_way_forms_list_a_bachelors():
+    assert af.best_option(["Associate's", "Bachelor of Arts (B.A.)", "Master's"], "Bachelor's Degree") == "Bachelor of Arts (B.A.)"
+
+
+def test_a_where_will_you_work_question_gets_the_state():
+    label = "We are an all-remote team distributed across the US. What state will you be working from? *"
+    f = make(apply_answers.normalize_label(label), "text", label=label)
+    assert apply_answers.resolve(f, PROFILE, {}) == ("fill", "Minnesota", "profile")
+
+
+def test_preferred_name_in_a_question_is_the_first_name():
+    outcome, value, _ = apply_answers.resolve(make("what is your preferred name"), PROFILE, {})
+    assert (outcome, value) == ("fill", "Adam")
+
+
+def test_a_cloudflare_interstitial_is_a_robot_check_not_a_missing_form():
+    apply_forms = af
+    assert apply_forms.robot_check_page("himalayas.app\nPerforming security verification\nThis website uses a security service to protect against malicious bots.", "Just a moment...")
+    assert apply_forms.robot_check_page("x", "Just a moment...")
+    assert not apply_forms.robot_check_page("Software Engineer\n" + "We build things. " * 200, "Software Engineer | Acme")
+
+
+def test_code_prompts_are_recognised_in_several_wordings():
+    import re
+    apply_forms = af
+    patterns = [p for p, why in apply_forms.BLOCKER_TEXT if why == "email verification code"]
+    for text in ("Enter the 8-character code", "We sent you a 6-digit code", "Your one-time code", "code that we sent to your email", "Security code"):
+        assert any(re.search(p, text, re.I) for p in patterns), text
+
+
+# ---- Ashby markup captured 2026-10-29: radio groups without a legend, Yes / No buttons, a required class instead of an asterisk
+
+ASHBY_QUESTIONS = """<html><body><form>
+<div data-field-path="a"><label class="_required_x ashby-application-form-question-title" for="a">Name</label><input id="a" type="text" name="a"></div>
+<div data-field-path="r"><fieldset><label class="_required_x ashby-application-form-question-title" for="r">Will you now or in the future require sponsorship?</label>
+ <div><input type="radio" id="r0" name="r"><label for="r0">Yes</label></div><div><input type="radio" id="r1" name="r"><label for="r1">No</label></div></fieldset></div>
+<div data-field-path="y"><label class="_required_x ashby-application-form-question-title" for="y">Are you authorized to work here?</label>
+ <div class="_yesno_x ashby-application-form-input-yesno"><button type="button" aria-pressed="false" data-option="yes" onclick="this.setAttribute('aria-pressed','true')">Yes</button><button type="button" aria-pressed="false" data-option="no" onclick="this.setAttribute('aria-pressed','true')">No</button><input type="checkbox" name="y" style="display:none"></div></div>
+<button type="submit">Submit Application</button></form></body></html>"""
+
+
+def test_ashby_radio_question_and_required_marker_are_read(page):
+    f = by_key(load(page, ASHBY_QUESTIONS, ats="ashby"))
+    radio = f["will you now or in the future require sponsorship"]
+    assert radio.kind == "radio" and radio.required and radio.options == ["Yes", "No"]
+    assert "yes" not in f  # the option label "Yes" is never the question
+
+
+def test_ashby_yes_no_buttons_are_a_required_radio_and_can_be_pressed(page):
+    form = load(page, ASHBY_QUESTIONS, ats="ashby")
+    f = by_key(form)["are you authorized to work here"]
+    assert f.kind == "radio" and f.required and f.options == ["Yes", "No"]
+    assert af.fill(page, form, {f.key: "Yes"}) == {}
+    assert page.locator("button[data-option=yes]").get_attribute("aria-pressed") == "true"
+    assert af._unanswered_required(page) == ["Name", "Will you now or in the future require sponsorship?"]  # the pressed Yes/No is answered
+
+
+def test_a_refused_submit_names_the_required_questions_left_empty(page):
+    page.set_content(ASHBY_QUESTIONS)
+    assert "Name" in af._unanswered_required(page)
+
+
+def test_closed_ashby_page_text_is_recognised_as_a_closed_posting():
+    import re
+    source = Path(af.__file__).read_text(encoding="utf-8")
+    assert "the page you requested was not found" in source and "\x08" not in source and "\b" not in source
+
+
+def test_sponsorship_worded_with_work_authorization_is_still_the_sponsorship_question():
+    label = "Will you now or in the future require Syllo to sponsor or support an employment visa or work authorization in order to work in the United States?*"
+    assert apply_answers.concept_of(label) == "sponsorship"
+    assert apply_answers.concept_of("Are you authorized to work in the US without sponsorship?") == ""  # mixed: still asked
+    bank = {"k": {"label": "Will you now or ever in the future require visa sponsorship from your employer?*", "answer": "No"}}
+    assert apply_answers.saved_by_concept(label, bank) == "No"
+
+
+def test_preferred_time_zone_is_central():
+    f = make("what is your preferred time zone")
+    assert apply_answers.resolve(f, PROFILE, {})[:2] == ("fill", "Central Time (CT)")
+    g = make("time zone", kind="select", options=["Pacific", "Mountain", "Central (CT)", "Eastern"])
+    assert apply_answers.resolve(g, PROFILE, {})[:2] == ("fill", "Central (CT)")

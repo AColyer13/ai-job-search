@@ -9,7 +9,8 @@ IMAP with a Gmail app password kept in .env:
 
 Limits, on purpose:
 - Read-only. The mailbox is opened read-only; nothing is sent, flagged, moved or deleted.
-- Only mail from the application systems (Greenhouse, Lever, Ashby) received after the Submit click is looked at.
+- Only mail received after the Submit click is looked at, and only if it is from an application system
+  (Greenhouse, Lever, Ashby) or names the company Adam is applying to (any other site mails its own code).
 - Only a code is taken out of a message. Nothing else in the mail is read as an instruction.
 - It looks in All Mail, Trash and Spam too, because a filter may have archived the message.
 """
@@ -26,7 +27,7 @@ import telegram_notify
 IMAP_HOST = "imap.gmail.com"
 SENDER_DOMAINS = ("greenhouse-mail.io", "greenhouse.io", "lever.co", "ashbyhq.com", "hire.lever.co")
 FOLDERS = ('"[Gmail]/All Mail"', "INBOX", '"[Gmail]/Spam"', '"[Gmail]/Trash"')
-CODE_LABEL = re.compile(r"(?:security|verification|confirmation|one[- ]time)\s+code", re.I)
+CODE_LABEL = re.compile(r"(?:security|verification|confirmation|one[- ]time|access|login|sign[- ]in|authentication)\s+code|\bpasscode\b|\byour code\b", re.I)
 TOKEN = re.compile(r"(?<![A-Za-z0-9])[A-Za-z0-9]{4,10}(?![A-Za-z0-9])")
 CODE_ALONE = re.compile(r"^\s*([A-Za-z0-9]{6,10})\s*$")
 LOOK_AHEAD = 160  # characters after the words "security code" in which the code itself is expected
@@ -77,12 +78,18 @@ def _looks_like_code(token):
     return bool(re.search(r"\d", token) or (re.search(r"[a-z]", token) and re.search(r"[A-Z]", token[1:])))
 
 
+def _names_company(company, *texts):
+    """True when the mail names the company (its first word is enough: 'Virtru' for 'Virtru Corporation')."""
+    words = [w for w in re.findall(r"[A-Za-z0-9]+", company or "") if len(w) > 2 and w.lower() not in ("the", "inc", "llc", "ltd", "corp", "corporation", "company", "group", "holdings")]
+    return bool(words) and words[0].lower() in " ".join(texts).lower()
+
+
 def _sender_ok(sender):
     domain = sender.rsplit("@", 1)[-1].strip(" >").lower()
     return any(domain == d or domain.endswith("." + d) for d in SENDER_DOMAINS)
 
 
-def fetch_code(since, company="", creds=None, timeout=75, poll=5, connect=imaplib.IMAP4_SSL, sleep=time.sleep):
+def fetch_code(since, company="", creds=None, timeout=120, poll=5, connect=imaplib.IMAP4_SSL, sleep=time.sleep):
     """Wait up to `timeout` seconds for a code mailed after `since` (epoch seconds). Returns (code, note).
 
     code is '' when none arrived or mail could not be read; note says why, for the errors log.
@@ -124,8 +131,7 @@ def _look(connect, creds, since, company):
                 if status != "OK" or not raw or not isinstance(raw[0], tuple):
                     continue
                 message = email.message_from_bytes(raw[0][1])
-                if not _sender_ok(str(make_header(decode_header(message.get("From", ""))))):
-                    continue
+                sender = str(make_header(decode_header(message.get("From", ""))))
                 try:
                     sent = parsedate_to_datetime(message.get("Date")).timestamp()
                 except (TypeError, ValueError):
@@ -134,8 +140,8 @@ def _look(connect, creds, since, company):
                     continue
                 subject = str(make_header(decode_header(message.get("Subject", ""))))
                 body = _text_of(message)
-                if company and company.lower() not in (subject + " " + body).lower():
-                    continue
+                if not _sender_ok(sender) and not _names_company(company, sender, subject, body):
+                    continue  # another site's mail: only when it says which company it is for
                 code = extract_code(subject, body)
                 if code and sent > best[1]:
                     best = (code, sent)

@@ -823,12 +823,13 @@ def left_out_count(jobs):
     return len(listable(jobs)) - len(fit_jobs(jobs))
 
 
-def _p(text, bold=False, size=22, space_after=80):
+def _p(text, bold=False, size=22, space_after=80, color=None):
     """One Word paragraph. size is half-points (22 = 11pt)."""
     run = (
         f'<w:r><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/>'
         f'<w:sz w:val="{size}"/><w:szCs w:val="{size}"/>'
         + ("<w:b/>" if bold else "")
+        + (f'<w:color w:val="{color}"/>' if color else "")
         + f"</w:rPr><w:t xml:space=\"preserve\">{xml_escape(text)}</w:t></w:r>"
     )
     return (
@@ -877,7 +878,67 @@ def _section_heading(bookmark_id, anchor, text):
     )
 
 
-def _job_blocks(job, rel_id, number):
+APPLIED_LOG_PATH = DAILY / "applied_for.json"
+GREEN, RED = "00A050", "C00000"
+
+
+def result_entries():
+    """The applied log's entries (daily/applied_for.json), or {} when there is none or it cannot be read."""
+    try:
+        return json.loads(APPLIED_LOG_PATH.read_text(encoding="utf-8")).get("entries") or {}
+    except (OSError, ValueError):
+        return {}
+
+
+def result_mark(job, entries):
+    """(mark, text) for a job the applied log knows: a green check when it was applied for, a red X when the AI could not.
+    None for a job nobody has tried yet."""
+    entry = entries.get(_key(apply_link(job))) or entries.get(_key(job.get("url")))
+    if entry is None:
+        want = pipeline_dedupe_key(job)
+        if want is not None:
+            for other in entries.values():
+                probe = {k: other.get(k) for k in ("title", "company", "location", "work_mode")}
+                if pipeline_dedupe_key(probe) == want:
+                    entry = other
+                    break
+    if entry is None:
+        return None
+    if entry.get("status") == "applied":
+        who = entry.get("applied_by") or "AI"
+        return "✅", f"{who} applied" + (f" on {entry['date_applied']}" if entry.get("date_applied") else "")
+    why = (entry.get("reason") or "").strip()
+    kind = not_applied_kind(why)
+    head = {"blocked": "AI didn't apply, blocked", "gap": "AI didn't apply, not built yet", "closed": "Not applied"}[kind]
+    return "❌", head + (f": {_clip(why, 140)}" if why else "")
+
+
+BLOCK_MARKER = re.compile(r"too many unique questions", re.I)
+GAP_MARKER = re.compile(r"no answer yet for", re.I)
+CLOSED_WORDS = re.compile(r"closed|no longer|closed or gone|not found|404|expired|position (has been )?filled|gpa|move on|skipped|i'll do it|apply by hand", re.I)
+BLOCKED_WORDS = re.compile(r"robot|captcha|cloudflare|\bbot\b|log ?in|sign[- ]in|account|verification code|email code|security code|assessment|video|"
+                           r"human step|refused the click|blocked|too many", re.I)
+
+
+def not_applied_kind(reason):
+    """Why a job was not applied for: 'blocked' (bot check, login, too many unique questions), 'gap' (the project does not
+    handle something a form asked or did yet) or 'closed' (nothing to fix: the posting is gone, a rule says move on)."""
+    text = reason or ""
+    if GAP_MARKER.search(text):
+        return "gap"
+    if BLOCK_MARKER.search(text):
+        return "blocked"
+    if CLOSED_WORDS.search(text):
+        return "closed"
+    return "blocked" if BLOCKED_WORDS.search(text) else "gap"
+
+
+def _clip(text, n):
+    text = " ".join(str(text).split())
+    return text if len(text) <= n else text[: n - 1].rstrip() + "…"
+
+
+def _job_blocks(job, rel_id, number, entries=None):
     """Paragraphs for one posting. rel_id is None when the card has no URL."""
     fit = (job.get("fit") or "low").upper()
     hits = job.get("star_notes") or resume_hits(job.get("description") or "")
@@ -887,6 +948,9 @@ def _job_blocks(job, rel_id, number):
         _p(heading, bold=True, size=24, space_after=40),
         _p(f"{job.get('company') or 'Company not listed'} | {_where(job)}", size=22, space_after=40),
     ]
+    mark = result_mark(job, entries) if entries else None
+    if mark:
+        blocks.append(_p(f"{mark[0]} {mark[1]}", bold=True, size=22, space_after=40, color=GREEN if mark[0] == "✅" else RED))
     if hits:
         labels = ", ".join(hit["label"] for hit in hits)
         blocks.append(_p(f"★ Posting lists: {labels}", size=22, space_after=40))
@@ -923,6 +987,7 @@ def write_docx(path, title, intro, jobs):
     for line in intro:
         body.append(_p(line, size=22, space_after=60))
     upper = type_sections(fit_jobs(jobs))
+    entries = result_entries()
     link_n = 10
     bookmark_id = 1
 
@@ -937,7 +1002,7 @@ def write_docx(path, title, intro, jobs):
                 rel_id = f"rId{link_n}"
                 link_n += 1
                 rels.append((rel_id, url))
-            body.extend(_job_blocks(job, rel_id, number))
+            body.extend(_job_blocks(job, rel_id, number, entries))
 
     if not upper:
         body.append(_p("No high or medium jobs in this file.", size=22))
@@ -1164,6 +1229,14 @@ def _publish(day, store, log_text):
     for line in (log_text or "").splitlines():
         if line.startswith("The scrape") or line.startswith("No candidates"):
             day_intro.append(line.strip())
+    dated = write_docx(DAILY / f"{day}.docx", "Adam Colyer job search", day_intro, day_jobs)
+    latest = write_latest(day, store, sources)
+    return dated, latest
+
+
+def write_latest(day, store, sources=None):
+    """Write latest.docx from the store. Also called when the applied log changes, so the marks stay current."""
+    sources = sources if sources is not None else load_sources()
     latest_all = list(store.values())
     latest_jobs = fit_jobs(latest_all)
     latest_intro = [
@@ -1172,11 +1245,24 @@ def _publish(day, store, log_text):
         f"A job stays in this file for {WINDOW_DAYS} days from the day it was found, then it is removed.",
         "The first days after a posting goes up are when applications get read. A week is still worth acting on. At 14 days the listing is past the usual first review, and that is also as far back as the scraper looks.",
     ]
+    latest_intro.append("Result: a green check means the job was applied for (by the AI, or by Adam, found in his email). "
+                        "A red X means not applied: \"AI didn't apply, blocked\" (bot check, login or too many unique questions), \"AI didn't apply, not built yet\" (the project does not handle something the form asked) or \"Not applied\" (closed or skipped). Adam applies to those himself; the X turns into a green check, \"Adam applied\", once his email shows he did. "
+                        "No mark means nobody has tried it yet.")
     latest_intro.extend(_rule_lines())
     latest_intro.extend(_source_lines(sources))
-    dated = write_docx(DAILY / f"{day}.docx", "Adam Colyer job search", day_intro, day_jobs)
-    latest = write_docx(DAILY / "latest.docx", "Adam Colyer job search", latest_intro, latest_jobs)
-    return dated, latest
+    return write_docx(DAILY / "latest.docx", "Adam Colyer job search", latest_intro, latest_jobs)
+
+
+def refresh_latest(day=None):
+    """Rebuild latest.docx so its marks match the applied log. False when Word has the file open or there is no store."""
+    store = load_store()
+    if not store:
+        return False
+    try:
+        write_latest(day or datetime.now().strftime("%Y-%m-%d"), store)
+        return True
+    except OSError:
+        return False
 
 
 def write_backfill_files(store):

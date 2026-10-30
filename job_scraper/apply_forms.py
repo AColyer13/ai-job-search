@@ -24,7 +24,8 @@ SUBMIT_WAIT_MS = 25000
 # Phrases on the page that mean a person has to do this one.
 BLOCKER_TEXT = (
     (r"verify (that )?you('| a)re (a )?human|are you a robot|complete the captcha|solve the captcha", "CAPTCHA"),
-    (r"security code|verification code|enter the code (we|that we) sent", "email verification code"),
+    (r"(security|verification|confirmation|one[- ]time|access|login|sign[- ]in) code|passcode|enter the (\d+[- ](digit|character) )?code|"
+     r"code (we|that we|was|has been) (sent|emailed)|we (sent|emailed) (you )?a (\d+[- ](digit|character) )?code", "email verification code"),
     (r"sign in to (apply|continue)|log ?in to (apply|continue)|create an account to apply", "account or login required"),
 )
 BLOCKER_SELECTORS = (
@@ -69,6 +70,8 @@ DISCOVER_JS = r"""
       const cands = box.querySelectorAll('legend, label, [class*="label"], [class*="Label"], [class*="title"], [class*="Title"]');
       for (const l of cands) {
         const holdsInput = l.querySelector('input[type=radio], input[type=checkbox]');
+        const target = l.htmlFor && document.getElementById(l.htmlFor);
+        if (skipOptionLabels && target && ['radio', 'checkbox'].includes(target.type)) continue;  // the label of one option, not the question
         if (skipOptionLabels && (holdsInput || l.contains(el))) continue;
         const t = l.contains(el) ? ownText(l) : clean(l.innerText);
         if (t) return t;
@@ -103,8 +106,12 @@ DISCOVER_JS = r"""
     if (lg && clean(lg.innerText)) return clean(lg.innerText);
     return questionText(el, true) || labelOf(el);
   };
+  const markedRequired = (el) => {
+    const box = el.closest('fieldset, [data-field-path], [class*="fieldEntry"]');
+    return !!(box && box.querySelector('label[class*="required" i], legend[class*="required" i]'));
+  };
   const requiredOf = (el, label) =>
-    el.required || el.getAttribute('aria-required') === 'true' || /\*\s*$/.test(label) || /\brequired\b/i.test(label);
+    el.required || el.getAttribute('aria-required') === 'true' || /\*\s*$/.test(label) || /\brequired\b/i.test(label) || markedRequired(el);
 
   const out = [];
   const seenGroups = new Map();
@@ -114,7 +121,8 @@ DISCOVER_JS = r"""
     const type = (el.getAttribute('type') || el.tagName).toLowerCase();
     if (['hidden', 'submit', 'button', 'image', 'reset'].includes(type)) return;
     if (el.tagName === 'INPUT' && el.getAttribute('role') === 'combobox' && el.closest('[role=combobox]') && el.closest('[role=combobox]') !== el) return;
-    if (type !== 'file' && !visible(el)) return;
+    const styled = (type === 'radio' || type === 'checkbox') && ((el.labels && Array.from(el.labels).some(visible)) || (el.closest('label') && visible(el.closest('label'))));  // a custom-drawn radio hides the real input behind its label
+    if (type !== 'file' && !visible(el) && !styled) return;
     if (el.closest('[aria-hidden=true]') && type !== 'file') return;
     el.setAttribute('data-apply-idx', String(i));
     const sel = '[data-apply-idx="' + i + '"]';
@@ -142,6 +150,16 @@ DISCOVER_JS = r"""
     else if (['email', 'tel', 'url', 'number', 'date'].includes(type)) kind = type;
     out.push({ kind, label, name: el.name || '', dom_id: el.id || '', required: requiredOf(el, label), options, selectors: [sel], multi: false,
                accept: el.getAttribute('accept') || '' });
+  });
+  scope.querySelectorAll('[class*="yesno" i]').forEach((box) => {
+    const btns = Array.from(box.querySelectorAll('button')).filter(visible);
+    if (btns.length < 2) return;
+    const entry = box.closest('[data-field-path], fieldset') || box.parentElement;
+    const lab = entry && entry.querySelector('label, legend');
+    const q = lab ? clean(lab.innerText) : '';
+    const sels = btns.map((b, k) => { const id = 'yn' + out.length + '_' + k; b.setAttribute('data-apply-idx', id); return '[data-apply-idx="' + id + '"]'; });
+    out.push({ kind: 'radio', label: q, name: '', dom_id: '', required: markedRequired(box) || /\*\s*$/.test(q),
+               options: btns.map((b) => clean(b.innerText)), selectors: sels, multi: false, accept: '' });
   });
   const title = clean((document.querySelector('h1') || {}).innerText);
   return { title, fields: out };
@@ -255,19 +273,63 @@ def discover(page, url):
         page_text = page.inner_text("body", timeout=5000)
     except Exception:  # noqa: BLE001
         pass
+    if robot_check_page(page_text, _title_of(page)):
+        raise FormError("a robot check (Cloudflare or similar) blocked the page; the agent does not get around robot checks")
     if re.search(r"no longer (open|available|accepting)|job (is )?not found|this (job|position) (has been|is) (closed|filled)|"
-                 r"page (you are looking for )?(does not|doesn't) exist|^\s*404|404\s*(error|not found|page)|error\s*404",
+                 r"page (you are looking for )?(does not|doesn't) exist|^\s*404|404\s*(error|not found|page)|error\s*404|"
+                 r"^\s*page not found|the page you requested was not found|job (posting )?(is )?no longer exists",
                  page_text[:1500], re.I | re.M):
         raise FormError("the posting is closed or gone")
     try:
         return read_form(page, ats, target)
-    except FormError as e:
-        if ats or "no application form" not in str(e) or not _open_apply_link(page):
+    except FormError as first:
+        if "no application form" not in str(first):
             raise
-        return read_form(page, ats, page.url)  # the posting page had an Apply link; the form is one click further
+        page.wait_for_timeout(3000)  # a single-page app may draw the form late
+        try:
+            return read_form(page, ats, target)
+        except FormError as e:
+            if ats or not (_open_embedded_form(page) or _open_apply_link(page)):
+                raise
+        return read_form(page, detect_ats(page.url), page.url)  # the Apply link led on to the form, perhaps on an ATS we know
 
 
-APPLY_LINK = re.compile(r"^\s*(apply( now| here| for this (job|position|role))?|apply to this (job|position|role)|start (your )?application)\s*$", re.I)
+ROBOT_PAGE = re.compile(r"performing security verification|verifying you are human|verify you are human|checking if the site connection is secure|"
+                        r"checking your browser|enable javascript and cookies to continue|protect against malicious bots", re.I)
+
+
+def robot_check_page(text, title=""):
+    """True when the whole page is a bot-check interstitial (Cloudflare's 'Just a moment...') and not the posting."""
+    return bool(re.match(r"\s*just a moment", title or "", re.I) or (len(text or "") < 1200 and ROBOT_PAGE.search(text or "")))
+
+
+def _title_of(page):
+    try:
+        return page.title()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+APPLY_LINK = re.compile(r"^\s*(apply( now| here| today| online| to position| for (this )?(job|position|role))?|apply to (this )?(job|position|role)|start (your )?application|i'?m interested)\s*$", re.I)
+
+
+def _open_embedded_form(page):
+    """A posting that shows the application in an iframe (Comeet, an embedded Greenhouse): open the frame's own page. True when it did."""
+    here = urllib.parse.urlparse(page.url).netloc
+    for frame in page.frames[1:]:
+        url = frame.url
+        if url.startswith("http") and urllib.parse.urlparse(url).netloc != here and re.search(r"apply|application", url, re.I):
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
+            except Exception:  # noqa: BLE001 - a frame that will not open leaves the page as it was
+                return False
+            try:
+                page.wait_for_load_state("networkidle", timeout=15000)
+            except Exception:  # noqa: BLE001 - a page that never goes quiet is still read
+                pass
+            page.wait_for_timeout(3000)  # the frame's form is drawn by script
+            return True
+    return False
 
 
 def _open_apply_link(page):
@@ -288,7 +350,8 @@ def _open_apply_link(page):
                 page.wait_for_load_state("networkidle", timeout=15000)
             except Exception:  # noqa: BLE001
                 pass
-            return page.url != before or bool(page.locator("form input:visible").count())
+            page.wait_for_timeout(2000)  # the form may open on the same address (Rippling), so a changed page is not the test
+            return True
     except Exception:  # noqa: BLE001 - no usable Apply link means no form was found, which is reported
         return False
     return False
@@ -308,7 +371,8 @@ def read_form(page, ats, target):
         if f.kind == "combobox" and not f.options:
             f.options = _combobox_options(page, f)
     if not [f for f in form.fields if f.kind != "file" or f.required]:
-        raise FormError("no application form found on the page")
+        walled = blocker_on_page(page)
+        raise FormError("no application form found on the page" + (f" ({walled})" if walled else ""))
     form.blocker = blocker_on_page(page)
     if not ats and not form.blocker and not any(f.kind == "file" for f in form.fields):
         # an unknown site: without a resume upload this is a search box or a newsletter sign-up, never an application
@@ -319,6 +383,7 @@ def read_form(page, ats, target):
 OPTION_ALIASES = {
     "united states": ("united states of america", "usa", "us", "u s"),
     "minnesota": ("mn",),
+    "bachelor s degree": ("bachelor s", "bachelors", "bachelor of arts", "bachelor of arts b a", "ba", "b a"),
 }
 
 
@@ -378,7 +443,12 @@ def _fill_one(page, f, value):
         pick = best_option(f.options, value)
         if pick is None:
             raise FormError(f"no option matches {value!r} (choices: {f.options[:6]})")
-        page.locator(f.selectors[f.options.index(pick)]).first.check(force=True, timeout=5000)
+        choice = page.locator(f.selectors[f.options.index(pick)]).first
+        if choice.evaluate("e => e.tagName") == "BUTTON":  # Ashby's Yes / No buttons
+            choice.scroll_into_view_if_needed(timeout=5000)
+            choice.evaluate("e => e.click()")  # a sticky logo can sit over the button and swallow a real click
+        else:
+            choice.check(force=True, timeout=5000)
     elif f.kind == "checkbox":
         wanted = value if isinstance(value, list) else [value]
         if wanted == [True]:
@@ -434,7 +504,8 @@ def confirmed(page, before_url=""):
 
 CODE_BOXES = (
     "input[autocomplete='one-time-code']:visible, input[id*='security' i]:visible, input[name*='security' i]:visible, "
-    "input[aria-label*='security' i]:visible, input[aria-label*='verification' i]:visible"
+    "input[aria-label*='security' i]:visible, input[aria-label*='verification' i]:visible, input[aria-label*='code' i]:visible, "
+    "input[name*='code' i]:visible, input[id*='code' i]:visible, input[placeholder*='code' i]:visible"
 )
 SINGLE_CHARACTER_BOXES = "input[maxlength='1']:visible"
 
@@ -487,6 +558,33 @@ def submit(page, code_getter=None):
     return status, detail
 
 
+UNANSWERED_JS = r"""
+() => {
+  const out = [];
+  document.querySelectorAll('[data-field-path], fieldset').forEach((e) => {
+    const lab = e.querySelector('label[class*="required" i], legend[class*="required" i]');
+    if (!lab || e.querySelector('input[type=file]')) return;
+    let filled = !!e.querySelector('[aria-pressed=true]');
+    e.querySelectorAll('input, textarea, select').forEach((i) => {
+      if (i.type === 'radio' || i.type === 'checkbox') { if (i.checked) filled = true; }
+      else if ((i.value || '').trim()) filled = true;
+    });
+    const text = (lab.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+    if (!filled && text && !out.includes(text)) out.push(text);
+  });
+  return out;
+}
+"""
+
+
+def _unanswered_required(page):
+    """The required questions on the page that have no answer, so a refusal says why."""
+    try:
+        return list(page.evaluate(UNANSWERED_JS))
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def _press_submit(page):
     button = _find_submit(page)
     if not button.count():
@@ -515,6 +613,9 @@ def _press_submit(page):
             messages = _validation_messages(page)
             if messages:
                 return "invalid", "; ".join(messages)
+    empty = _unanswered_required(page)
+    if empty:
+        return "invalid", "the site did not take it; required questions still empty: " + "; ".join(empty[:5])
     return "unknown", "no confirmation page appeared within %d seconds" % (SUBMIT_WAIT_MS // 1000)
 
 
