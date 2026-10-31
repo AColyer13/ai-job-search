@@ -3,16 +3,16 @@
     python job_scraper/agent_runner.py "Reply with exactly: OK"
     python job_scraper/agent_runner.py --providers grok "Reply with exactly: OK"
 
-Providers (AGENT_PROVIDERS in .env, default "grok,claude,antigravity"):
+Providers (AGENT_PROVIDERS in .env, default "grok,antigravity"):
 
     grok     Grok Build CLI (`grok -p -m GROK_MODEL`), signed in with grok.com. GROK_MODEL in .env,
              default grok-4.7. It has to be a cloud Grok model: the CLI's own default is a local Ollama
              model, which is the "local" tier below. Tried first unless AGENT_PROVIDERS says otherwise.
-    claude   Claude Code headless (`claude -p`), signed in on Adam's subscription. ANTHROPIC_API_KEY is
-             removed from the child's environment so a stray key can never switch it to paid API billing.
     antigravity  Google's Antigravity CLI (`agy -p ... --mode plan`), the replacement for the Gemini CLI, which
              Google no longer lets sign in. Installed at %LOCALAPPDATA%\agy\bin\agy.exe. Optional AGY_MODEL in
              .env; unset uses the CLI's default. "agy" and "gemini" in AGENT_PROVIDERS mean this provider.
+    claude   Claude Code headless (`claude -p`). Off unless named in AGENT_PROVIDERS. ANTHROPIC_API_KEY is
+             removed from the child's environment so a stray key can never switch it to paid API billing.
     local    The Grok CLI's local default model (Ollama). Off unless named in AGENT_PROVIDERS, because a
              20B model is not reliable at driving a browser form.
 
@@ -36,7 +36,7 @@ CLAUDE = Path.home() / ".local" / "bin" / "claude.exe"
 GROK = Path.home() / ".grok" / "bin" / "grok.exe"
 AGY = Path.home() / "AppData" / "Local" / "agy" / "bin" / "agy.exe"
 MAX_ARG_CHARS = 28000  # Windows allows about 32,000 characters on a command line
-DEFAULT_PROVIDERS = ("grok", "claude", "antigravity")
+DEFAULT_PROVIDERS = ("grok", "antigravity")
 DEFAULT_TIMEOUT = 600
 
 
@@ -117,16 +117,19 @@ def run_grok(prompt, cwd, timeout, max_turns, model=None, **_):
     return str(data.get("text") or "")
 
 
-def run_antigravity(prompt, cwd, timeout, max_turns, model=None, **_):
+def run_antigravity(prompt, cwd, timeout, max_turns, model=None, mode="plan", **_):
     """Google's Antigravity CLI (`agy`, which replaced the Gemini CLI), headless.
 
     `agy` ignores a prompt on stdin (it tries to run a command to read it), so the prompt is a command-line
     argument, which Windows caps near 32,000 characters. Plan mode is read-only and headless mode cannot approve
-    a tool, so a write or shell command is refused; --dangerously-skip-permissions is never used.
+    a tool, so a write or shell command is refused. `auto` is for a job that has to run commands, such as the
+    Gmail-sync fallback. --dangerously-skip-permissions is never used.
     """
     if len(prompt) > MAX_ARG_CHARS:
         raise ProviderFailed(f"prompt is {len(prompt)} characters, too long for the command line")
-    cmd = [_exe(AGY, "agy"), "-p", prompt, "--output-format", "json", "--mode", "plan"]
+    if mode not in ("plan", "auto", "accept-edits"):
+        raise ProviderFailed(f"unknown mode {mode}")
+    cmd = [_exe(AGY, "agy"), "-p", prompt, "--output-format", "json", "--mode", mode]
     if model:
         cmd += ["--model", model]
     proc = _run(cmd, cwd, os.environ.copy(), timeout)

@@ -85,6 +85,21 @@ def test_mail_from_other_senders_is_never_read_for_a_code():
     assert code == "" and "no code" in note
 
 
+def test_a_confirmation_mail_that_names_the_company_counts_and_nothing_else_does():
+    now = time.time()
+    yes = message("Ashby <no-reply@ashbyhq.com>", "Thank you for applying", "We received your application to True Talent Solutions.", now - 5)
+    other = message("Ashby <no-reply@ashbyhq.com>", "Thank you for applying", "We received your application to Inworld.", now - 5)
+    old = message("Ashby <no-reply@ashbyhq.com>", "Thank you for applying", "We received your application to True Talent.", now - 900)
+    assert mail_codes.find_confirmation(now - 60, "True Talent Solutions Partners", creds=("a@b.co", "pw"), connect=lambda host: FakeBox([yes])) is True
+    assert mail_codes.find_confirmation(now - 60, "True Talent Solutions Partners", creds=("a@b.co", "pw"), connect=lambda host: FakeBox([other])) is False
+    assert mail_codes.find_confirmation(now - 60, "True Talent Solutions Partners", creds=("a@b.co", "pw"), connect=lambda host: FakeBox([old])) is False
+
+
+def test_confirmation_lookup_says_nothing_when_mail_cannot_be_read(monkeypatch):
+    monkeypatch.setattr(mail_codes, "credentials", lambda env=None: None)
+    assert mail_codes.find_confirmation(time.time(), "Acme") is None
+
+
 def test_a_missing_login_says_so_instead_of_guessing(monkeypatch):
     monkeypatch.setattr(mail_codes, "credentials", lambda env=None: None)
     code, note = mail_codes.fetch_code(time.time(), timeout=0)

@@ -359,12 +359,27 @@ def test_dry_run_fills_but_never_submits_or_logs(env):
 @pytest.mark.parametrize("result,status", [(("unknown", "no confirmation"), "handed_off"),
                                            (("invalid", "Email is required"), "handed_off"),
                                            (("blocked", "email verification code"), "handed_off")])
-def test_unconfirmed_submit_is_never_logged_as_applied(env, result, status):
+def test_unconfirmed_submit_is_never_logged_as_applied(env, monkeypatch, result, status):
+    monkeypatch.setattr(apply_agent.mail_codes, "find_confirmation", lambda *a, **k: False)
     agent, tg, forms, job = make_agent(env, BASIC, submit_result=result)
     agent.advance()
     tg.tap("Submit")
     agent.handle(tg.poll()[0])
-    assert job["status"] == status and [s for s, _ in env.logged] == ["attempted"]
+    if result[0] == "unknown":
+        assert job["status"] == "handed_off"
+        assert env.logged[0][0] == "recommended"
+        assert "never received an email" in job["reason"] and "Adam needs to apply" in job["reason"]
+    else:
+        assert job["status"] == status and [s for s, _ in env.logged] == ["attempted"]
+
+
+def test_a_confirmation_email_logs_the_job_applied_when_the_page_stays_quiet(env, monkeypatch):
+    monkeypatch.setattr(apply_agent.mail_codes, "find_confirmation", lambda *a, **k: True)
+    agent, tg, forms, job = make_agent(env, BASIC, submit_result=("unknown", "no confirmation"))
+    agent.advance()
+    tg.tap("Submit")
+    agent.handle(tg.poll()[0])
+    assert job["status"] == "applied" and env.logged[0][0] == "applied"
 
 
 def test_skip_and_there_is_no_i_will_do_it_button(env):
@@ -440,14 +455,17 @@ def test_queue_tries_every_fit_job_whatever_the_link_and_skips_known_and_applied
     assert agent.queue(cands, limit=5, fits=("high",)) == []
 
 
-def test_lock_blocks_a_second_agent_until_stale(tmp_path):
+def test_lock_blocks_a_second_agent_even_when_heartbeat_is_stale(tmp_path):
     lock = tmp_path / "x.lock"
     assert apply_agent.acquire_lock(lock) is True
     assert apply_agent.acquire_lock(lock) is False
     import os
     old = lock.stat().st_mtime - 3600
     os.utime(lock, (old, old))
+    assert apply_agent.acquire_lock(lock) is False
+    apply_agent.release_lock(lock)
     assert apply_agent.acquire_lock(lock) is True
+    apply_agent.release_lock(lock)
 
 
 def test_listener_lock_is_marked_and_a_search_sees_it(tmp_path, monkeypatch):
@@ -457,14 +475,15 @@ def test_listener_lock_is_marked_and_a_search_sees_it(tmp_path, monkeypatch):
     assert daily_digest._listener_running() is False
     assert apply_agent.acquire_lock(lock) is True  # an ordinary run is not a listener
     assert daily_digest._listener_running() is False
-    lock.unlink()
+    apply_agent.release_lock(lock)
     assert apply_agent.acquire_lock(lock, listener=True) is True
     assert lock.read_text().startswith("listen ")
     assert daily_digest._listener_running() is True
     import os
-    old = lock.stat().st_mtime - 7200  # a listener that stopped touching its lock is not running
+    old = lock.stat().st_mtime - 7200  # a long browser call must not make a live listener disappear
     os.utime(lock, (old, old))
-    assert daily_digest._listener_running() is False
+    assert daily_digest._listener_running() is True
+    apply_agent.release_lock(lock)
 
 
 def test_search_leaves_a_request_for_a_running_listener(tmp_path, monkeypatch):
@@ -475,7 +494,8 @@ def test_search_leaves_a_request_for_a_running_listener(tmp_path, monkeypatch):
     monkeypatch.setattr(telegram_notify, "read_env", lambda: {"TELEGRAM_BOT_TOKEN": "t", "TELEGRAM_CHAT_ID": "1"})
     started = []
     monkeypatch.setattr(daily_digest.subprocess, "run", lambda *a, **k: started.append(a))
-    (tmp_path / "apply_agent.lock").write_text("listen 123")
+    import os
+    (tmp_path / "apply_agent.lock").write_text(f"listen {os.getpid()}")
     daily_digest._start_apply_agent()
     assert not started  # it did not start a second agent
     assert json.loads((tmp_path / "apply_queue_request.json").read_text())["day"] == date.today().isoformat()

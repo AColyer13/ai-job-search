@@ -23,7 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import claim_linter  # noqa: E402
 import daily_digest  # noqa: E402
-from apply_forms import normalize_label  # noqa: E402
+from apply_forms import best_option, normalize_label  # noqa: E402
 
 PROFILE_PATH = daily_digest.DAILY / "apply_profile.json"
 BANK_PATH = daily_digest.DAILY / "apply_answers.json"
@@ -41,6 +41,7 @@ DEFAULT_PROFILE = {
     "location": "Edina, MN",
     "city": "Edina",
     "state": "Minnesota",
+    "county": "Hennepin",  # Edina, MN 55439
     "country": "United States",
     "address": "",  # street, zip: set in daily/apply_profile.json (local); a blank one is asked, never guessed
     "zip": "",
@@ -62,24 +63,25 @@ RULES = (
     (r"^(preferred|nick) ?(first )?name|\bpreferred (first )?name\b|\bgo by\b|^what (should|do) we call you", "preferred_name"),
     (r"^(first|given) name", "first_name"),
     (r"^(last|family) name|^surname", "last_name"),
-    (r"^(full |legal |your )?name$|^name\b.*\bfull\b", "full_name"),
+    (r"^(full legal name|legal name|full name|your name|name)$", "full_name"),
     (r"\be mail\b|^email", "email"),
     (r"^(phone|mobile|telephone|cell)", "phone"),
     (r"linkedin", "linkedin"),
     (r"github", "github"),
     (r"portfolio|personal (web)?site|^website|other website|^url$", "portfolio"),
-    (r"^current (company|employer)|^(company|employer)$", "current_company"),
+    (r"most recent\b.{0,40}\bemployer|\bcurrent employer\b|^current (company|employer)|^(company|employer)$", "current_company"),
     (r"^current (job )?title", "current_title"),
-    (r"^country", "country"),
-    (r"^(state|province)\b|\b(what|which) state (will|do|are|would) you|state (will you be|are you|do you) (working|located|based|living|residing)|state of residence", "state"),
+    (r"^country|country.{0,40}(work|working|perform).{0,20}from", "country"),
+    (r"^(state|province)\b|\blocation state\b|\b(what|which) state (will|do|are|would) you|state (will you be|are you|do you) (working|located|based|living|residing)|state of residence", "state"),
+    (r"^county\b", "county"),
     (r"^(zip|postal)", "zip"),
-    (r"^(current )?(street |mailing |home )?address( line 1)?$|^street", "address"),
+    (r"^(current )?(street |mailing |home )?address( line 1)?$|^street|\byour address\b", "address"),
     (r"start date|earliest (possible )?start|when (can|could|would) you (start|begin)|notice period|available to start|availability to start", "start_date"),
     (r"^(school|university|college)( name)?$|^institution", "school"),
-    (r"^degree( type)?$|^highest (level of )?(education|degree)|^level of education", "degree"),
+    (r"^degree( type)?$|^highest (level of )?(education|degree)|^level of education|highest (level of )?(education|degree) you have", "degree"),
     (r"^(discipline|major|field of study)", "major"),
     (r"graduation (date|year)|year (of )?graduat|when did you graduate", "graduation_year"),
-    (r"^(current )?location|\bcity\b|where do you (currently )?(live|reside)|where are you (currently )?(located|based)", "location"),
+    (r"\b(home|your|current) location\b|^location\b|\bcity\b|where do you (currently )?(live|reside)|where are you (currently )?(located|based)", "location"),
 )
 # Adam, 2026-10-29: voluntary demographic questions get the "decline" choice; relocation and on-site/hybrid are a yes;
 # pay is "open / negotiable" unless the posting states a range.
@@ -146,7 +148,8 @@ def concept_of(label):
     hits = [name for name, pattern in CONCEPTS if pattern.search(label or "")]
     if len(hits) == 2 and REQUIRES_SPONSOR.search(label or "") and not STRONG_AUTHORIZED.search(label or ""):
         hits = ["sponsorship"]  # "require X to sponsor or support a visa or work authorization" asks about sponsorship
-    if len(hits) != 1 or re.search(r"\b(not|n't|without|unless|except)\b", label or "", re.I):
+    # "without restrictions" is still the work-authorization question. "without sponsorship" mixes the two and is asked.
+    if len(hits) != 1 or re.search(r"\b(not|n't|unless|except)\b|\bwithout\b(?!\s+restrict)", label or "", re.I):
         return ""
     return hits[0]
 
@@ -183,13 +186,62 @@ YEARS = re.compile(r"\byears?\b.{0,40}\bexperience\b|\bexperience\b.{0,40}\byear
 SALES_TOPIC = re.compile(r"\b(sales|selling|business development|account (executive|management)|b2b|saas sales|prospecting|demos?)\b", re.I)
 ENGINEERING_TOPIC = re.compile(r"\b(software|engineering|python|react|typescript|javascript|node|full[- ]?stack|front[- ]?end|back[- ]?end|llm|machine learning|ai\b|sql|java|programming|coding|developer|(software|web|app|application) development|cloud|aws|api|git|docker)\b", re.I)
 GPA = re.compile(r"\bgpa\b|grade point", re.I)
+# Roles and industries that are not on the resume. A yes/no or a years box can be answered; a essay stays a draft.
+NOT_HELD = re.compile(r"technical account manager|customer-facing pre-sales|pre-sales technical|\bimplementation role\b", re.I)
+NO_BACKGROUND = re.compile(r"material handling|practitioner at an audit|audit, advisory, or cpa|sale of data infrastructure", re.I)
+BACHELOR_Q = re.compile(r"\bbachelor|\bundergraduate degree\b|\bcollege degree\b", re.I)
+AWAY = re.compile(r"\b(washington|oregon|idaho|wyoming|illinois|california|texas|new york|florida|pacific northwest)\b", re.I)
+HERE = re.compile(r"\b(minnesota|\bmn\b|edina)\b", re.I)
+LIVE_THERE = re.compile(r"\b(reside|residing|live|living|located|based)\b", re.I)
+KNOWN_EMPLOYER = re.compile(r"\b(mercor|activus|tech mahindra|citizen observer|digital river|\binry\b|epicor)\b", re.I)
+PRIOR_JOB = re.compile(r"previously (employed|worked)|ever (been )?employed|employment history|applied .{0,80}(another role|within the last|in the (last|past))", re.I)
+
+
+def _no_choice(field):
+    """No, None, or a 'never' option. None when the choices are something else, so the question is still asked."""
+    if field.kind in ("file", "checkbox"):
+        return None
+    options = list(field.options)
+    if not options:
+        if field.kind not in ("text", "textarea", "radio", "select", "combobox"):
+            return None
+        return "None" if re.search(r"\b(list|name|who)\b", field.label or "", re.I) else "No"
+    for pattern in (r"^no$", r"^none$", r"^n/?a$", r"never", r"\bno\b", r"have not", r"not been"):
+        pick = next((o for o in options if re.search(pattern, o, re.I)), None)
+        if pick:
+            return pick
+    return None
+
+
+def _startup_choice(field):
+    """He has not worked at a startup. A multi-select that offers 'my first startup' gets that option."""
+    if not re.search(r"start-?ups have you worked|kind of start-?ups", field.label or "", re.I):
+        return None
+    pick = next((o for o in field.options if re.search(r"first startup|never worked|no experience", o, re.I)), None)
+    return (pick, "profile") if pick else None
 
 
 def standing_answer(field, job=None):
     """Adam's standing choices for demographic, relocation and pay questions: (value, source) or None."""
     label, options = field.label or "", list(field.options)
-    if field.kind in ("file", "checkbox"):
+    if field.kind == "file":
         return None
+    if field.kind == "checkbox":
+        return _startup_choice(field)
+    dial = [o for o in options if re.search(r"\+\d+", o)]
+    if dial and len(dial) >= 3:
+        pick = next((o for o in dial if re.search(r"\+1\b", o) and re.search(r"\b(us|united states)\b", o, re.I)), None)
+        if pick:
+            return pick, "profile"  # a phone-country menu whose only label is "Search"
+    periods = {normalize_label(o) for o in options}
+    if periods and periods <= {"hourly", "weekly", "monthly", "yearly", "annual", "annually"} and periods & {"yearly", "annual", "annually"}:
+        return next(o for o in options if normalize_label(o) in ("yearly", "annual", "annually")), "profile"
+    genderish = any(normalize_label(o) == "male" for o in options) and any(normalize_label(o) == "female" for o in options)
+    if EEO.search(label) or (genderish and any(DECLINE.search(o) for o in options)):
+        if options:
+            pick = next((o for o in options if DECLINE.search(o)), None)
+            return (pick, "profile") if pick else None
+        return ("Decline to self-identify", "profile") if field.kind in ("text", "textarea") else None
     if ADULT.search(label) and not re.search(r"\b(not|under)\b", label, re.I):
         return ("Yes", "profile") if not options or any(normalize_label(o) == "yes" for o in options) else None
     if BACKGROUND.search(label) and not re.search(r"\b(not|unable|unwilling)\b", label, re.I):
@@ -202,17 +254,18 @@ def standing_answer(field, job=None):
             if pick:
                 return pick, "profile"
         return None
+    if NOT_HELD.search(label) and (YEARS.search(label) or re.search(r"\byears?\b", label, re.I)):
+        if not options and field.kind in ("text", "textarea"):
+            return "0", "profile"  # he has not held a TAM, implementation, or pre-sales engineering title
+        no = _no_choice(field)
+        if no:
+            return no, "profile"
     if YEARS.search(label) and not options and field.kind in ("text", "textarea"):
         if SALES_TOPIC.search(label) and not ENGINEERING_TOPIC.search(label):
             return "5", "profile"  # Adam, 2026-10-29: "nearly 5" years of B2B sales
         if ENGINEERING_TOPIC.search(label) and not SALES_TOPIC.search(label):
             return "1", "profile"  # "1 year plus" for engineering skills
         return None
-    if EEO.search(label):
-        if options:
-            pick = next((o for o in options if DECLINE.search(o)), None)
-            return (pick, "profile") if pick else None
-        return ("Decline to self-identify", "profile") if field.kind in ("text", "textarea") else None
     if SALARY.search(label):
         if options or field.kind not in ("text", "textarea"):
             return None
@@ -222,6 +275,63 @@ def standing_answer(field, job=None):
             pick = next((o for o in options if CENTRAL.search(o)), None)
             return (pick, "profile") if pick else None
         return ("Central Time (CT)", "profile") if field.kind in ("text", "textarea") else None
+    if BACHELOR_Q.search(label) and re.search(r"\b(do you have|have you|did you)\b", label, re.I):
+        if not options or any(normalize_label(o) == "yes" for o in options):
+            return "Yes", "profile"
+        pick = best_option(options, "Bachelor's Degree")
+        if pick:
+            return pick, "profile"
+    if PRIOR_JOB.search(label) and not KNOWN_EMPLOYER.search(label):
+        no = _no_choice(field)
+        if no:
+            return no, "profile"
+    if LIVE_THERE.search(label) and AWAY.search(label) and not HERE.search(label):
+        if not options or any(normalize_label(o) == "yes" for o in options):
+            return "No", "profile"
+    if re.search(r"\benglish proficiency\b|\bproficiency in english\b", label, re.I):
+        if options:
+            pick = next((o for o in options if re.search(r"native|fluent|full professional|bilingual", o, re.I)), None)
+            return (pick, "profile") if pick else None
+        return ("Native", "profile") if field.kind in ("text", "textarea", "select", "combobox") else None
+    if re.search(r"\brelatives?\b", label, re.I) and re.search(r"\bemploy", label, re.I):
+        no = _no_choice(field)
+        if no:
+            return no, "profile"
+    if re.search(r"permission to text|text you|\bsms\b|text messages", label, re.I) and not re.search(r"\b(not|n't|don't|do not)\b", label, re.I):
+        yes = next((o for o in options if re.match(r"yes\b", o, re.I) and not re.search(r"\b(not|do not|don't)\b", o, re.I)), None)
+        if yes:
+            return yes, "profile"
+        if not options or any(normalize_label(o) == "yes" for o in options):
+            return "Yes", "profile"
+    if any(re.search(r"text messages|\bsms\b", o, re.I) for o in options):
+        yes = next((o for o in options if re.match(r"yes\b", o, re.I)), None)
+        if yes:
+            return yes, "profile"
+    if re.search(r"if you (responded|answered) yes|dates of (previous|prior) employment", label, re.I) and field.kind in ("text", "textarea"):
+        return "N/A", "profile"
+    if re.search(r"following companies", label, re.I) and re.search(r"\b(working|work|employed)\b", label, re.I) and options:
+        known = [o for o in options if KNOWN_EMPLOYER.search(o)]
+        if len(known) == 1:
+            return known[0], "profile"  # the list includes Mercor, where he works now
+        if not known:
+            none = next((o for o in options if re.search(r"do not work|none of|not work for", o, re.I)), None)
+            if none:
+                return none, "profile"
+    if re.search(r"full-time or part-time|full time or part time", label, re.I) and options:
+        full = next((o for o in options if re.search(r"^full[- ]?time$", o, re.I)), None)
+        if full:
+            return full, "profile"
+    if re.search(r"which .{0,50}(office|location)", label, re.I) and options:
+        anywhere = next((o for o in options if re.search(r"open to any|any location|\bremote\b|all locations", o, re.I)), None)
+        if anywhere:
+            return anywhere, "profile"
+    if re.search(r"willing to work as a full[- ]?time", label, re.I):
+        if not options or any(normalize_label(o) == "yes" for o in options):
+            return "Yes", "profile"
+    if NO_BACKGROUND.search(label):
+        no = _no_choice(field)
+        if no:
+            return no, "profile"
     if WILLING.search(label) and not UNWILLING.search(label):
         if options:
             return ("Yes", "profile") if any(normalize_label(o) == "yes" for o in options) else None
@@ -250,7 +360,10 @@ def resolve(field, profile, bank, standard=None, job=None):
         if field.options and name in ("linkedin", "github", "portfolio"):
             continue  # only this rule is skipped; a list of choices can still be the country or state
         if re.search(pattern, key) and profile.get(name):
-            return "fill", _profile_value(field, name, profile), "profile"
+            value = _profile_value(field, name, profile)
+            if name == "start_date" and field.kind == "date":
+                value = date.today().strftime("%m/%d/%Y")  # a calendar cannot take "Immediately"
+            return "fill", value, "profile"
     if re.search(r"cover letter", key):
         return ("draft", None, "") if field.required else ("skip", None, "")
     if key in bank:

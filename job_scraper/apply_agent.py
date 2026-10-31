@@ -1,51 +1,27 @@
-"""Apply to Greenhouse, Lever and Ashby jobs with Adam approving every submit on Telegram.
+"""Apply to eligible jobs and record confirmed outcomes.
 
     python job_scraper/apply_agent.py queue [--day YYYY-MM-DD] [--fit high,medium] [--limit 10]
     python job_scraper/apply_agent.py serve [--for MINUTES] [--idle-exit] [--dry-run] [--headed]
-    python job_scraper/apply_agent.py run   [--for MINUTES] [--dry-run]    queue, then serve until idle
-    python job_scraper/apply_agent.py listen                               always on: Telegram answers at any hour
+    python job_scraper/apply_agent.py run [--for MINUTES] [--dry-run]
+    python job_scraper/apply_agent.py listen
     python job_scraper/apply_agent.py status
-    python job_scraper/apply_agent.py selftest        send a button and wait for your tap
+    python job_scraper/apply_agent.py selftest
 
-One job is worked at a time. For each:
+By default, the agent submits automatically once every required answer is known.
+Set APPLY_AUTO_SUBMIT=0 in .env to require a Submit tap on the current Telegram
+summary. --dry-run never clicks Submit. Unknown questions are logged without
+asking Adam unless APPLY_ASK_ADAM=1. The listener works during configured active
+hours (default 06:00 to 16:30 local time).
 
-    1. A browser opens the application form and reads its fields. Nothing is typed yet.
-    2. Answers come from your profile and from questions you already answered (daily/apply_answers.json).
-       An essay or cover letter is drafted by the model from the resume. Anything only you know is asked
-       on Telegram, with buttons when the form gives a list of choices.
-    3. You get the full summary with [Submit] [Skip]. Nothing is sent before you tap Submit.
-       Reply with text to replace a draft (start with "2:" to replace the second one).
-    4. On Submit a fresh browser fills the form again, checks nothing new is required, clicks submit and
-       reads the confirmation. The result is written to the applied log (applied, by AI).
-       Ashby and Lever guard Submit with a robot check that a script must not clear. For them (and any form
-       that shows a CAPTCHA) Submit opens the filled form in Chrome on your PC (`assist`, its own process,
-       20 minutes) and you press Submit; the agent sees the confirmation and logs it as applied.
+Answers come from the profile, saved answers and drafts checked against the resume.
+Forms are read again before submission. Accounts, login walls and robot checks
+are reported as blockers; the agent never solves or bypasses a CAPTCHA.
+Only confirmed submissions are recorded as applied. Other outcomes keep their
+reason in the log. /issues, /errors and /audit expose gaps and tracking problems.
 
-Anything the agent cannot do goes to Recommended in the applied log with the reason, and you get a
-message: a login or account, a CAPTCHA or code prompt, a closed posting, a required file it does not
-have, a question you declined, no AI provider to draft with, or a form that changed after you approved.
-If a submit click gets no confirmation the job is logged as Recommended (not Applied) so nothing is
-claimed that was not seen; check your email before applying again.
-
-Nothing is assumed. Facts come only from the profile and from answers you gave before (and every one is
-shown in the summary before you approve). A required question the agent cannot answer from those is asked
-on Telegram. After APPLY_NUDGE_HOURS (default 3) without a reply you get one reminder.
-
-If a finished summary gets no Submit tap in APPLY_UNSENT_HOURS (default 4.5), it is logged in the applied
-log as "AI could have applied, not sent" (status `unsent`). The prepared answers stay in apply_state.json:
-tap Submit on the old summary, send /unsent to get fresh Submit buttons, or have any AI apply and log it
-`applied`. Any of those moves it to Applied, and `reconcile` marks the state record done so it is not offered
-again. An unanswered question after the same time goes to Recommended, you apply.
-
-Free text that is a question (it ends with "?", starts with /ask, or arrives when nothing is waiting) is
-answered by a headless AI that can read the project but not change anything.
-
-Every fit job (high and medium) is tried. The scheduled digest runs this agent itself after it finishes
-(`run --for 80`, inside the task so Task Scheduler cannot end it early); set APPLY_AGENT=0 in .env to turn that off. Taps and replies are only read while the
-agent is running, and Telegram holds them until it starts again.
-
-State is in daily/apply_state.json. Only one `serve` runs at a time (daily/apply_agent.lock). A question
-waiting on you for more than APPLY_WAIT_HOURS (default 4.5) is handed back as Recommended.
+State is stored in daily/apply_state.json. An operating-system lock allows only
+one writer, and unreadable state stops the agent without replacing its history.
+Set APPLY_AGENT=0 in .env to disable starting the agent after scheduled searches.
 """
 import argparse
 import contextlib
@@ -67,6 +43,7 @@ import apply_forms  # noqa: E402
 import daily_digest  # noqa: E402
 import mail_codes  # noqa: E402
 import telegram_notify  # noqa: E402
+from state_store import StateError, load_state  # noqa: E402
 from posting_text import greenhouse_form_url  # noqa: E402
 
 ROOT = daily_digest.ROOT
@@ -87,7 +64,7 @@ WAITING = ("asking", "ready")
 SUBMITTABLE = ("ready", "unsent")  # a summary can still be sent after it was logged as not sent
 QUESTION_WORDS = ("who", "what", "when", "where", "why", "how", "which", "is ", "are ", "do ", "does ", "did ",
                   "can ", "could ", "should ", "will ", "would ", "show", "list", "tell", "explain")
-LOCK_STALE_SECONDS = 1800
+_HELD_LOCKS = {}
 MAX_BUTTON_OPTIONS = 8
 ROBOT_CHECK = re.compile(r"captcha|robot check", re.I)
 ASSIST_MINUTES = 20
@@ -416,10 +393,7 @@ class Agent:
 
     # ---- state
     def _load(self):
-        try:
-            return json.loads(self.state_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return {}
+        return load_state(self.state_path, missing_ok=True)
 
     def save(self):
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -908,8 +882,13 @@ class Agent:
         elif status == "blocked" and ROBOT_CHECK.search(detail or ""):
             self.start_assist(job)  # the site asked for a human mid-submit: nothing was sent, so Adam finishes it
         elif status == "unknown":
-            self.handoff(job, "I clicked Submit but never saw a confirmation page. It may have gone through, "
-                              "so check your email for a confirmation before applying again.")
+            found = mail_codes.find_confirmation(time.time() - 300, job.get("company") or "")
+            if found:
+                return self.finish_submit(job, "submitted", "")
+            else:
+                note = ("and email could not be checked" if found is None else "never received an email")
+                return self.handoff(job, f"Clicked Submit, never saw a confirmation page, {note}. AI tried; Adam needs to apply.",
+                                    attempted=False)
         else:  # blocked or invalid
             self.handoff(job, f"The site did not accept it ({status}): {clip(detail, 200)}")
 
@@ -1294,25 +1273,60 @@ def _lock_holder_alive(path):
 
 
 def acquire_lock(path=None, listener=False):
-    """Take the single-agent lock. The always-on listener writes "listen <pid>" so a search can tell it from a run."""
-    path = Path(path or LOCK_PATH)
-    if path.exists() and time.time() - path.stat().st_mtime < LOCK_STALE_SECONDS and _lock_holder_alive(path):
+    """Hold an OS lock until release or process exit; age cannot evict a live writer.
+
+    A separate, persistent guard file keeps the locked inode stable while the readable
+    PID marker is replaced. The OS releases the guard automatically after a crash.
+    """
+    path = Path(path or LOCK_PATH).resolve()
+    if path in _HELD_LOCKS:
         return False
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"listen {os.getpid()}" if listener else str(os.getpid()), encoding="utf-8")
+    guard = open(path.with_name(path.name + ".guard"), "a+b")
+    try:
+        guard.seek(0, os.SEEK_END)
+        if guard.tell() == 0:
+            guard.write(b"\0")
+            guard.flush()
+        guard.seek(0)
+        if os.name == "nt":
+            import msvcrt
+            msvcrt.locking(guard.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(guard.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        guard.close()
+        return False
+    try:
+        # Respect an agent started by the older PID-only locking implementation too.
+        if path.exists() and _lock_holder_alive(path):
+            guard.close()
+            return False
+        path.write_text(f"listen {os.getpid()}" if listener else str(os.getpid()), encoding="utf-8")
+    except BaseException:
+        guard.close()
+        raise
+    _HELD_LOCKS[path] = guard
     return True
 
 
 def touch_lock(path=None):
-    path = Path(path or LOCK_PATH)
-    if path.exists():  # only the process that took the lock keeps it fresh
+    path = Path(path or LOCK_PATH).resolve()
+    if path in _HELD_LOCKS and path.exists():
         with contextlib.suppress(OSError):
             path.touch()
 
 
 def release_lock(path=None):
-    with contextlib.suppress(OSError):
-        Path(path or LOCK_PATH).unlink()
+    path = Path(path or LOCK_PATH).resolve()
+    guard = _HELD_LOCKS.pop(path, None)
+    if guard is not None:
+        try:
+            with contextlib.suppress(OSError):
+                path.unlink()
+        finally:
+            guard.close()
 
 
 def candidates(day=None):
@@ -1357,9 +1371,8 @@ def main(argv=None):
             print("Button tap received." if ok else "No tap received in time.")
             return 0 if ok else 1
         import tracking_audit
-        agent = Agent(tg, dry_run=args.dry_run, headed=args.headed,
-                      audit_rows=tracking_audit._tracker_rows if args.cmd == "listen" else None)
         if args.cmd == "status":
+            agent = Agent(tg, dry_run=args.dry_run, headed=args.headed)
             print(re.sub(r"<[^>]+>", "", html.unescape(agent.status_text())))
             return 0
         def queue_now():
@@ -1371,12 +1384,15 @@ def main(argv=None):
         # Take the lock before queueing: the process holding it owns the state file, and a second writer would
         # overwrite its jobs.
         listen = args.cmd == "listen"
-        if listen:
-            agent.active_hours = active_hours()
         if not acquire_lock(listener=listen):
             print("Another apply agent is running (daily/apply_agent.lock is fresh).")
             return 1
         try:
+            # Load only after ownership: another writer may have saved while we waited.
+            agent = Agent(tg, dry_run=args.dry_run, headed=args.headed,
+                          audit_rows=tracking_audit._tracker_rows if listen else None)
+            if listen:
+                agent.active_hours = active_hours()
             if args.cmd == "queue":
                 queue_now()
                 return 0
@@ -1384,13 +1400,15 @@ def main(argv=None):
                 queue_now()
             agent.serve(minutes=args.minutes, idle_exit=args.idle_exit or args.cmd == "run",
                         listen=listen, fits=fits, limit=args.limit)
+        except StateError:
+            raise
         except Exception as e:  # noqa: BLE001 - keep the cause where the next session will read it, then let the restart loop run
-            agent.note_error("crash", e)
+            record_error("crash", e)
             raise
         finally:
             release_lock()
         return 0
-    except telegram_notify.TelegramError as e:
+    except (telegram_notify.TelegramError, StateError) as e:
         print(e)
         return 1
 

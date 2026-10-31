@@ -129,9 +129,14 @@ def poll(env=None, wait=0, offset_path=None):
     if not token or not chat:
         raise TelegramError("TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is not set")
     offset = _load_offset(offset_path)
-    updates = _call(token, "getUpdates", {
-        "offset": offset, "timeout": wait, "allowed_updates": json.dumps(["message", "callback_query"]),
-    }, timeout=TIMEOUT + wait)
+    payload = {"offset": offset, "timeout": wait, "allowed_updates": json.dumps(["message", "callback_query"])}
+    try:
+        updates = _call(token, "getUpdates", payload, timeout=TIMEOUT + wait)
+    except TelegramError as e:
+        # A long poll that dies at the socket timeout can drop the reply Adam just sent. One short poll picks it up.
+        if not wait or "TimeoutError" not in str(e):
+            raise
+        updates = _call(token, "getUpdates", {**payload, "timeout": 0}, timeout=TIMEOUT)
     if updates:
         _save_offset(max(u["update_id"] for u in updates) + 1, offset_path)
     return parse_updates(updates, chat)

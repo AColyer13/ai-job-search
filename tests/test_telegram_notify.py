@@ -77,6 +77,22 @@ def test_notify_sends_once_then_remembers(tmp_path, monkeypatch):
     assert len(sent) == 1
 
 
+def test_a_long_poll_timeout_is_retried_as_a_short_poll(tmp_path, monkeypatch):
+    calls = []
+
+    def fake(token, method, payload=None, timeout=20):
+        calls.append((payload or {}).get("timeout"))
+        if (payload or {}).get("timeout"):
+            raise telegram_notify.TelegramError("Telegram getUpdates failed: TimeoutError")
+        return [{"update_id": 7, "message": {"text": "Yes", "chat": {"id": "1"}, "from": {"id": "1"}}}]
+
+    monkeypatch.setattr(telegram_notify, "_call", fake)
+    events = telegram_notify.poll({"TELEGRAM_BOT_TOKEN": "t", "TELEGRAM_CHAT_ID": "1"}, wait=25,
+                                   offset_path=tmp_path / "off.json")
+    assert calls == [25, 0]
+    assert events == [{"type": "text", "text": "Yes", "reply_to": None}]
+
+
 def test_notify_does_nothing_without_credentials(tmp_path, monkeypatch):
     monkeypatch.setattr(telegram_notify, "SENT_PATH", tmp_path / "sent.json")
     sent = []

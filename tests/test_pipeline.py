@@ -9,6 +9,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "job_scraper"))
 import pipeline  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def isolated_pipeline_network(monkeypatch):
+    """Unit tests must not spend a real search quota or contact job boards."""
+    def blocked(*args, **kwargs):
+        raise AssertionError("Unmocked network call in pipeline unit test")
+
+    monkeypatch.setattr(pipeline.urllib.request, "urlopen", blocked)
+
+
 # --- fit() -----------------------------------------------------------------
 # With no readable posting text the grade is low: a title cannot show whether
 # the job asks for a CS degree or five years of engineering.
@@ -718,6 +727,7 @@ def test_store_skips_a_job_it_already_holds_from_another_site():
 
 
 def test_jsearch_is_skipped_without_a_key(monkeypatch):
+    monkeypatch.delenv("JSEARCH_API_KEY", raising=False)
     monkeypatch.delenv("RAPIDAPI_KEY", raising=False)
     with pytest.raises(pipeline.SkipSource):
         pipeline.src_jsearch()

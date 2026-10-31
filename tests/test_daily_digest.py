@@ -429,7 +429,7 @@ def test_the_daily_list_shows_a_green_check_or_a_red_x_from_the_applied_log():
     ("no application form found on the page (account or login required)", "blocked"),
     ("the project has no answer yet for: describe your account setup", "gap"),
     ("no application form found on the page", "gap"),
-    ("I clicked Submit but never saw a confirmation page.", "gap"),
+    ("Clicked Submit, never saw a confirmation page, never received an email. AI tried; Adam needs to apply.", "gap"),
     ("This posting is closed or gone", "closed"),
     ("Adam: a required GPA means move on from the job", "closed"),
     ("Something broke before the result was known (RuntimeError).", "gap"),

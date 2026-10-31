@@ -1375,15 +1375,13 @@ def _notify_telegram(store, day):
 APPLY_MINUTES = 80  # the scheduled task stops after 2 hours; the search itself takes the rest
 
 
-LISTENER_STALE_SECONDS = 1800  # same as the agent's lock: a lock a second agent could not take is a live listener
-
-
 def _listener_running():
-    """True while the always-on apply listener holds a fresh lock ("listen <pid>" in daily/apply_agent.lock)."""
+    """A live listener keeps ownership even during a long browser or model call."""
     lock = DAILY / "apply_agent.lock"
     try:
+        from apply_agent import _lock_holder_alive
         return (lock.read_text(encoding="utf-8").startswith("listen")
-                and time.time() - lock.stat().st_mtime < LISTENER_STALE_SECONDS)
+                and _lock_holder_alive(lock))
     except OSError:
         return False
 

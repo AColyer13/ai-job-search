@@ -15,7 +15,6 @@ listener, which also sends this on Telegram with /audit) can see a lost applicat
 """
 import csv
 import io
-import json
 import sys
 import time
 from pathlib import Path
@@ -24,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import applied_log  # noqa: E402
 import daily_digest  # noqa: E402
 import pipeline  # noqa: E402
+from state_store import StateError, load_state  # noqa: E402
 
 STATE_PATH = daily_digest.DAILY / "apply_state.json"
 STUCK_SECONDS = 35 * 60  # the Chrome wait is 20 minutes plus the collector's 5 minute grace
@@ -40,14 +40,15 @@ def _tracker_rows(path=None):
 def audit(entries=None, jobs=None, tracker_rows=None, now=None):
     """A list of problem lines. Empty means every record agrees."""
     entries = applied_log.load_log() if entries is None else entries
+    problems = []
     if jobs is None:
         try:
-            jobs = json.loads(STATE_PATH.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+            jobs = load_state(STATE_PATH)
+        except StateError as exc:
+            problems.append(f"STATE UNREADABLE: {exc}")
             jobs = {}
     rows = _tracker_rows() if tracker_rows is None else tracker_rows
     now = time.time() if now is None else now
-    problems = []
 
     logged = {daily_digest._key(e.get("url")): e for e in entries.values()}
     tracker_keys = {(pipeline.company_key(r.get("company")), pipeline._norm_words(r.get("role"))) for r in rows}

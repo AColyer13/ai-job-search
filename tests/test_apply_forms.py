@@ -455,6 +455,22 @@ def test_an_unknown_posting_page_is_followed_through_its_own_apply_link(page):
     assert "first name" in by_key(form) and form.url.endswith("/jobs/2/form")
 
 
+def test_a_search_box_does_not_hide_an_apply_link(page):
+    posting = ('<html><body><h1>Engineer</h1><input name="q" placeholder="Search">'
+               '<a role="button" href="/jobs/2/form">Apply for this job</a></body></html>')
+    serve_page(page, "https://careers.example.org/jobs/2", posting)
+    serve_page(page, "https://careers.example.org/jobs/2/form", OWN_SITE)
+    form = af.discover(page, "https://careers.example.org/jobs/2")
+    assert "first name" in by_key(form)
+
+
+def test_a_not_found_posting_is_closed_rather_than_a_missing_form(page):
+    html = "<html><body><h1>Page not found</h1><p>The page you requested was not found</p></body></html>"
+    serve_page(page, "https://jobs.ashbyhq.com/posthog/x/application", html)
+    with pytest.raises(af.FormError, match="closed or gone"):
+        af.discover(page, "https://jobs.ashbyhq.com/posthog/x/application")
+
+
 def test_a_page_without_a_resume_upload_is_not_mistaken_for_an_application(page):
     newsletter = '<html><body><form><label for="e">Email *</label><input id="e" name="e" required></form></body></html>'
     serve_page(page, "https://careers.example.org/jobs/3", newsletter)
@@ -661,3 +677,185 @@ def test_preferred_time_zone_is_central():
     assert apply_answers.resolve(f, PROFILE, {})[:2] == ("fill", "Central Time (CT)")
     g = make("time zone", kind="select", options=["Pacific", "Mountain", "Central (CT)", "Eastern"])
     assert apply_answers.resolve(g, PROFILE, {})[:2] == ("fill", "Central (CT)")
+
+
+def test_the_deepgram_and_timac_questions_are_answered_from_the_profile():
+    legal = make("full legal name", label="Full Legal Name")
+    home = make("home location", "combobox", label="Home Location")
+    sms = make("we may use sms during the hiring process do you give us permission to text you", "combobox",
+               label="We may use SMS during the hiring process. Do you give us permission to text you? (required)")
+    assert apply_answers.resolve(legal, PROFILE, {})[:2] == ("fill", PROFILE["full_name"])
+    assert apply_answers.resolve(home, PROFILE, {})[:2] == ("fill", "Edina")
+    assert apply_answers.resolve(sms, PROFILE, {})[:2] == ("fill", "Yes")
+    assert apply_answers.resolve(make("county", label="County"), PROFILE, {})[:2] == ("fill", "Hennepin")
+
+
+def test_a_greenhouse_embed_is_the_application_and_a_captcha_frame_is_not():
+    assert af._frame_is_form("https://job-boards.greenhouse.io/embed/job_app?for=tripactions&token=8126497")
+    assert not af._frame_is_form("https://www.google.com/maps/embed/v1/place?q=1")
+    assert not af._frame_is_form("https://www.recaptcha.net/recaptcha/enterprise/anchor?ar=1")
+
+
+def test_a_missing_posting_is_closed_even_when_the_words_are_in_the_frame_address():
+    assert af.posting_closed("Page not found The page you requested was not found", "")
+    assert af.posting_closed("Skip Branding This website stores cookies", "https://careers.icims.com/jobs/search?notFound=1")
+    assert not af.posting_closed("Software Engineer Apply now", "https://jobs.example/1")
+
+
+def test_profile_facts_match_the_wording_forms_used_today():
+    bank = {"auth": {"label": "Are you authorized to work for any employer in the United States?", "answer": "Yes"}}
+    cases = {
+        "full legal name": PROFILE["full_name"],
+        "legal name": PROFILE["full_name"],
+        "home location": PROFILE["location"],
+        "your location": PROFILE["location"],
+        "who is your most recent current employer": "Mercor",
+        "county": "Hennepin",
+        "what country are you planning to work from": "United States",
+    }
+    for key, expected in cases.items():
+        assert apply_answers.resolve(make(key), PROFILE, {})[:2] == ("fill", expected), key
+    auth = "Are you legally authorized to work for any employer in the United States without restrictions?"
+    f = make(apply_answers.normalize_label(auth), "radio", label=auth, options=["Yes", "No"])
+    assert apply_answers.concept_of(auth) == "work authorization"
+    assert apply_answers.resolve(f, PROFILE, bank)[:2] == ("fill", "Yes")
+    assert apply_answers.concept_of("Are you authorized to work in the US without sponsorship?") == ""
+
+
+def test_questions_the_resume_already_answers_are_not_asked():
+    def answer(label, kind="radio", options=("Yes", "No")):
+        f = make(apply_answers.normalize_label(label), kind, label=label, options=list(options))
+        return apply_answers.resolve(f, PROFILE, {})[:2]
+
+    assert answer("Do you have a Bachelor's Degree? *") == ("fill", "Yes")
+    assert answer("Have you been previously employed by Chainalysis as an Intern, Full Time Employee, or Contractor?") == ("fill", "No")
+    assert answer("Have you been previously employed by Mercor?")[0] == "ask"  # he works there now
+    assert answer("Do you physically reside in one of the Pacific Northwest states (Washington, Oregon, or Idaho) *") == ("fill", "No")
+    assert answer("Are you currently located in Wyoming or Illinois?") == ("fill", "No")
+    assert answer("Have you been referred to us? *")[0] == "ask"
+    assert answer("Do you have experience in the Material Handling industry?") == ("fill", "No")
+    assert answer("Do you have experience working as a practitioner at an audit, advisory, or CPA firm?") == ("fill", "No")
+    assert answer("Have you supported the sale of data infrastructure, streaming, databases, or distributed systems products?") == ("fill", "No")
+    assert answer("Do you have 2+ years in a customer-facing pre-sales technical role (Solutions Engineer, Sales Engineer)?") == ("fill", "No")
+    assert answer("We may use SMS during the hiring process. Do you give us permission to text you?") == ("fill", "Yes")
+    relatives = "List any relatives currently employed by the DCS family of companies."
+    assert apply_answers.resolve(make(apply_answers.normalize_label(relatives), label=relatives), PROFILE, {})[:2] == ("fill", "None")
+    years = "How many years of experience do you have as a Technical Account Manager or Implementation role?"
+    assert apply_answers.resolve(make(apply_answers.normalize_label(years), label=years), PROFILE, {})[:2] == ("fill", "0")
+    english = make("english proficiency", "select", label="English Proficiency*", options=["Basic", "Professional", "Native"])
+    assert apply_answers.resolve(english, PROFILE, {})[:2] == ("fill", "Native")
+    start = make("when can you start", "date", label="When can you start?")
+    assert apply_answers.resolve(start, PROFILE, {})[1] == apply_answers.date.today().strftime("%m/%d/%Y")
+
+
+STARTUPS = """<form>
+<div class="field-entry">
+  <label class="_required_x ashby-application-form-question-title">What kind of start-ups have you worked at in the past?</label>
+  <label><input type="checkbox" name="Pre-seed/seed-stage startup "> Pre-seed/seed-stage startup</label>
+  <label><input type="checkbox" name="Series A or B startup "> Series A or B startup</label>
+  <label><input type="checkbox" name="Protege would be my first startup"> Protege would be my first startup</label>
+</div>
+<label for="n">Name *</label><input id="n" name="name" required>
+</form>"""
+
+
+def test_checkbox_options_with_their_own_names_are_one_question(page):
+    form = load(page, STARTUPS, ats="ashby")
+    fields = [f for f in form.fields if f.kind == "checkbox"]
+    assert len(fields) == 1
+    box = fields[0]
+    assert box.required and "start-ups" in box.label.lower()
+    assert len(box.options) == 3
+    outcome, value, _ = apply_answers.resolve(box, PROFILE, {})
+    assert outcome == "fill" and "first startup" in value.lower()
+    assert af.fill(page, form, {box.key: value}) == {}
+    assert page.locator("input[name='Protege would be my first startup']").is_checked()
+
+
+DATE_FIELD = """<form>
+<label for="d" class="_required_x">When can you start?</label>
+<input id="d" placeholder="Pick date..." class="ashby-application-form-input-date" required>
+</form>"""
+
+
+def test_a_calendar_start_date_is_filled_with_today_not_the_word_immediately(page):
+    form = load(page, DATE_FIELD, ats="ashby")
+    field = by_key(form)["when can you start"]
+    assert field.kind == "date"
+    today = apply_answers.date.today().strftime("%m/%d/%Y")
+    assert apply_answers.resolve(field, PROFILE, {})[1] == today
+    assert af.fill(page, form, {field.key: today}) == {}
+    assert page.input_value("#d") == today
+
+
+STATE_GLUE = """<form>
+<label for="st">State<span>Select a state</span></label>
+<select id="st" required><option>Select a state</option><option>Minnesota</option><option>Wisconsin</option></select>
+</form>"""
+
+
+BREEZY = """<form>
+<div class="desired-salary"><h3>Desired Salary*</h3>
+<select id="pay" required><option>Hourly</option><option>Weekly</option><option>Monthly</option><option>Yearly</option></select></div>
+<div class="question"><h3>Do you have hands-on experience supporting both macOS and Windows devices?*</h3>
+<textarea name="section_1793187715626_question_0" required></textarea></div>
+<div><div>Do you currently or have you previously worked for Acme?</div>
+<select aria-label="Select" id="prior" required><option>Yes</option><option>No</option></select></div>
+</form>"""
+
+
+def test_a_breezy_question_and_a_rippling_menu_use_the_heading_not_the_field_id(page):
+    form = load(page, BREEZY)
+    fields = by_key(form)
+    essay = fields["do you have hands on experience supporting both macos and windows devices"]
+    assert essay.kind == "textarea" and essay.required
+    assert apply_answers.resolve(fields["desired salary"], PROFILE, {})[1] == "Yearly"
+    assert apply_answers.resolve(fields["do you currently or have you previously worked for acme"], PROFILE, {})[1] == "No"
+
+
+def test_phone_country_gender_and_the_rippling_followups_are_answered():
+    codes = ["+44 GB - United Kingdom", "+1 US - United States", "+33 FR - France"]
+    dial = make("search", "combobox", label="Search", options=codes)
+    gender = make("male", "radio", label="Male", options=["Male", "Female", "I don't wish to answer"])
+    school = make("what is the highest level of education you have completed", "select",
+                  options=["High school", "Bachelor's Degree", "Master's"])
+    address = make("please provide your address", label="Please provide your address.")
+    referred = make("if you were referred to this role by a current employee please include their name and job title")
+    dates = make("if you responded yes to the previous question please provide dates of previous employment")
+    w2 = make("are you willing to work as a full time w2 employee", "select", options=["Yes", "No"])
+    sms = make("yes i consent to receiving text messages", "radio", label="Yes - I consent to receiving text messages",
+               options=["Yes - I consent to receiving text messages", "No - I do not consent to receiving text messages"])
+    profile = {**PROFILE, "address": "7520 Cahill Rd"}
+    assert apply_answers.resolve(dial, PROFILE, {})[1] == "+1 US - United States"
+    assert apply_answers.resolve(gender, PROFILE, {})[1] == "I don't wish to answer"
+    assert apply_answers.resolve(school, PROFILE, {})[1] == "Bachelor's Degree"
+    assert apply_answers.resolve(address, profile, {})[1] == "7520 Cahill Rd"
+    assert apply_answers.resolve(referred, PROFILE, {})[0] == "ask"
+    assert apply_answers.resolve(dates, PROFILE, {})[1] == "N/A"
+    assert apply_answers.resolve(w2, PROFILE, {})[1] == "Yes"
+    assert apply_answers.resolve(sms, PROFILE, {})[1].startswith("Yes")
+    companies = make("are you currently working with any of the following companies", "combobox",
+                     label="Are you currently working with any of the following companies?",
+                     options=["OpenAI", "Mercor", "I do not work for any of these companies"])
+    other = make("are you currently working with any of the following companies", "combobox",
+                 label="Are you currently working with any of the following companies?",
+                 options=["OpenAI", "Anthropic", "I do not work for any of these companies"])
+    hours = make("are you interested in a full time or part time position", "combobox",
+                 label="Are you interested in a full-time or part-time position?",
+                 options=["Full-time", "Part-time"])
+    offices = make("which air office locations are you open to working out of", "combobox",
+                   label="Which Air office location/s are you open to working out of?",
+                   options=["Pittsburgh, PA", "Arlington, VA", "Open to any location"])
+    assert apply_answers.resolve(companies, PROFILE, {})[1] == "Mercor"
+    assert apply_answers.resolve(other, PROFILE, {})[1] == "I do not work for any of these companies"
+    assert apply_answers.resolve(hours, PROFILE, {})[1] == "Full-time"
+    assert apply_answers.resolve(offices, PROFILE, {})[1] == "Open to any location"
+
+
+def test_a_state_menu_whose_placeholder_is_glued_to_the_label_is_minnesota(page):
+    form = load(page, STATE_GLUE)
+    field = next(f for f in form.fields if f.kind == "select")
+    assert field.label == "State" and field.key == "state"
+    assert apply_answers.resolve(field, PROFILE, {})[1] == "Minnesota"
+    assert af.fill(page, form, {field.key: "Minnesota"}) == {}
+    assert page.locator("#st").input_value() == "Minnesota"

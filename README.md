@@ -1,6 +1,6 @@
 # AI Job Search
 
-Finds and grades jobs on its own every hour. Grok is the default AI for drafts and questions, with Claude and Antigravity as fallbacks. It applies only when asked, then logs each job. Candidate profile and agent rules are in [CLAUDE.md](CLAUDE.md) and [AGENTS.md](AGENTS.md).
+Finds and grades jobs seven times a day. Grok is the default AI for drafts and questions, with Antigravity as the fallback. The apply agent submits eligible jobs automatically under the standing instructions in [CLAUDE.md](CLAUDE.md). Candidate profile and agent rules are in that file and [AGENTS.md](AGENTS.md).
 
 ## Finding jobs
 
@@ -16,7 +16,7 @@ Every run rewrites `daily/<date>.docx` and `daily/latest.docx`. They list High a
 
 ## Applying
 
-Nothing submits automatically. Ask an agent to apply from the daily list. [CLAUDE.md](CLAUDE.md) tells it to skip anything already logged, submit a job only if no account, login or captcha is needed, and log it with `job_scraper/applied_log.py`. Jobs only Adam can do are logged as recommended. His own applications are logged as applied by him.
+The apply agent submits automatically when every required answer is known and the form is reachable without an account, login or CAPTCHA. Set `APPLY_AUTO_SUBMIT=0` in `.env` to require a Submit tap. Unknown questions are logged without asking Adam unless `APPLY_ASK_ADAM=1`. It skips jobs already logged and records outcomes with `job_scraper/applied_log.py`. The reports show AI applied, Adam applied, or why the job was not applied for.
 
 ## Tracking
 
@@ -25,5 +25,5 @@ Nothing submits automatically. Ask an agent to apply from the daily list. [CLAUD
 ## Tests
 
 ```bash
-python -m unittest discover -s tests -t .
+python -m pytest -q
 ```

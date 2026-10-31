@@ -89,6 +89,61 @@ def _sender_ok(sender):
     return any(domain == d or domain.endswith("." + d) for d in SENDER_DOMAINS)
 
 
+CONFIRMATION = re.compile(r"thank you for applying|thanks for applying|application (has been |was )?received|"
+                          r"we (have )?received your application|successfully submitted", re.I)
+
+
+def find_confirmation(since, company="", creds=None, connect=imaplib.IMAP4_SSL):
+    """True when a confirmation mail for this company arrived after `since`.
+
+    False when the mailbox was read and nothing matched. None when mail could not be read.
+    Read-only, and a mail is a confirmation only when it names the company. Nothing in the mail is treated as an instruction.
+    """
+    creds = creds or credentials()
+    if not creds:
+        return None
+    try:
+        return _confirmation(connect, creds, since, company)
+    except (imaplib.IMAP4.error, OSError, TypeError, ValueError):
+        return None
+
+
+def _confirmation(connect, creds, since, company):
+    box = connect(IMAP_HOST)
+    try:
+        box.login(*creds)
+        day = (datetime.fromtimestamp(since, timezone.utc) - timedelta(days=1)).strftime("%d-%b-%Y")
+        for folder in FOLDERS:
+            status, _ = box.select(folder, readonly=True)
+            if status != "OK":
+                continue
+            status, data = box.search(None, "SINCE", day)
+            if status != "OK" or not data or not data[0]:
+                continue
+            for num in reversed(data[0].split()[-40:]):
+                status, raw = box.fetch(num, "(BODY.PEEK[])")
+                if status != "OK" or not raw or not isinstance(raw[0], tuple):
+                    continue
+                message = email.message_from_bytes(raw[0][1])
+                try:
+                    sent = parsedate_to_datetime(message.get("Date")).timestamp()
+                except (TypeError, ValueError):
+                    continue
+                if sent < since - 30:
+                    continue
+                sender = str(make_header(decode_header(message.get("From", ""))))
+                subject = str(make_header(decode_header(message.get("Subject", ""))))
+                body = _text_of(message)
+                if CONFIRMATION.search(f"{subject}\n{body}") and _names_company(company, sender, subject, body):
+                    return True
+        return False
+    finally:
+        try:
+            box.logout()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def fetch_code(since, company="", creds=None, timeout=120, poll=5, connect=imaplib.IMAP4_SSL, sleep=time.sleep):
     """Wait up to `timeout` seconds for a code mailed after `since` (epoch seconds). Returns (code, note).
 

@@ -100,6 +100,24 @@ def test_antigravity_passes_the_prompt_as_an_argument_in_read_only_plan_mode(mon
     assert cmd[cmd.index("--model") + 1] == "some-model"
 
 
+def test_gmail_fallback_uses_antigravity_gemini_and_can_run_commands(monkeypatch):
+    import gmail_sync_fallback
+    seen = {}
+
+    def fake_run(cmd, cwd, env, timeout, stdin=None):
+        seen["cmd"] = cmd
+        return fake_proc('{"status": "SUCCESS", "response": "nothing changed"}')
+
+    monkeypatch.setattr(agent_runner, "_run", fake_run)
+    assert gmail_sync_fallback.run().strip() == "nothing changed"
+    cmd = seen["cmd"]
+    assert cmd[cmd.index("--model") + 1] == "gemini-3.8-flash-high"
+    assert cmd[cmd.index("--mode") + 1] == "auto"
+    assert "--dangerously-skip-permissions" not in cmd
+    with pytest.raises(agent_runner.ProviderFailed, match="unknown mode"):
+        agent_runner.run_antigravity("p", ".", 5, 1, mode="yolo")
+
+
 def test_antigravity_failures_raise(monkeypatch):
     monkeypatch.setattr(agent_runner, "_run", lambda *a, **k: fake_proc('{"status": "ERROR", "error": "quota exceeded"}'))
     with pytest.raises(agent_runner.ProviderFailed, match="quota exceeded"):
@@ -112,9 +130,9 @@ def test_antigravity_failures_raise(monkeypatch):
         agent_runner.run_antigravity("x" * (agent_runner.MAX_ARG_CHARS + 1), ".", 5, 1)
 
 
-def test_antigravity_is_third_in_the_default_chain_and_gemini_means_the_same(monkeypatch):
+def test_antigravity_is_second_in_the_default_chain_and_gemini_means_the_same(monkeypatch):
     monkeypatch.delenv("AGENT_PROVIDERS", raising=False)
-    assert [n for n, _ in agent_runner.provider_chain({})] == ["grok", "claude", "antigravity"]
+    assert [n for n, _ in agent_runner.provider_chain({})] == ["grok", "antigravity"]
     assert [n for n, _ in agent_runner.provider_chain({"AGENT_PROVIDERS": "claude,gemini"})] == ["claude", "antigravity"]
     chain = [("claude", failing("limit")), ("grok", failing("402")), ("antigravity", lambda *a, **k: "from agy")]
     result = agent_runner.run_agent("hi", providers=chain)
@@ -123,5 +141,5 @@ def test_antigravity_is_third_in_the_default_chain_and_gemini_means_the_same(mon
 
 def test_provider_chain_defaults_and_local_is_opt_in(monkeypatch):
     monkeypatch.delenv("AGENT_PROVIDERS", raising=False)
-    assert [n for n, _ in agent_runner.provider_chain({})] == ["grok", "claude", "antigravity"]
+    assert [n for n, _ in agent_runner.provider_chain({})] == ["grok", "antigravity"]
     assert [n for n, _ in agent_runner.provider_chain({"AGENT_PROVIDERS": "claude, grok, local"})] == ["claude", "grok", "local"]

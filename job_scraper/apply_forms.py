@@ -67,7 +67,7 @@ DISCOVER_JS = r"""
       const others = Array.from(box.querySelectorAll('input:not([type=hidden]), select, textarea'))
         .filter(c => c !== el && !(c.name && c.name === el.name));
       if (others.length) break;
-      const cands = box.querySelectorAll('legend, label, [class*="label"], [class*="Label"], [class*="title"], [class*="Title"]');
+      const cands = box.querySelectorAll('legend, label, h2, h3, h4, [class*="label"], [class*="Label"], [class*="title"], [class*="Title"]');
       for (const l of cands) {
         const holdsInput = l.querySelector('input[type=radio], input[type=checkbox]');
         const target = l.htmlFor && document.getElementById(l.htmlFor);
@@ -75,6 +75,21 @@ DISCOVER_JS = r"""
         if (skipOptionLabels && (holdsInput || l.contains(el))) continue;
         const t = l.contains(el) ? ownText(l) : clean(l.innerText);
         if (t) return t;
+      }
+    }
+    return '';
+  };
+  const GENERIC_LABEL = /^(search|select|select\.\.\.|type to search|choose|please select|please select\.\.\.)$/i;
+  const MACHINE_LABEL = /^(section_\d+_question_\d+|field-\d+)$/i;
+  // Breezy names a question section_123_question_0 and puts the words in an h3. Rippling's custom
+  // questions have no label, only a sibling heading, and their menus say aria-label "Select".
+  const nearbyHeading = (el) => {
+    let box = el.parentElement;
+    for (let n = 0; box && n < 6; n++, box = box.parentElement) {
+      for (const c of box.children) {
+        if (c === el || c.contains(el)) continue;
+        const t = clean(c.innerText);
+        if (t && t.length < 240 && !GENERIC_LABEL.test(t)) return t;
       }
     }
     return '';
@@ -87,7 +102,13 @@ DISCOVER_JS = r"""
     if (!t) { const l = el.closest('label'); if (l) t = ownText(l); }
     if (!t) t = clean(el.getAttribute('aria-label'));
     if (!t) t = questionText(el, false);
-    return t || clean(el.getAttribute('placeholder')) || el.name || el.id || '';
+    t = t || clean(el.getAttribute('placeholder')) || el.name || el.id || '';
+    // A hashed id or "Select" is not the question. An option whose name is its own words ("my first startup") is.
+    const bareId = (t === (el.name || '') || t === (el.id || '')) && !/\s/.test(t);
+    if (!t || GENERIC_LABEL.test(t) || MACHINE_LABEL.test(t) || bareId) {
+      t = nearbyHeading(el) || t;
+    }
+    return t;
   };
   const GENERIC = /^(attach|upload|browse|choose file|select file|add file|drop.*|or drag.*)$/i;
   const fileLabel = (el) => {
@@ -105,6 +126,28 @@ DISCOVER_JS = r"""
     const lg = fs && fs.querySelector('legend');
     if (lg && clean(lg.innerText)) return clean(lg.innerText);
     return questionText(el, true) || labelOf(el);
+  };
+  // The question above a set of options, skipping labels that wrap one option.
+  const headingOf = (box) => {
+    const heads = box.querySelectorAll('label, legend, [class*="question-title"], [class*="Label"], [class*="title"]');
+    for (const h of heads) {
+      if (h.querySelector('input, select, textarea')) continue;
+      const t = clean(h.innerText || h.textContent);
+      if (t) return t;
+    }
+    return '';
+  };
+  // Checkboxes that are one multi-select even when each option has its own name (Ashby does this).
+  // Stops at the first ancestor that also holds a text box, so two consent boxes on a form stay separate.
+  const checkGroup = (el) => {
+    let box = el.parentElement, found = null;
+    for (let n = 0; box && n < 7; n++, box = box.parentElement) {
+      const inputs = Array.from(box.querySelectorAll('input:not([type=hidden]), select, textarea'));
+      if (inputs.some(c => !['radio', 'checkbox'].includes((c.getAttribute('type') || '').toLowerCase()))) break;
+      const same = inputs.filter(c => (c.getAttribute('type') || '').toLowerCase() === 'checkbox');
+      if (same.length > 1) found = box;
+    }
+    return found;
   };
   const markedRequired = (el) => {
     const box = el.closest('fieldset, [data-field-path], [class*="fieldEntry"]');
@@ -129,15 +172,19 @@ DISCOVER_JS = r"""
     if (type === 'radio' || type === 'checkbox') {
       const name = el.name || '';
       const optLabel = labelOf(el);
-      const key = type + ':' + (name || groupLabel(el));
+      const grouped = type === 'checkbox' ? checkGroup(el) : null;
+      const heading = grouped ? headingOf(grouped) : '';
+      const key = heading ? (type + ':group:' + heading) : (type + ':' + (name || groupLabel(el)));
       let g = seenGroups.get(key);
       if (!g) {
-        const q = groupLabel(el);
-        g = { kind: type, label: q, name, dom_id: el.id, required: requiredOf(el, q), options: [], selectors: [], multi: type === 'checkbox' };
+        const q = heading || groupLabel(el);
+        const req = requiredOf(el, q) || !!(grouped && grouped.querySelector('label[class*="required" i], legend[class*="required" i]'));
+        g = { kind: type, label: q, name, dom_id: el.id, required: req, options: [], selectors: [], multi: type === 'checkbox' };
         seenGroups.set(key, g); out.push(g);
       }
       g.options.push(optLabel); g.selectors.push(sel);
-      if (g.options.length === 1 && type === 'checkbox') g.label = optLabel;  // a lone consent box is its own question
+      if (heading) g.label = heading;
+      else if (g.options.length === 1 && type === 'checkbox') g.label = optLabel;  // a lone consent box is its own question
       else if (g.options.length === 2 && type === 'checkbox' && g.label === g.options[0]) g.label = groupLabel(el);
       return;
     }
@@ -148,6 +195,9 @@ DISCOVER_JS = r"""
     else if (type === 'file') kind = 'file';
     else if (el.getAttribute('role') === 'combobox' || el.getAttribute('aria-haspopup') === 'listbox' || el.getAttribute('aria-autocomplete')) kind = 'combobox';
     else if (['email', 'tel', 'url', 'number', 'date'].includes(type)) kind = type;
+    const around = (el.className || '') + ' ' + (el.getAttribute('placeholder') || '') + ' ' +
+      ((el.closest('.react-datepicker-wrapper, [class*="datepicker"]') || {}).className || '');
+    if (kind === 'text' && /pick date|input-date|datepicker/i.test(around)) kind = 'date';
     out.push({ kind, label, name: el.name || '', dom_id: el.id || '', required: requiredOf(el, label), options, selectors: [sel], multi: false,
                accept: el.getAttribute('accept') || '' });
   });
@@ -275,10 +325,7 @@ def discover(page, url):
         pass
     if robot_check_page(page_text, _title_of(page)):
         raise FormError("a robot check (Cloudflare or similar) blocked the page; the agent does not get around robot checks")
-    if re.search(r"no longer (open|available|accepting)|job (is )?not found|this (job|position) (has been|is) (closed|filled)|"
-                 r"page (you are looking for )?(does not|doesn't) exist|^\s*404|404\s*(error|not found|page)|error\s*404|"
-                 r"^\s*page not found|the page you requested was not found|job (posting )?(is )?no longer exists",
-                 page_text[:1500], re.I | re.M):
+    if posting_closed(page_text, page.url):
         raise FormError("the posting is closed or gone")
     try:
         return read_form(page, ats, target)
@@ -286,12 +333,21 @@ def discover(page, url):
         if "no application form" not in str(first):
             raise
         page.wait_for_timeout(3000)  # a single-page app may draw the form late
+        closed = _closed_now(page)
+        if closed:
+            raise FormError("the posting is closed or gone")
         try:
             return read_form(page, ats, target)
-        except FormError as e:
-            if ats or not (_open_embedded_form(page) or _open_apply_link(page)):
+        except FormError as again:
+            if "no application form" not in str(again):
                 raise
-        return read_form(page, detect_ats(page.url), page.url)  # the Apply link led on to the form, perhaps on an ATS we know
+            if not (_open_embedded_form(page) or _open_apply_link(page)):
+                if _closed_now(page):
+                    raise FormError("the posting is closed or gone")
+                raise
+        if _closed_now(page):
+            raise FormError("the posting is closed or gone")
+        return read_form(page, detect_ats(page.url), page.url)  # the Apply link or embedded frame led on to the form
 
 
 ROBOT_PAGE = re.compile(r"performing security verification|verifying you are human|verify you are human|checking if the site connection is secure|"
@@ -313,12 +369,42 @@ def _title_of(page):
 APPLY_LINK = re.compile(r"^\s*(apply( now| here| today| online| to position| for (this )?(job|position|role))?|apply to (this )?(job|position|role)|start (your )?application|i'?m interested)\s*$", re.I)
 
 
+CLOSED_PAGE = re.compile(r"no longer (open|available|accepting)|job (is )?not found|this (job|position) (has been|is) (closed|filled)|"
+                         r"page (you are looking for )?(does not|doesn't) exist|^\s*404|404\s*(error|not found|page)|error\s*404|"
+                         r"^\s*page not found|the page you requested was not found|job (posting )?(is )?no longer exists|"
+                         r"\bnotFound=1\b", re.I | re.M)
+
+
+def posting_closed(text, url=""):
+    """True when the posting itself is gone, including an iCIMS frame whose address says notFound=1."""
+    blob = f"{text or ''}\n{url or ''}"
+    return bool(CLOSED_PAGE.search(blob[:2500]))
+
+
+def _closed_now(page):
+    try:
+        text = page.inner_text("body", timeout=3000)
+    except Exception:  # noqa: BLE001
+        text = ""
+    urls = " ".join(frame.url or "" for frame in page.frames)
+    return posting_closed(text, urls)
+
+
+def _frame_is_form(url):
+    """An embedded application (Greenhouse's job_app frame), not a map or a CAPTCHA frame."""
+    parts = urllib.parse.urlparse(url or "")
+    host = parts.netloc.lower()
+    if any(host == known or host.endswith("." + known) for hosts in ATS_HOSTS.values() for known in hosts):
+        return True
+    return bool(re.search(r"apply|application|job_app", url or "", re.I)) and "recaptcha" not in host
+
+
 def _open_embedded_form(page):
     """A posting that shows the application in an iframe (Comeet, an embedded Greenhouse): open the frame's own page. True when it did."""
     here = urllib.parse.urlparse(page.url).netloc
     for frame in page.frames[1:]:
         url = frame.url
-        if url.startswith("http") and urllib.parse.urlparse(url).netloc != here and re.search(r"apply|application", url, re.I):
+        if url.startswith("http") and urllib.parse.urlparse(url).netloc != here and _frame_is_form(url):
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
             except Exception:  # noqa: BLE001 - a frame that will not open leaves the page as it was
@@ -332,26 +418,32 @@ def _open_embedded_form(page):
     return False
 
 
+def _follow_apply(page, el):
+    """Open this Apply control. An address is followed directly, because a banner can sit over the click."""
+    href = el.get_attribute("href") or ""
+    if href.startswith(("http://", "https://", "/")):
+        page.goto(urllib.parse.urljoin(page.url, href), wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
+    else:
+        el.click(timeout=5000)
+    try:
+        page.wait_for_load_state("networkidle", timeout=15000)
+    except Exception:  # noqa: BLE001
+        pass
+    page.wait_for_timeout(2000)  # the form may open on the same address (Rippling), so a changed page is not the test
+    return True
+
+
 def _open_apply_link(page):
-    """On a posting page that is not itself a form, follow its own Apply link once. True when the page changed."""
+    """On a posting page that is not itself a form, follow its own Apply link once. True when it did."""
     try:
         for kind in ("link", "button"):
             loc = page.get_by_role(kind, name=APPLY_LINK)
-            if not loc.count():
-                continue
-            el = loc.first
-            href = (el.get_attribute("href") or "") if kind == "link" else ""
-            before = page.url
-            if href.startswith(("http://", "https://", "/")):
-                page.goto(urllib.parse.urljoin(page.url, href), wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
-            else:
-                el.click(timeout=5000)
-            try:
-                page.wait_for_load_state("networkidle", timeout=15000)
-            except Exception:  # noqa: BLE001
-                pass
-            page.wait_for_timeout(2000)  # the form may open on the same address (Rippling), so a changed page is not the test
-            return True
+            if loc.count():
+                return _follow_apply(page, loc.first)
+        # The visible word is Apply, but the accessible name is the whole card (Paycom).
+        for el in page.locator("a[href]").all()[:25]:
+            if APPLY_LINK.match(re.sub(r"\s+", " ", el.inner_text() or "").strip()):
+                return _follow_apply(page, el)
     except Exception:  # noqa: BLE001 - no usable Apply link means no form was found, which is reported
         return False
     return False
@@ -365,6 +457,8 @@ def read_form(page, ats, target):
     seen = {}
     for f in form.fields:
         f.label = re.split(r"No location found|Couldn't auto-read|Analyzing resume|Autofill", f.label)[0].strip() or f.label
+        f.label = re.sub(r"([A-Za-z])(Select a state)\b", r"\1 \2", f.label, flags=re.I)
+        f.label = re.split(r"\bSelect a state\b", f.label, maxsplit=1, flags=re.I)[0].strip(" -:") or f.label
         base = normalize_label(f.label or f.name or f.dom_id) or "field"
         seen[base] = seen.get(base, 0) + 1
         f.key = base if seen[base] == 1 else f"{base} {seen[base]}"
@@ -419,18 +513,42 @@ def _fill_combobox(page, f, value):
     page.wait_for_timeout(700)
     options = _visible_options(page, f.selectors[0])
     texts = [t.strip() for t in options.all_inner_texts()]
-    pick = best_option(texts, value) or (texts[0] if texts and f.key.startswith(("location", "current location")) else None)
+    pick = best_option(texts, value) or (texts[0] if texts and f.key.startswith(("location", "current location", "home location", "your location")) else None)
     if pick is None:
         page.keyboard.press("Escape")
         raise FormError(f"no option matches {value!r} (choices: {texts[:6]})")
     options.nth(texts.index(pick)).click(timeout=4000)
 
 
+def _fill_date(page, sel, value):
+    """A calendar (Ashby's react-datepicker) rejects words like 'Immediately'. Type a date, or click today."""
+    text = str(value).strip()
+    if not re.match(r"\d{1,2}/\d{1,2}/\d{4}$", text):
+        from datetime import date
+        text = date.today().strftime("%m/%d/%Y")
+    box = page.locator(sel).first
+    box.click(timeout=4000)
+    box.fill(text, timeout=5000)
+    try:
+        stuck = (box.input_value(timeout=2000) or "").strip()
+    except Exception:  # noqa: BLE001
+        stuck = ""
+    if stuck:
+        return
+    today = page.locator(".react-datepicker__day--today").first
+    if today.count():
+        today.click(timeout=4000)
+        return
+    raise FormError(f"could not set the date {text}")
+
+
 def _fill_one(page, f, value):
     sel = f.selectors[0]
     if f.kind == "file":
         page.locator(sel).first.set_input_files(str(value))
-    elif f.kind in ("text", "email", "tel", "url", "number", "date", "textarea"):
+    elif f.kind == "date":
+        _fill_date(page, sel, value)
+    elif f.kind in ("text", "email", "tel", "url", "number", "textarea"):
         page.locator(sel).first.fill(str(value), timeout=5000)
     elif f.kind == "select":
         pick = best_option([o for o in f.options if not re.match(r"^(select|choose)\b", o, re.I)], value)
