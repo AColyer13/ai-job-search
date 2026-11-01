@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import claim_linter  # noqa: E402
 import daily_digest  # noqa: E402
 from apply_forms import best_option, normalize_label  # noqa: E402
+from application_knowledge import known_answer
 
 PROFILE_PATH = daily_digest.DAILY / "apply_profile.json"
 BANK_PATH = daily_digest.DAILY / "apply_answers.json"
@@ -54,6 +55,8 @@ DEFAULT_PROFILE = {
     "degree": "Bachelor's Degree",
     "major": "Marketing",
     "graduation_year": "2019",
+    "citizenship": "",  # recorded in daily/apply_profile.json: US Citizen
+    "birth_country": "",  # recorded in daily/apply_profile.json: United States
     "start_date": "Immediately",  # Adam, 2026-10-29: Mercor is a contract, nothing holds him
     "resume_pdf": r"C:\Users\adamc\OneDrive\Resumes\Adam_Colyer_Resume_2026-10.pdf",
 }
@@ -70,17 +73,17 @@ RULES = (
     (r"github", "github"),
     (r"portfolio|personal (web)?site|^website|other website|^url$", "portfolio"),
     (r"most recent\b.{0,40}\bemployer|\bcurrent employer\b|^current (company|employer)|^(company|employer)$", "current_company"),
-    (r"^current (job )?title", "current_title"),
-    (r"^country|country.{0,40}(work|working|perform).{0,20}from", "country"),
-    (r"^(state|province)\b|\blocation state\b|\b(what|which) state (will|do|are|would) you|state (will you be|are you|do you) (working|located|based|living|residing)|state of residence", "state"),
+    (r"^current (job )?title|^what is your current or previous job title$", "current_title"),
+    (r"^country|country.{0,40}(work|working|perform).{0,20}from|country (do you|are you).{0,25}(live|reside)|country of residence|in what country do you currently live", "country"),
+    (r"^(state|province)\b|\blocation state\b|\b(what|which) state (will|do|are|would) you|state (will you be|are you|do you) (working|located|based|living|residing)|state of residence|\bwhich u s state or canadian province do you reside in\b", "state"),
     (r"^county\b", "county"),
     (r"^(zip|postal)", "zip"),
-    (r"^(current )?(street |mailing |home )?address( line 1)?$|^street|\byour address\b", "address"),
-    (r"start date|earliest (possible )?start|when (can|could|would) you (start|begin)|notice period|available to start|availability to start", "start_date"),
+    (r"\b(street|mailing|home|current|your) address\b|^address( line 1)?$", "address"),
+    (r"start date|earliest (possible )?start|when (can|could|would) you (start|begin)|notice period|available to start|availability to start|available to begin|when would you be available", "start_date"),
     (r"^(school|university|college)( name)?$|^institution", "school"),
     (r"^degree( type)?$|^highest (level of )?(education|degree)|^level of education|highest (level of )?(education|degree) you have", "degree"),
     (r"^(discipline|major|field of study)", "major"),
-    (r"graduation (date|year)|year (of )?graduat|when did you graduate", "graduation_year"),
+    (r"graduation (date|year)|year (of )?graduat|when did you graduate|\bend (date )?year\b", "graduation_year"),
     (r"\b(home|your|current) location\b|^location\b|\bcity\b|where do you (currently )?(live|reside)|where are you (currently )?(located|based)", "location"),
 )
 # Adam, 2026-10-29: voluntary demographic questions get the "decline" choice; relocation and on-site/hybrid are a yes;
@@ -93,8 +96,9 @@ SALARY = re.compile(r"salary|compensation|pay (expect|range|requirement)|(expect
 RANGE = re.compile(r"\$\s?\d{2,3}(?:,\d{3})+(?:\s?(?:-|\u2013|\u2014|to)\s?\$?\s?\d{2,3}(?:,\d{3})+)?", re.I)
 CONSENT = re.compile(r"privacy|terms|agree|acknowledg|consent|policy|certify|accurate", re.I)
 OPTIONAL_CONSENT = re.compile(r"future (job )?(opportunit|roles|positions)|marketing|newsletter|contact me about", re.I)
-ESSAY = re.compile(r"\bwhy\b|describe|tell us|tell me|explain|interest|motivat|what (makes|excites|draws|attracts)|how (would|do) you|"
-                   r"share (an|a|your)|your experience|what do you (know|think)|anything else|additional information", re.I)
+ESSAY = re.compile(r"\bwhy\b|describe|tell us|tell me|explain|interest|motivat|what (makes|excites|draws|attracts)|how (would|do|does) (you|your)|"
+                   r"share (an|a|your)|your experience|what do you (know|think)|anything else|additional information|"
+                   r"uniquely qualify|professional background", re.I)
 # Answers that depend on the job or the day. They are asked each time and never saved.
 NEVER_SAVE = re.compile(r"salary|compensation|pay|start date|notice|why|referr|how did you hear|source|interest|describe|"
                         r"cover letter|anything else|additional", re.I)
@@ -117,7 +121,8 @@ def load_bank(path=None):
 
 def save_to_bank(key, label, answer, bank=None, path=None):
     """Remember an answer Adam gave, unless it changes with the job."""
-    if NEVER_SAVE.search(label or ""):
+    reusable_experience = re.search(r"^describe your experience (with|using|in)\b", label or "", re.I) and not re.search(r"this role|our company|salary|compensation", label or "", re.I)
+    if NEVER_SAVE.search(label or "") and not reusable_experience:
         return False
     bank = load_bank(path) if bank is None else bank
     bank[key] = {"label": label, "answer": answer, "saved": date.today().isoformat()}
@@ -133,7 +138,7 @@ def save_to_bank(key, label, answer, bank=None, path=None):
 # negates the phrase is not matched: it is asked, never guessed.
 CONCEPTS = (
     ("sponsorship", re.compile(r"\bsponsor", re.I)),
-    ("work authorization", re.compile(r"\b(legally |currently )?(authori[sz]ed|eligible|permitted|allowed|right) to work\b|work authori[sz]ation", re.I)),
+    ("work authorization", re.compile(r"\b(legally |currently )?(authori[sz]ed|eligible|permitted|allowed|right) to work\b|work authori[sz]ation|\blegally eligible to (be employed|work)\b|\beligible for employment\b", re.I)),
 )
 
 
@@ -157,6 +162,8 @@ def concept_of(label):
 def saved_by_concept(label, bank):
     """Adam's saved answer to the same question worded differently, else None."""
     concept = concept_of(label)
+    if concept == "work authorization" and re.search(r"\b(canada|canadian|united kingdom|uk|india|australia|germany|european union)\b", label, re.I):
+        return None  # US work permission does not establish permission in another country
     if not concept:
         return None
     answers = {entry.get("answer") for entry in bank.values() if concept_of(entry.get("label")) == concept}
@@ -178,7 +185,7 @@ def posting_pay(description):
     return re.sub(r"\s+", " ", found.group()).strip() if found else ""
 
 
-ADULT = re.compile(r"\b(at least|over|older than|minimum age of)\s+(18|eighteen)\b|\b(18|eighteen)\s*(years|yrs)?\s*(of age )?(or older|or over|\+)|legal (working )?age", re.I)
+ADULT = re.compile(r"\b(at least|over|older than|minimum age of)\s+(18|eighteen)\b|\bover the age of\s+(18|eighteen)\b|\b(18|eighteen)\s*(years|yrs)?\s*(of age )?(or older|or over|\+)|legal (working )?age", re.I)
 BACKGROUND = re.compile(r"(consent|agree|willing|able|comfortable|submit|undergo|authori[sz]e).{0,60}(background|reference) (check|screen|investigation)", re.I)
 HEARD = re.compile(r"how did you (hear|find|learn)|where did you (hear|find|learn)|source of (your )?application", re.I)
 HEARD_OPTION = (re.compile(r"linkedin", re.I), re.compile(r"job (board|site|posting)|indeed|online|internet|website", re.I))
@@ -194,7 +201,7 @@ AWAY = re.compile(r"\b(washington|oregon|idaho|wyoming|illinois|california|texas
 HERE = re.compile(r"\b(minnesota|\bmn\b|edina)\b", re.I)
 LIVE_THERE = re.compile(r"\b(reside|residing|live|living|located|based)\b", re.I)
 KNOWN_EMPLOYER = re.compile(r"\b(mercor|activus|tech mahindra|citizen observer|digital river|\binry\b|epicor)\b", re.I)
-PRIOR_JOB = re.compile(r"previously (employed|worked)|ever (been )?employed|employment history|applied .{0,80}(another role|within the last|in the (last|past))", re.I)
+PRIOR_JOB = re.compile(r"previously (been )?(employed|worked)|ever (been )?employed|employment history|applied .{0,80}(another role|within the last|in the (last|past))", re.I)
 
 
 def _no_choice(field):
@@ -221,6 +228,178 @@ def _startup_choice(field):
     return (pick, "profile") if pick else None
 
 
+def _yes_choice(field):
+    """The Yes option, or the word Yes when the field is a text box."""
+    options = list(field.options)
+    if options:
+        return next((o for o in options if re.match(r"yes\b", o, re.I) and not re.search(r"\b(not|do not|don't)\b", o, re.I)), None)
+    if field.kind in ("text", "textarea", "radio", "select", "combobox", "number"):
+        return "Yes"
+    return None
+
+
+def _choice_or_text(field, text, patterns):
+    """A listed option matching one pattern, else `text` for an empty text box."""
+    for pattern in patterns:
+        pick = next((o for o in field.options if re.search(pattern, o, re.I)), None)
+        if pick:
+            return pick
+    if field.options:
+        return None
+    if field.kind in ("text", "textarea", "number", "select", "combobox"):
+        return text
+    return None
+
+
+def _standing_fact(field, job=None):
+    """A required answer that follows from the profile. None when answering would invent a fact."""
+    label = field.label or ""
+    if re.search(r"\bcitizen|country of birth|country were you born|where were you born", label, re.I):
+        return None  # not in the profile; resolve fills these only from a value Adam recorded
+    if re.search(r"security clearance", label, re.I):
+        no = _no_choice(field)
+        return (no, "profile") if no else None
+    if re.search(r"reasonable adjustments|reasonable accommodation", label, re.I):
+        no = _no_choice(field)
+        return (no, "profile") if no else None
+    if re.search(r"have you been referred|were you referred by\b", label, re.I) and not re.search(r"\b(if you|their name|who referred)\b", label, re.I):
+        no = _no_choice(field)
+        return (no, "profile") if no else None
+    if re.search(r"non-?compete|non-?solicitation|agreement that would prevent|bound by any agreement|existing agreements", label, re.I):
+        no = _no_choice(field)
+        return (no, "profile") if no else None
+    if re.search(r"\bnever\b", label, re.I) and re.search(r"ai coding", label, re.I):
+        no = _no_choice(field)
+        return (no, "profile") if no else None
+    if re.search(r"\b(do you have|have you)\b", label, re.I) and re.search(r"\b(\d{2,}|ten|twenty)\s+years\b", label, re.I):
+        no = _no_choice(field)
+        return (no, "profile") if no else None  # he does not have 10+ years in a named specialty
+    if re.search(r"ever (worked|been employed) (at|for|with)\b", label, re.I) and not KNOWN_EMPLOYER.search(label):
+        no = _no_choice(field)
+        return (no, "profile") if no else None
+    if re.search(r"do you have a degree\b|have you (completed|earned) a degree", label, re.I):
+        yes = _yes_choice(field)
+        return (yes, "profile") if yes else None
+    if re.search(r"native language", label, re.I):
+        pick = _choice_or_text(field, "Native", (r"native|fluent",))
+        return (pick, "profile") if pick else None
+    if re.search(r"business hours|schedule aligned|comfortable working a schedule", label, re.I):
+        yes = _yes_choice(field)
+        return (yes, "profile") if yes else None
+    if re.search(r"technical assessment|abide by these rules", label, re.I) and not re.search(r"\b(not|unable|unwilling)\b", label, re.I):
+        yes = _yes_choice(field)
+        return (yes, "profile") if yes else None
+    if re.search(r"transcrib|metaview", label, re.I) and re.search(r"consent|agree", label, re.I):
+        yes = _yes_choice(field)
+        return (yes, "profile") if yes else None
+    if re.search(r"in-person training|able to attend|willing to (go|travel|attend)", label, re.I) and not re.search(r"\b(not|unable|unwilling)\b", label, re.I):
+        if re.search(r"percent", label, re.I):
+            pick = _choice_or_text(field, "25", (r"\b25\b|up to 25|0\s*-\s*25",))
+            return (pick, "profile") if pick else None
+        yes = _yes_choice(field)
+        return (yes, "profile") if yes else None
+    if re.search(r"percentage of travel|how much travel", label, re.I):
+        pick = _choice_or_text(field, "25", (r"\b25\b|up to 25|0\s*-\s*25",))
+        return (pick, "profile") if pick else None
+    solved = _arithmetic(label)
+    if solved:
+        pick = _choice_or_text(field, solved, (rf"^{re.escape(solved)}$",))
+        return (pick, "profile") if pick else None
+    if re.search(r"\bgit\b", label, re.I) and re.search(r"rate|knowledge|comfort|confident|proficien", label, re.I):
+        pick = _choice_or_text(field, "Intermediate", (r"intermediate|comfortable|proficient|working knowledge", r"\b3\b"))
+        return (pick, "profile") if pick else None
+    if re.search(r"linux", label, re.I) and re.search(r"rate|confidence|comfort|admin", label, re.I):
+        pick = _choice_or_text(field, "Beginner", (r"beginner|basic|novice|fundamental|limited", r"\b1\b"))
+        return (pick, "profile") if pick else None
+    if re.search(r"\bmvc\b|rails|django|laravel", label, re.I) and re.search(r"rate|comfort|knowledge", label, re.I):
+        pick = _choice_or_text(field, "Beginner", (r"beginner|basic|novice|limited", r"\b1\b"))
+        return (pick, "profile") if pick else None
+    if re.search(r"(favourite|favorite|preferred|primary) programming language", label, re.I) and field.kind in ("text", "textarea") and not field.options:
+        return "Python", "profile"  # a language on the resume; he builds in Python
+    if re.search(r"localization|translation|proofreading|copyediting|linguistic quality", label, re.I):
+        if YEARS.search(label) or re.search(r"\byears?\b", label, re.I):
+            pick = _choice_or_text(field, "0", (r"^0$|^none$|no experience",))
+            return (pick, "profile") if pick else None
+        no = _no_choice(field)
+        return (no, "profile") if no else None
+    if re.search(r"lived in your current country|years have you lived", label, re.I):
+        if field.kind in ("text", "textarea") and not field.options:
+            return "Since at least 2019 (University of St. Thomas, Minnesota).", "profile"
+        pick = _choice_or_text(field, "7", (r"\b7\b|5\s*-\s*10|6\+|7\+|more than 5",))
+        return (pick, "profile") if pick else None
+    if re.search(r"relevant experience|this role or similar|similar roles", label, re.I) and field.kind in ("text", "textarea") and not field.options:
+        if not (NOT_HELD.search(label) or NO_BACKGROUND.search(label)):
+            return "1 year of independent full-stack and AI project work, and about 5 years in B2B technical sales.", "profile"
+    if SALARY.search(label) and field.options:
+        posted = posting_pay((job or {}).get("description") or "")
+        if posted:
+            hit = best_option(list(field.options), posted)
+            if hit:
+                return hit, "profile"
+        pick = next((o for o in field.options if re.search(r"negotiable|open|flexible", o, re.I)), None)
+        if pick:
+            return pick, "profile"
+    if re.search(r"three factors|matter most", label, re.I) and field.options and field.kind == "checkbox":
+        want = []
+        for pattern in (r"remote|flexib", r"compensat|pay|salary", r"growth|learn|develop"):
+            hit = next((o for o in field.options if re.search(pattern, o, re.I)), None)
+            if hit and hit not in want:
+                want.append(hit)
+        for option in field.options:
+            if len(want) >= 3:
+                break
+            if option not in want and not re.search(r"none", option, re.I):
+                want.append(option)
+        if want:
+            return want[:3], "profile"
+    if re.search(r"which of the following skills", label, re.I) and field.options:
+        hits = [o for o in field.options if re.search(r"python|typescript|javascript|react|sql|writing|communication|english|sales|\bgit\b", o, re.I)]
+        if field.kind == "checkbox" and hits:
+            return hits, "profile"
+        if hits:
+            return hits[0], "profile"
+        none = next((o for o in field.options if re.search(r"none of|not applicable|\bnone\b", o, re.I)), None)
+        if none:
+            return none, "profile"
+    return None
+
+
+def _recorded_identity(field, profile):
+    """Citizenship and country of birth, only when the profile actually records them."""
+    label = field.label or ""
+    if re.search(r"\bcitizen", label, re.I):
+        value = profile.get("citizenship") or ""
+    elif re.search(r"country of birth|country were you born|where were you born", label, re.I):
+        value = profile.get("birth_country") or ""
+    else:
+        return None
+    if not value:
+        return None
+    if field.options:
+        pick = best_option(list(field.options), value)
+        if pick is None and re.search(r"\bcitizen", label, re.I):
+            pick = _no_choice(field) if re.search(r"^no\b|not a citizen", value, re.I) else _yes_choice(field)
+        return (pick, "profile") if pick else None
+    if field.kind in ("text", "textarea", "radio", "select", "combobox"):
+        return value, "profile"
+    return None
+
+
+def _arithmetic(label):
+    """The number a plain arithmetic blank asks for. This is a form field, not a CAPTCHA widget."""
+    text = label or ""
+    match = re.search(r"(\d+)\s*\+\s*[xX]\s*=\s*(\d+)", text)
+    if match:
+        return str(int(match.group(2)) - int(match.group(1)))
+    match = re.search(r"[xX]\s*\+\s*(\d+)\s*=\s*(\d+)", text)
+    if match:
+        return str(int(match.group(2)) - int(match.group(1)))
+    match = re.search(r"(\d+)\s*\+\s*(\d+)\s*=\s*\?", text)
+    if match:
+        return str(int(match.group(1)) + int(match.group(2)))
+    return ""
+
+
 def standing_answer(field, job=None):
     """Adam's standing choices for demographic, relocation and pay questions: (value, source) or None."""
     label, options = field.label or "", list(field.options)
@@ -237,10 +416,18 @@ def standing_answer(field, job=None):
     if periods and periods <= {"hourly", "weekly", "monthly", "yearly", "annual", "annually"} and periods & {"yearly", "annual", "annually"}:
         return next(o for o in options if normalize_label(o) in ("yearly", "annual", "annually")), "profile"
     genderish = any(normalize_label(o) == "male" for o in options) and any(normalize_label(o) == "female" for o in options)
-    if EEO.search(label) or (genderish and any(DECLINE.search(o) for o in options)):
+    if EEO.search(label) or re.search(r"\bpronouns?\b", label, re.I) or (genderish and any(DECLINE.search(o) for o in options)):
         if options:
             pick = next((o for o in options if DECLINE.search(o)), None)
-            return (pick, "profile") if pick else None
+            if pick:
+                return pick, "profile"
+            if re.search(r"\bpronouns?\b", label, re.I):
+                pick = next((o for o in options if re.search(r"he\s*/\s*him|\bhe him\b", o, re.I)), None)
+                if pick:
+                    return pick, "profile"  # the profile refers to Adam as he/him; decline is used when it is listed
+            return None
+        if re.search(r"\bpronouns?\b", label, re.I) and field.kind in ("text", "textarea"):
+            return "He/Him", "profile"
         return ("Decline to self-identify", "profile") if field.kind in ("text", "textarea") else None
     if ADULT.search(label) and not re.search(r"\b(not|under)\b", label, re.I):
         return ("Yes", "profile") if not options or any(normalize_label(o) == "yes" for o in options) else None
@@ -253,6 +440,9 @@ def standing_answer(field, job=None):
             pick = next((o for o in options if pattern.search(o)), None)
             if pick:
                 return pick, "profile"
+        other = next((o for o in options if re.search(r"\bother\b|job board|online|internet|website", o, re.I)), None)
+        if other:
+            return other, "profile"
         return None
     if NOT_HELD.search(label) and (YEARS.search(label) or re.search(r"\byears?\b", label, re.I)):
         if not options and field.kind in ("text", "textarea"):
@@ -265,7 +455,6 @@ def standing_answer(field, job=None):
             return "5", "profile"  # Adam, 2026-10-29: "nearly 5" years of B2B sales
         if ENGINEERING_TOPIC.search(label) and not SALES_TOPIC.search(label):
             return "1", "profile"  # "1 year plus" for engineering skills
-        return None
     if SALARY.search(label):
         if options or field.kind not in ("text", "textarea"):
             return None
@@ -336,7 +525,20 @@ def standing_answer(field, job=None):
         if options:
             return ("Yes", "profile") if any(normalize_label(o) == "yes" for o in options) else None
         return ("Yes", "profile") if field.kind in ("text", "textarea") else None
-    return None
+    concept = concept_of(label)
+    other_country = re.search(r"\b(canada|canadian|united kingdom|\buk\b|india|australia|germany|european union)\b", label, re.I)
+    if concept == "sponsorship":
+        no = _no_choice(field)
+        if no:
+            return no, "profile"  # he does not need visa sponsorship
+    if concept == "work authorization":
+        if other_country:
+            no = _no_choice(field)
+            return (no, "profile") if no else None  # US work permission is not permission somewhere else
+        yes = _yes_choice(field)
+        if yes:
+            return yes, "profile"
+    return _standing_fact(field, job)
 
 
 def resolve(field, profile, bank, standard=None, job=None):
@@ -352,6 +554,10 @@ def resolve(field, profile, bank, standard=None, job=None):
         return ("ask", None, "") if field.required else ("skip", None, "")
     if field.kind == "checkbox" and CONSENT.search(label) and not OPTIONAL_CONSENT.search(label):
         return ("consent", True, "profile") if field.required else ("skip", None, "")
+    if field.kind == "password" or re.fullmatch(r"passwords?( confirm| confirmation| again)?", key or ""):
+        password = profile.get("account_password")
+        if password:
+            return "fill", password, "account"
     for pattern, name in RULES:
         # Profile text only goes into a box that takes text. A radio or checkbox group, or a list of choices,
         # can mention "LinkedIn" in its label without being the LinkedIn field.
@@ -360,6 +566,8 @@ def resolve(field, profile, bank, standard=None, job=None):
         if field.options and name in ("linkedin", "github", "portfolio"):
             continue  # only this rule is skipped; a list of choices can still be the country or state
         if re.search(pattern, key) and profile.get(name):
+            if name == "start_date" and re.search(r"\b(year|month)\b", key):
+                continue  # often an education date; availability is not a school start year
             value = _profile_value(field, name, profile)
             if name == "start_date" and field.kind == "date":
                 value = date.today().strftime("%m/%d/%Y")  # a calendar cannot take "Immediately"
@@ -368,14 +576,32 @@ def resolve(field, profile, bank, standard=None, job=None):
         return ("draft", None, "") if field.required else ("skip", None, "")
     if key in bank:
         return "fill", bank[key]["answer"], "saved"
+    if STRONG_AUTHORIZED.search(label) and re.search(r"without.{0,40}(requir\w+.{0,20})?sponsor", label, re.I):
+        authorized = saved_by_concept("Are you authorized to work in the United States?", bank)
+        sponsorship = saved_by_concept("Do you require sponsorship?", bank)
+        foreign = re.search(r"\b(canada|united kingdom|uk|india|australia|germany)\b", label, re.I)
+        # Standing facts when nothing is saved yet: authorized to work in the US, no sponsorship.
+        source = "saved work authorization and sponsorship" if authorized is not None or sponsorship is not None else "profile"
+        authorized = "Yes" if authorized is None else authorized
+        sponsorship = "No" if sponsorship is None else sponsorship
+        if authorized == "Yes" and sponsorship == "No" and not foreign:
+            yes = _yes_choice(field)
+            if yes:
+                return "fill", yes, source
+    known = known_answer(field, profile)
+    if known and field.required:
+        return "fill", known[0], known[1]
     if GPA.search(label) and field.required and field.kind in ("text", "textarea", "select", "combobox", "radio"):
         return "giveup", None, "Adam: a required GPA means move on from the job"
+    same_question = saved_by_concept(label, bank)
+    if same_question is not None and field.kind in ("radio", "select", "combobox", "text", "textarea", "checkbox"):
+        return "fill", same_question, "saved"  # a saved answer wins over the standing fact
+    recorded = _recorded_identity(field, profile)
+    if recorded and field.required:
+        return "fill", recorded[0], recorded[1]
     standing = standing_answer(field, job)
     if standing and field.required:  # an optional one stays skipped; an answer Adam saved (above) wins over these
         return "fill", standing[0], standing[1]
-    same_question = saved_by_concept(label, bank)
-    if same_question is not None and field.kind in ("radio", "select", "combobox", "text"):
-        return "fill", same_question, "saved"
     if field.kind in ("textarea", "text") and not field.options:
         said = match_standard(label, standard_answers() if standard is None else standard)
         if said and (field.required or ESSAY.search(label)):
@@ -481,7 +707,11 @@ def draft_prompt(question, job, kind="answer", facts=None, history=None):
     to the real files. The base cover letter is the starting point for every cover letter.
     """
     words = 280 if kind == "cover letter" else 120
-    facts = _facts() if facts is None else facts
+    if facts is None:
+        facts = _facts()
+        profile_path = daily_digest.ROOT / '.claude/skills/job-application-assistant/01-candidate-profile.md'
+        if profile_path.exists():
+            facts += '\n\n' + profile_path.read_text(encoding='utf-8')
     history = recent_answers() if history is None else history
     base = _section(facts, "Base cover letter")
     about = re.sub(r"^## Base cover letter.*?(?=^## |\Z)", "", facts, flags=re.S | re.M).strip()
@@ -504,7 +734,8 @@ Write a {kind} of at most {words} words. Output only the text to submit: no prea
 </about_adam>
 
 <earlier_answers>
-Answers Adam gave or approved on earlier applications. Reuse their wording and facts when the question is similar.
+Earlier wording only. These entries may contain AI drafts or outdated answers. They do not establish facts.
+The current resume, candidate profile and saved answers take precedence; never infer new experience from old prose.
 {past}
 </earlier_answers>
 

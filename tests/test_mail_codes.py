@@ -100,6 +100,37 @@ def test_confirmation_lookup_says_nothing_when_mail_cannot_be_read(monkeypatch):
     assert mail_codes.find_confirmation(time.time(), "Acme") is None
 
 
+@pytest.mark.parametrize("subject,body", [
+    ("Application update", "Thanks for applying to True Talent. Your security code is 482913."),
+    ("Application update", "It is true: we received your application to Globex."),
+])
+def test_code_prompts_and_shared_words_are_not_confirmation(subject, body):
+    assert not mail_codes.confirmation_matches(subject, body, "True Talent Solutions Partners")
+
+
+def test_confirmation_must_match_the_role_when_known():
+    body = "We received your application for Sales Engineer at Acme."
+    assert mail_codes.confirmation_matches("Thank you for applying", body, "Acme", "Sales Engineer")
+    assert not mail_codes.confirmation_matches("Thank you for applying", body, "Acme", "Software Engineer")
+
+
+def test_confirmation_older_than_forty_unrelated_messages_is_still_found():
+    now = time.time()
+    raws = [message("Ashby <no-reply@ashbyhq.com>", "Thank you for applying",
+                    "We received your application for Sales Engineer at Acme.", now - 20)]
+    raws += [message("Digest <news@example.com>", "News", "An unrelated newsletter", now - 1)] * 60
+    assert mail_codes.find_confirmation(now - 60, "Acme", role="Sales Engineer", creds=("fixture", "fixture"),
+                                        connect=lambda host: FakeBox(raws)) is True
+
+
+def test_a_mailbox_that_cannot_be_searched_is_not_a_negative_confirmation():
+    class FailedSearch(FakeBox):
+        def search(self, *args):
+            return "NO", [b"unavailable"]
+    assert mail_codes.find_confirmation(time.time(), "Acme", creds=("fixture", "fixture"),
+                                        connect=lambda host: FailedSearch([])) is None
+
+
 def test_a_missing_login_says_so_instead_of_guessing(monkeypatch):
     monkeypatch.setattr(mail_codes, "credentials", lambda env=None: None)
     code, note = mail_codes.fetch_code(time.time(), timeout=0)
@@ -132,6 +163,36 @@ def test_it_waits_for_the_email_to_arrive():
 def test_credentials_are_read_from_env_and_spaces_in_an_app_password_are_dropped():
     assert mail_codes.credentials({"GMAIL_IMAP_USER": "a@b.co", "GMAIL_IMAP_PASSWORD": "abcd efgh ijkl mnop"}) == ("a@b.co", "abcdefghijklmnop")
     assert mail_codes.credentials({"GMAIL_IMAP_USER": "a@b.co"}) is None
+
+
+def html_message(sender, subject, html, when):
+    msg = EmailMessage()
+    msg["From"], msg["Subject"], msg["Date"] = sender, subject, format_datetime(datetime.fromtimestamp(when, timezone.utc))
+    msg.set_content("Please verify your email address.")
+    msg.add_alternative(html, subtype="html")
+    return msg.as_bytes()
+
+
+def test_a_workday_verification_link_is_opened_and_other_links_are_not():
+    hrefs = [
+        "https://salesforce.wd12.myworkdayjobs.com/en-US/site/activate?token=abc",
+        "https://salesforce.wd12.myworkdayjobs.com/unsubscribe",
+        "https://evil.example/verify?token=no",
+    ]
+    assert mail_codes.extract_verify_link("Verify your email", "Please verify your email address.", hrefs) == hrefs[0]
+    assert mail_codes.extract_verify_link("Weekly jobs", "New roles", ["https://evil.example/verify"]) == ""
+    assert mail_codes.extract_verify_link("News", "Hello", ["https://salesforce.wd12.myworkdayjobs.com/en-US/site/home"]) == ""
+
+
+def test_the_verification_link_is_read_from_the_message_workday_sent():
+    now = time.time()
+    html = '<a href="https://acme.wd5.myworkdayjobs.com/en-US/careers/activate?token=abc">Verify Email</a>'
+    raws = [
+        html_message("Workday <noreply@myworkday.com>", "Verify your candidate account", html, now - 5),
+        html_message("Scam <x@evil.example>", "Verify your email", html, now - 1),
+    ]
+    url, note = mail_codes.fetch_verify_link(now - 20, creds=("a@b.co", "pw"), connect=lambda host: FakeBox(raws), timeout=0)
+    assert (url, note) == ("https://acme.wd5.myworkdayjobs.com/en-US/careers/activate?token=abc", "")
 
 
 def test_another_sites_code_is_taken_only_when_the_mail_names_the_company():

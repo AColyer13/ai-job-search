@@ -189,6 +189,7 @@ def add_entry(entries, *, url, status, day, by="AI", store=None, **fields):
             _merge_notes(entry, fields)
             return key, message
         entry["status"] = "applied"
+        entry.pop("submission_unconfirmed", None)
         entry["score_version"] = _git_rev("job_scraper/scoring.py")
         entry["applied_by"] = by
         entry["date_applied"] = day

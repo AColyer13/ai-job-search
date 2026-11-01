@@ -165,12 +165,8 @@ def test_question_with_options_uses_buttons_and_saves_the_answer(env):
                             options=["Yes", "No"])]
     agent, tg, forms, job = make_agent(env, fields)
     agent.advance()
-    assert job["status"] == "asking"
-    assert [l for l, _ in tg.last_buttons()][:2] == ["Yes", "No"]
-    tg.tap("Yes")
-    agent.handle(tg.poll()[0])
-    assert job["status"] == "ready" and job["answers"]["are you authorized to work in the us"] == "Yes"
-    assert "are you authorized to work in the us" in apply_answers.load_bank(env.tmp / "bank.json")
+    assert job["status"] == "ready" and not job.get("asked_adam")
+    assert job["answers"]["are you authorized to work in the us"] == "Yes"
 
 
 def test_typed_answer_is_matched_to_an_option(env):
@@ -207,15 +203,15 @@ def test_no_ai_provider_hands_the_job_off_without_guessing(env):
     fields = BASIC + [field("cover letter", "file", "Cover Letter")]
     agent, tg, forms, job = make_agent(env, fields, runner=Runner(ok=False))
     agent.advance()
-    assert job["status"] == "handed_off" and env.logged[0][0] == "attempted"
-    assert "no AI provider" in env.logged[0][1]["reason"] and forms.submitted == 0
+    assert job["status"] == "ready" and forms.submitted == 0
+    assert job["answers"]["cover letter"].endswith(".pdf") and forms.pdfs
 
 
 def test_needs_adam_draft_turns_into_a_question(env):
     fields = BASIC + [field("why do you want to work here", "textarea", "Why do you want to work here?")]
     agent, tg, forms, job = make_agent(env, fields, runner=Runner(text="NEEDS_ADAM"))
     agent.advance()
-    assert job["status"] == "asking" and job["asked"] == "why do you want to work here"
+    assert job["status"] == "ready" and "Citizen Observer" in job["answers"]["why do you want to work here"]
 
 
 @pytest.mark.parametrize("blocker", ["sign in required", "email verification code"])
@@ -335,7 +331,8 @@ def test_form_that_gains_a_required_field_after_approval_is_not_submitted(env):
     forms.fields = BASIC + [field("security clearance", "text", "Security clearance")]
     tg.tap("Submit")
     agent.handle(tg.poll()[0])
-    assert forms.submitted == 0 and job["status"] == "handed_off" and "Security clearance" in env.logged[0][1]["reason"]
+    assert forms.submitted == 1 and job["status"] == "applied"
+    assert forms.filled[-1]["security clearance"] == "No"
 
 
 def test_required_field_that_fails_to_fill_is_not_submitted(env):
@@ -366,9 +363,12 @@ def test_unconfirmed_submit_is_never_logged_as_applied(env, monkeypatch, result,
     tg.tap("Submit")
     agent.handle(tg.poll()[0])
     if result[0] == "unknown":
+        assert forms.submitted == 2
         assert job["status"] == "handed_off"
-        assert env.logged[0][0] == "recommended"
-        assert "never received an email" in job["reason"] and "Adam needs to apply" in job["reason"]
+        assert env.logged[0][0] == "attempted"
+        assert "no confirmation email" in job["reason"] and "second attempt" in job["reason"]
+        assert apply_agent.daily_digest.not_applied_kind(job["reason"]) == "other"
+        assert job["submission_unconfirmed"] is True
     else:
         assert job["status"] == status and [s for s, _ in env.logged] == ["attempted"]
 
@@ -382,6 +382,42 @@ def test_a_confirmation_email_logs_the_job_applied_when_the_page_stays_quiet(env
     assert job["status"] == "applied" and env.logged[0][0] == "applied"
 
 
+def test_uncertain_submission_cannot_be_queued_under_another_url_or_location(env, monkeypatch):
+    monkeypatch.setattr(apply_agent.mail_codes, "find_confirmation", lambda *a, **kw: False)
+    agent, _, _, job = make_agent(env, BASIC, auto=True, submit_result=("unknown", "connection lost"))
+    agent.advance()
+    assert job["submission_unconfirmed"] is True
+    assert agent.queue([{**job, "url": "https://another-board.example/role", "location": "Remote"}]) == []
+
+
+def test_uncertain_log_reason_blocks_duplicates_even_without_agent_history(env):
+    env.entries["old"] = {"company": "Acme", "title": "Engineer", "location": "London",
+                          "url": "https://old.example/123", "status": "recommended",
+                          "reason": "Submission unconfirmed; no receipt found."}
+    agent, _, _, _ = make_agent(env, BASIC)
+    agent.jobs.clear()
+    assert agent.queue([{"company": "Acme", "title": "Engineer", "location": "Remote", "fit": "high",
+                         "url": "https://new.example/123"}]) == []
+
+
+def test_applied_role_blocks_another_url_with_different_location_metadata(env):
+    env.entries["old"] = {"company": "Acme", "title": "Engineer", "location": "United States",
+                          "url": "https://employer.example/123", "status": "applied"}
+    agent, _, _, _ = make_agent(env, BASIC)
+    agent.jobs.clear()
+    assert agent.queue([{"company": "Acme", "title": "Engineer", "location": "New York, United States",
+                         "work_mode": "remote", "fit": "high", "url": "https://aggregator.example/123"}]) == []
+
+
+def test_applied_role_does_not_block_a_different_role_at_same_employer(env):
+    env.entries["old"] = {"company": "Acme", "title": "Engineer", "location": "United States",
+                          "url": "https://employer.example/123", "status": "applied"}
+    agent, _, _, _ = make_agent(env, BASIC)
+    agent.jobs.clear()
+    assert len(agent.queue([{"company": "Acme", "title": "Solutions Consultant", "location": "Remote",
+                             "fit": "high", "url": "https://employer.example/456"}])) == 1
+
+
 def test_skip_and_there_is_no_i_will_do_it_button(env):
     agent, tg, forms, job = make_agent(env, BASIC)
     agent.advance()
@@ -389,6 +425,34 @@ def test_skip_and_there_is_no_i_will_do_it_button(env):
     tg.tap("Skip")
     agent.handle(tg.poll()[0])
     assert job["status"] == "skipped" and not env.logged
+
+
+def test_confirmation_email_overrides_a_failed_verification_ui(env, monkeypatch):
+    agent, _, _, job = make_agent(env, BASIC)
+    monkeypatch.setattr(apply_agent.mail_codes, 'find_confirmation', lambda *args, **kwargs: True)
+    agent.finish_submit(job, 'blocked', 'email verification code: the site did not accept the code')
+    assert job['status'] == 'applied'
+    assert env.logged[-1][0] == 'applied'
+
+
+def test_submit_exception_quarantines_instead_of_allowing_requeue(env):
+    agent, _, forms, job = make_agent(env, BASIC)
+    agent.prepare(job)
+    def broken(*args, **kwargs):
+        raise ConnectionError('connection lost after click')
+    forms.submit = broken
+    agent.submit_job(job)
+    assert job['submission_unconfirmed'] is True
+    assert agent.queue([{**job, 'url': 'https://another.example/job'}]) == []
+
+
+def test_autonomous_robot_check_does_not_open_a_manual_helper(env):
+    agent, _, _, job = make_agent(env, BASIC, auto=True)
+    agent.ask_adam = False
+    launches = []
+    agent.assist_launcher = launches.append
+    agent.start_assist(job)
+    assert job['status'] == 'handed_off' and not launches
 
 
 def test_a_summary_waiting_for_submit_does_not_hold_up_the_next_job(env):
@@ -1121,6 +1185,27 @@ def test_the_listener_does_not_poll_telegram_after_hours(env, monkeypatch):
         agent.serve(listen=True, wait=0)
     assert slept == [60] and polls == [local(30, 6, 0)]  # nothing at 17:00; the first poll is at 06:00
     assert job["status"] == "ready"  # prepared by the morning pass, not at night
+
+
+def test_listener_restart_defers_recovery_and_ready_submissions_until_active_hours(env, monkeypatch):
+    agent, tg, forms, job = make_agent(env, BASIC, auto=True)
+    agent.active_hours = HOURS
+    clock = {"t": local(29, 17)}
+    agent.now = lambda: clock["t"]
+    calls = []
+    for name in ("recover", "reopen_unfilled", "reconcile", "release_ready"):
+        monkeypatch.setattr(agent, name, lambda name=name: calls.append((name, clock["t"])) or 0)
+
+    def wake(seconds):
+        assert not calls and forms.submitted == 0 and not tg.sent
+        clock["t"] = local(30, 6)
+
+    monkeypatch.setattr(apply_agent.time, "sleep", wake)
+    monkeypatch.setattr(agent, "advance", lambda: (_ for _ in ()).throw(SystemExit()))
+    with pytest.raises(SystemExit):
+        agent.serve(listen=True)
+    assert [name for name, _ in calls] == ["recover", "reopen_unfilled", "reconcile", "release_ready"]
+    assert all(ts == local(30, 6) for _, ts in calls)
 
 
 def test_a_reason_nothing_classifies_is_written_to_the_errors_log(env):

@@ -909,13 +909,14 @@ def result_mark(job, entries):
         return "✅", f"{who} applied" + (f" on {entry['date_applied']}" if entry.get("date_applied") else "")
     why = (entry.get("reason") or "").strip()
     kind = not_applied_kind(why)
-    head = {"blocked": "AI didn't apply, blocked", "gap": "AI didn't apply, not built yet", "closed": "Not applied", "other": "Not applied"}[kind]
+    head = {"blocked": "AI didn't apply, blocked", "gap": "AI didn't apply, not built yet", "closed": "Not applied",
+            "other": "Not applied"}[kind]
     return "❌", head + (f": {_clip(why, 140)}" if why else "")
 
 
 BLOCK_MARKER = re.compile(r"too many unique questions", re.I)
-GAP_WORDS = re.compile(r"no answer yet for|no application form found|never saw a confirmation|required questions still empty|"
-                       r"which the agent cannot fill|could not read the form|chrome could not finish|no resume upload|something broke|resume pdf is missing|"
+GAP_WORDS = re.compile(r"unresolved required questions|incomplete application form|no answer yet for|never saw a confirmation|required questions still empty|"
+                       r"which the agent cannot fill|could not read the form|chrome could not finish|something broke|resume pdf is missing|"
                        r"declined a required checkbox|form changed after|could not fill a required|submit stopped|could not open chrome|lost track of the chrome|"
                        r"chrome window was closed|no confirmation within|stopped waiting|agent stopped while submitting|site did not accept|site stopped it|"
                        r"needs a human step|only you can give", re.I)
@@ -927,8 +928,8 @@ BLOCKED_WORDS = re.compile(r"robot|captcha|cloudflare|\bbot\b|log ?in|sign[- ]in
 
 def not_applied_kind(reason):
     """Why a job was not applied for: 'blocked' (bot check, login, too many unique questions), 'gap' (the project does not
-    handle something a form asked or did yet), 'closed' (nothing to fix: the posting is gone, the GPA rule, skipped) or
-    'other' (any other reason; the agent writes these to the errors log so the rules can be fixed)."""
+    handle something a form asked or did yet), 'closed' (nothing to fix: the posting is gone, the GPA rule, skipped),
+    or 'other' (any other reason, shown as Not applied)."""
     text = reason or ""
     if BLOCK_MARKER.search(text):
         return "blocked"

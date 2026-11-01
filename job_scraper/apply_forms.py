@@ -158,7 +158,12 @@ DISCOVER_JS = r"""
 
   const out = [];
   const seenGroups = new Map();
-  const scope = document.querySelector('form') || document.body;
+  const firstForm = document.querySelector('form');
+  // Some ATSs split upload and contact details into separate forms within main.
+  // A standalone upload widget is not the whole application.
+  const uploadOnly = firstForm && firstForm.querySelector('input[type=file]') &&
+    !firstForm.querySelector('input:not([type=file]):not([type=hidden]):not([type=submit]):not([type=button]), textarea, select');
+  const scope = uploadOnly ? (firstForm.closest('main, [role=main]') || firstForm) : (firstForm || document.body);
   const els = scope.querySelectorAll('input, textarea, select, [role=combobox]');
   els.forEach((el, i) => {
     const type = (el.getAttribute('type') || el.tagName).toLowerCase();
@@ -194,6 +199,7 @@ DISCOVER_JS = r"""
     else if (el.tagName === 'SELECT') { kind = 'select'; options = Array.from(el.options).map(o => clean(o.textContent)).filter(Boolean); }
     else if (type === 'file') kind = 'file';
     else if (el.getAttribute('role') === 'combobox' || el.getAttribute('aria-haspopup') === 'listbox' || el.getAttribute('aria-autocomplete')) kind = 'combobox';
+    else if (type === 'password') kind = 'password';
     else if (['email', 'tel', 'url', 'number', 'date'].includes(type)) kind = type;
     const around = (el.className || '') + ' ' + (el.getAttribute('placeholder') || '') + ' ' +
       ((el.closest('.react-datepicker-wrapper, [class*="datepicker"]') || {}).className || '');
@@ -278,6 +284,154 @@ def application_url(url):
     return urllib.parse.urlunparse(parts._replace(path=path))
 
 
+def _body_text(page):
+    try:
+        return page.inner_text("body", timeout=2000)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _robotish(page):
+    """True when the page is showing a CAPTCHA or a bot-check interstitial. Never treated as something to solve."""
+    reason = blocker_on_page(page)
+    if reason in ("CAPTCHA", "hCaptcha on the form"):
+        return True
+    return robot_check_page(_body_text(page), _title_of(page))
+
+
+def _click_named(page, pattern, roles=("link", "button")):
+    try:
+        for role in roles:
+            loc = page.get_by_role(role, name=pattern)
+            if loc.count():
+                loc.first.click(timeout=4000)
+                page.wait_for_timeout(400)
+                return True
+    except Exception:  # noqa: BLE001
+        return False
+    return False
+
+
+EMAIL_LINK_PAGE = re.compile(
+    r"check your email|verification link|verify your email|sent you an email|activate your account|email (has been|was) sent",
+    re.I,
+)
+
+
+def _agree_to_terms(page):
+    """Check a terms box on a signup form. Other checkboxes are left alone."""
+    try:
+        boxes = page.locator("input[type=checkbox]")
+        for i in range(min(boxes.count(), 4)):
+            box = boxes.nth(i)
+            if box.is_checked():
+                continue
+            label = box.get_attribute("aria-label") or ""
+            try:
+                label += " " + (box.evaluate("el => ((el.closest('label') || el.parentElement).innerText || '')") or "")
+            except Exception:  # noqa: BLE001
+                pass
+            if re.search(r"agree|terms|privacy|consent", label, re.I):
+                box.check(timeout=2000)
+    except Exception:  # noqa: BLE001
+        return
+
+
+def _sign_in(page, profile):
+    """Fill a sign-in form that appears after the email link. A create-account form is left as it is."""
+    text = _body_text(page)
+    if not re.search(r"\bsign in\b|\blog in\b", text, re.I):
+        return "captcha" if _robotish(page) else "opened"
+    email = (profile or {}).get("email") or ""
+    password = (profile or {}).get("account_password") or ""
+    try:
+        emails = page.locator("input[type=email], input[name*=email i]")
+        passwords = page.locator("input[type=password]")
+        if emails.count() and passwords.count() and email and password:
+            emails.first.fill(email, timeout=4000)
+            passwords.first.fill(password, timeout=4000)
+    except Exception:  # noqa: BLE001
+        return "stuck"
+    if _robotish(page):
+        return "captcha"
+    _click_named(page, re.compile(r"^\s*(sign in|log in)\s*$", re.I), ("button",))
+    page.wait_for_timeout(600)
+    return "captcha" if _robotish(page) else "opened"
+
+
+def _open_email_link(page, profile, link_getter):
+    """Workday emails a link instead of a code. Open that link, then sign in if the page asks."""
+    url, _note = link_getter(time.time() - 30)
+    if not url:
+        return "unverified"
+    try:
+        page.goto(url, wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
+        page.wait_for_load_state("networkidle", timeout=15000)
+    except Exception as e:  # noqa: BLE001
+        if "Timeout" not in type(e).__name__:
+            return "stuck"
+    page.wait_for_timeout(1000)
+    if _robotish(page):
+        return "captcha"
+    return _sign_in(page, profile)
+
+
+def create_account(page, profile, code_getter=None, link_getter=None):
+    """Open Create account (or apply as a guest) and submit it with Adam's email.
+
+    Returns 'opened' when the next page can be read, 'captcha' when a robot check is in the way,
+    'unverified' when a verification email did not arrive, or 'stuck' when there is no signup form to fill.
+    This never solves a CAPTCHA. A Workday verification link is opened from Adam's own mailbox.
+    """
+    if _robotish(page):
+        return "captcha"
+    if _click_named(page, re.compile(r"apply without|continue as guest|without an account|apply as guest", re.I), ("link", "button")):
+        return "captcha" if _robotish(page) else "opened"
+    # A link only. The submit button is clicked after the fields are filled.
+    _click_named(page, re.compile(r"create (an )?account|sign up|register", re.I), ("link",))
+    if _robotish(page):
+        return "captcha"
+    email = (profile or {}).get("email") or ""
+    password = (profile or {}).get("account_password") or ""
+    if not email or not password:
+        return "stuck"
+    try:
+        emails = page.locator("input[type=email], input[name*=email i]")
+        passwords = page.locator("input[type=password]")
+        if not emails.count() or not passwords.count():
+            return "stuck"
+        emails.first.fill(email, timeout=4000)
+        for i in range(min(passwords.count(), 2)):
+            passwords.nth(i).fill(password, timeout=4000)
+        first = page.locator("input[autocomplete=given-name], input[name*=first i]")
+        last = page.locator("input[autocomplete=family-name], input[name*=last i]")
+        if first.count() and profile.get("first_name"):
+            first.first.fill(profile["first_name"], timeout=4000)
+        if last.count() and profile.get("last_name"):
+            last.first.fill(profile["last_name"], timeout=4000)
+        _agree_to_terms(page)
+    except Exception:  # noqa: BLE001
+        return "stuck"
+    if _robotish(page):
+        return "captcha"
+    if not _click_named(page, re.compile(r"create account|sign up|register|continue", re.I), ("button",)):
+        try:
+            page.locator("button[type=submit], input[type=submit]").first.click(timeout=4000)
+        except Exception:  # noqa: BLE001
+            return "stuck"
+    page.wait_for_timeout(600)
+    if _robotish(page):
+        return "captcha"
+    if code_getter and blocker_on_page(page) == "email verification code":
+        code, _note = code_getter(time.time() - 30)
+        if code and enter_code(page, code):
+            _click_named(page, re.compile(r"submit|continue|verify", re.I))
+        return "opened"
+    if link_getter and EMAIL_LINK_PAGE.search(_body_text(page) or ""):
+        return _open_email_link(page, profile, link_getter)
+    return "opened"
+
+
 def blocker_on_page(page):
     """A reason a person must take over (CAPTCHA, login, code), or ''."""
     for selector, reason in BLOCKER_SELECTORS:
@@ -328,7 +482,13 @@ def discover(page, url):
     if posting_closed(page_text, page.url):
         raise FormError("the posting is closed or gone")
     try:
-        return read_form(page, ats, target)
+        result = read_form(page, ats, target)
+        if result.fields and all(f.kind == "file" for f in result.fields):
+            page.wait_for_timeout(1500)  # resume widgets can precede the contact/questions UI
+            result = read_form(page, ats, target)
+            if all(f.kind == "file" for f in result.fields):
+                raise FormError("incomplete application form: only uploads were discovered; contact/questions are not ready")
+        return result
     except FormError as first:
         if "no application form" not in str(first):
             raise
@@ -341,13 +501,7 @@ def discover(page, url):
         except FormError as again:
             if "no application form" not in str(again):
                 raise
-            if not (_open_embedded_form(page) or _open_apply_link(page)):
-                if _closed_now(page):
-                    raise FormError("the posting is closed or gone")
-                raise
-        if _closed_now(page):
-            raise FormError("the posting is closed or gone")
-        return read_form(page, detect_ats(page.url), page.url)  # the Apply link or embedded frame led on to the form
+            return _follow_until_form(page, again)
 
 
 ROBOT_PAGE = re.compile(r"performing security verification|verifying you are human|verify you are human|checking if the site connection is secure|"
@@ -421,10 +575,11 @@ def _open_embedded_form(page):
 def _follow_apply(page, el):
     """Open this Apply control. An address is followed directly, because a banner can sit over the click."""
     href = el.get_attribute("href") or ""
-    if href.startswith(("http://", "https://", "/")):
+    if href.startswith(("http://", "https://", "/")) and not href.startswith("#"):
         page.goto(urllib.parse.urljoin(page.url, href), wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
     else:
-        el.click(timeout=5000)
+        _click_for_form(page, el)
+        return True
     try:
         page.wait_for_load_state("networkidle", timeout=15000)
     except Exception:  # noqa: BLE001
@@ -433,20 +588,254 @@ def _follow_apply(page, el):
     return True
 
 
-def _open_apply_link(page):
-    """On a posting page that is not itself a form, follow its own Apply link once. True when it did."""
+def _click_for_form(page, el):
+    """Click an Apply control, and open the new tab when the form is handed off that way."""
+    opened = {}
+
+    def grab(popup):
+        try:
+            popup.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT_MS)
+        except Exception:  # noqa: BLE001
+            pass
+        opened["url"] = popup.url
+
+    page.once("popup", grab)
+    el.click(timeout=5000)
+    page.wait_for_timeout(1500)
+    url = opened.get("url") or ""
+    if url.startswith("http") and not _same_doc(url, page.url):
+        page.goto(url, wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
     try:
-        for kind in ("link", "button"):
-            loc = page.get_by_role(kind, name=APPLY_LINK)
-            if loc.count():
-                return _follow_apply(page, loc.first)
-        # The visible word is Apply, but the accessible name is the whole card (Paycom).
-        for el in page.locator("a[href]").all()[:25]:
-            if APPLY_LINK.match(re.sub(r"\s+", " ", el.inner_text() or "").strip()):
-                return _follow_apply(page, el)
-    except Exception:  # noqa: BLE001 - no usable Apply link means no form was found, which is reported
+        page.wait_for_load_state("networkidle", timeout=8000)
+    except Exception:  # noqa: BLE001
+        pass
+    return True
+
+
+HOSTED_APPLY = re.compile(
+    r"greenhouse\.io|lever\.co|ashbyhq\.com|myworkdayjobs\.com|smartrecruiters\.com|"
+    r"workable\.com|icims\.com|jobvite\.com|breezy\.hr|rippling\.com|comeet\.co|recruitee\.com",
+    re.I,
+)
+APPLY_CONTROL = re.compile(
+    r"^(apply\b|start(?: your)? application|continue to (?:the )?application|i'?m interested)\b",
+    re.I,
+)
+SKIP_APPLY_TEXT = re.compile(
+    r"find me a job|share|save (this )?job|job alert|similar|tracker|privacy|accommodation|sign in|log ?in",
+    re.I,
+)
+SKIP_APPLY_URL = re.compile(
+    r"mailto:|javascript:|/auth/|login|sign-?in|application-tracker|facebook\.com|twitter\.com|linkedin\.com/share",
+    re.I,
+)
+APPLY_HREF = re.compile(r"(?:^|[/?#=&_-])apply(?:[/?#=&_.-]|$)|gh_jid|applyredirect|job_app", re.I)
+
+
+def _clean_url(raw):
+    text = (raw or "").replace("\\/", "/").replace("\\u0026", "&").strip()
+    text = text.split("\\")[0].strip(".,);\"' ")
+    return text if text.startswith("http") else ""
+
+
+def _same_doc(a, b):
+    def parts(url):
+        parsed = urllib.parse.urlsplit(url or "")
+        return (parsed.scheme.lower(), parsed.netloc.lower(), parsed.path.rstrip("/"), parsed.query)
+    return parts(a) == parts(b)
+
+
+def _job_url(url):
+    """An address worth opening. A script, a stylesheet, or a login page is not an application."""
+    cleaned = _clean_url(url)
+    if not cleaned or SKIP_APPLY_URL.search(cleaned):
+        return ""
+    if re.search(r"\.(js|css|png|jpe?g|svg|gif|webp)(?:$|\?)", cleaned, re.I):
+        return ""
+    if "/embed/job_board/js" in cleaned:
+        return ""
+    return cleaned
+
+
+def _page_html(page):
+    try:
+        return page.content()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _apply_urls(html, page_url):
+    """Where the application actually is, including an address that is not a button.
+
+    The first list is the page's own apply address (a Greenhouse embed, or applyLink in the page).
+    The second is any other Greenhouse, Lever, Ashby, or Workday job linked from the page.
+    """
+    html = html or ""
+    primary, hosted = [], []
+    board = re.search(r"greenhouse\.io/embed/job_board/js\?for=([A-Za-z0-9_-]+)", html, re.I)
+    jid = re.search(r"[?&]gh_jid=(\d+)", page_url or "") or re.search(r"[?&]gh_jid=(\d+)", html)
+    if board and jid:
+        primary.append(f"https://job-boards.greenhouse.io/{board.group(1)}/jobs/{jid.group(1)}")
+    for match in re.finditer(r'"(?:applyLink|applyUrl|apply_url|applicationUrl)"\s*:\s*"([^"]+)"', html):
+        primary.append(_clean_url(match.group(1)))
+    for match in re.finditer(r"https?:(?:\\?/\\?/|//)[^\"'\s<>]{8,400}", html, re.I):
+        url = _job_url(match.group(0))
+        if url and HOSTED_APPLY.search(url) and re.search(r"/jobs?/|gh_jid=", url, re.I):
+            hosted.append(url)
+    def unique(urls):
+        kept = []
+        for url in urls:
+            url = _job_url(url)
+            if url and url not in kept and not _same_doc(url, page_url):
+                kept.append(url)
+        return kept
+    return unique(primary), unique(hosted)
+
+
+def _split_controls(page):
+    leaving, clicks = [], []
+    try:
+        loc = page.locator("a[href], button, [role=button], [role=link]")
+        count = min(loc.count(), 120)
+    except Exception:  # noqa: BLE001
+        return leaving, clicks
+    for index in range(count):
+        el = loc.nth(index)
+        try:
+            if not el.is_visible():
+                continue
+            text = re.sub(r"\s+", " ", el.inner_text(timeout=1000) or "").strip().strip(" .>•")
+            href = el.get_attribute("href") or ""
+        except Exception:  # noqa: BLE001
+            continue
+        if not text or SKIP_APPLY_TEXT.search(text) or len(text) > 80:
+            continue
+        if re.match(r"apply (these|filters|filter)\b", text, re.I):
+            continue
+        absolute = urllib.parse.urljoin(page.url, href) if href.startswith(("http://", "https://", "/")) else ""
+        if absolute and SKIP_APPLY_URL.search(absolute):
+            continue
+        if not (APPLY_CONTROL.match(text) or (href and APPLY_HREF.search(href))):
+            continue
+        if absolute and not href.startswith("#") and not _same_doc(absolute, page.url):
+            leaving.append((absolute, el))
+        else:
+            clicks.append((text, el))
+    return leaving, clicks
+
+
+def _goto_url(page, url):
+    page.goto(url, wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
+    try:
+        page.wait_for_load_state("networkidle", timeout=15000)
+    except Exception:  # noqa: BLE001
+        pass
+    page.wait_for_timeout(2000)
+    return True
+
+
+def _open_next_application(page, seen):
+    """One step toward the form: the page's apply address, then a visible Apply control, then a hosted job link."""
+    primary, hosted = _apply_urls(_page_html(page), page.url)
+    for url in primary:
+        if url in seen:
+            continue
+        seen.add(url)
+        return _goto_url(page, url)
+    try:
+        leaving, clicks = _split_controls(page)
+    except Exception:  # noqa: BLE001
+        leaving, clicks = [], []
+    for url, el in leaving:
+        if url in seen:
+            continue
+        seen.add(url)
+        return _follow_apply(page, el)
+    for url in hosted:
+        if url in seen:
+            continue
+        seen.add(url)
+        return _goto_url(page, url)
+    if not hosted and _follow_hosted_apply(page, seen):
+        return True
+    for text, el in clicks:
+        key = "click:" + text[:80]
+        if key in seen:
+            continue
+        seen.add(key)
+        return _click_for_form(page, el)
+    return False
+
+
+def _follow_hosted_apply(page, seen=None):
+    """A posting with no form of its own often links to Greenhouse, Lever, Ashby, or Workday. Follow that link once."""
+    here = urllib.parse.urlparse(page.url or "").netloc.lower()
+    try:
+        for el in page.locator("a[href]").all()[:40]:
+            href = el.get_attribute("href") or ""
+            if not HOSTED_APPLY.search(href):
+                continue
+            absolute = urllib.parse.urljoin(page.url, href)
+            if not _job_url(absolute) or _same_doc(absolute, page.url):
+                continue
+            host = urllib.parse.urlparse(absolute).netloc.lower()
+            if not host or host == here:
+                continue
+            if seen is not None:
+                if absolute in seen:
+                    continue
+                seen.add(absolute)
+            return _follow_apply(page, el)
+    except Exception:  # noqa: BLE001 - no usable link means no form was found, which is reported
         return False
     return False
+
+
+def _open_apply_link(page):
+    """On a posting page that is not itself a form, follow its own Apply link once. True when it did."""
+    return _open_next_application(page, set())
+
+
+def _scroll_for_apply(page):
+    """An Apply button often sits below the posting. Bring it into view and let a late one draw."""
+    try:
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        page.wait_for_timeout(800)
+    except Exception:  # noqa: BLE001
+        return
+
+
+def _follow_until_form(page, last):
+    """The posting was not the form. Keep following Apply steps until the form is open."""
+    seen = set()
+    tried_frame = False
+    for _ in range(4):
+        if _closed_now(page):
+            raise FormError("the posting is closed or gone")
+        moved = _open_embedded_form(page) if not tried_frame else False
+        tried_frame = True
+        if not moved:
+            moved = _open_next_application(page, seen)
+        if not moved:
+            _scroll_for_apply(page)
+            moved = _open_next_application(page, seen)
+        if not moved:
+            break
+        try:
+            text = page.inner_text("body", timeout=3000)
+        except Exception:  # noqa: BLE001
+            text = ""
+        if robot_check_page(text, _title_of(page)):
+            raise FormError("a robot check (Cloudflare or similar) blocked the page; the agent does not get around robot checks")
+        if _closed_now(page):
+            raise FormError("the posting is closed or gone")
+        try:
+            return read_form(page, detect_ats(page.url), page.url)
+        except FormError as err:
+            if "no application form" not in str(err):
+                raise
+            last = err
+    raise last
 
 
 def read_form(page, ats, target):
@@ -515,6 +904,13 @@ def _fill_combobox(page, f, value):
     texts = [t.strip() for t in options.all_inner_texts()]
     pick = best_option(texts, value) or (texts[0] if texts and f.key.startswith(("location", "current location", "home location", "your location")) else None)
     if pick is None:
+        page.keyboard.press("Enter")
+        try:
+            typed = (box.input_value(timeout=1000) or "").strip()
+        except Exception:  # noqa: BLE001
+            typed = ""
+        if typed and (normalize_label(value) in normalize_label(typed) or normalize_label(typed) in normalize_label(value)):
+            return  # a searchable box that accepts the typed major, city, or country
         page.keyboard.press("Escape")
         raise FormError(f"no option matches {value!r} (choices: {texts[:6]})")
     options.nth(texts.index(pick)).click(timeout=4000)
@@ -548,7 +944,7 @@ def _fill_one(page, f, value):
         page.locator(sel).first.set_input_files(str(value))
     elif f.kind == "date":
         _fill_date(page, sel, value)
-    elif f.kind in ("text", "email", "tel", "url", "number", "textarea"):
+    elif f.kind in ("text", "email", "tel", "url", "number", "textarea", "password"):
         page.locator(sel).first.fill(str(value), timeout=5000)
     elif f.kind == "select":
         pick = best_option([o for o in f.options if not re.match(r"^(select|choose)\b", o, re.I)], value)
@@ -617,6 +1013,8 @@ def confirmed(page, before_url=""):
     """True when the page shows that the application was received."""
     if before_url and page.url != before_url and SUCCESS_URL.search(page.url):
         return True
+    if page.locator('input[required]:visible:not([disabled]), textarea[required]:visible:not([disabled]), select[required]:visible:not([disabled])').count():
+        return False  # boilerplate thanks text beside a still-editable form is not a receipt
     return bool(SUCCESS_TEXT.search(_scan_text(page)) or SUCCESS_TEXT.search(_page_text(page)))
 
 
@@ -646,9 +1044,17 @@ def enter_code(page, code):
 
 
 def _find_submit(page):
-    button = page.locator("button[type=submit]:visible, input[type=submit]:visible").first
+    application = page.get_by_role('button', name=re.compile(r'^submit application|^send application|^apply for this job', re.I)).first
+    if application.count():
+        return application
+    scope = page.locator('main, [role=main]').first
+    scope = scope if scope.count() else page
+    button = scope.locator("button[type=submit]:visible, input[type=submit]:visible").first
     if not button.count():
         button = page.get_by_role("button", name=re.compile(r"submit|apply", re.I)).first
+    if not button.count():
+        button = page.locator("a, button, [role=button], input[type=submit]").filter(
+            has_text=re.compile(r"^\s*(submit( application)?|send application|apply( now)?)\s*$", re.I)).first
     return button
 
 

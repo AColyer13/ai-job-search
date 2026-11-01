@@ -77,6 +77,8 @@ def test_apply_profile_matches_oracle_identity():
         profile = json.loads(saved.read_text(encoding="utf-8"))
         for key in ("email", "phone", "linkedin", "github", "portfolio", "location", "full_name"):
             assert profile[key] == ident[key], key
+        assert profile.get("citizenship") == "US Citizen"
+        assert profile.get("birth_country") == "United States"
 
 
 @pytest.mark.parametrize("path", [ROOT / "documents" / "cv" / "resume.md", ROOT / "documents" / "cv" / "application_facts.md"],

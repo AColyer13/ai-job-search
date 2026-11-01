@@ -5,6 +5,8 @@ ATS pages are local HTML served through Playwright request routing, Telegram and
 """
 import contextlib
 import json
+import csv
+import zipfile
 import sys
 from pathlib import Path
 
@@ -14,6 +16,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "job_scraper"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import apply_agent  # noqa: E402
 import apply_answers  # noqa: E402
+import applied_log
+import daily_digest
+import tracking_audit
 from test_apply_agent import FakeTelegram, Runner  # noqa: E402
 from test_apply_forms import GREENHOUSE, LEVER, ASHBY, CAPTCHA  # noqa: E402
 
@@ -97,7 +102,8 @@ def test_greenhouse_end_to_end(env):
     agent, tg, logged, _ = env
     job = add(agent, GH, "greenhouse")
     agent.advance()
-    assert job["status"] == "asking"  # work authorization and sponsorship are never guessed
+    assert job["status"] == "ready"  # work authorization and sponsorship are standing facts
+    assert job["answers"]["do you require sponsorship"] == "No"
     done = drive(agent, tg)
     assert done["status"] == "applied", [t for t, _ in tg.sent][-3:]
     assert logged[0][0] == "applied" and logged[0][1]["resume"].endswith("resume.pdf")
@@ -133,7 +139,7 @@ def test_captcha_page_is_prepared_and_left_for_adams_click(env):
     pages[GH] = CAPTCHA
     job = add(agent, GH, "greenhouse")
     agent.advance()
-    assert job["human_click"] and job["status"] == "asking" and not logged  # the agent still does everything but the click
+    assert job["human_click"] and job["status"] == "ready" and not logged  # filled, then Adam's last click on the robot check
     done = drive(agent, tg)
     assert done["status"] == "assisting" and agent.launched == [job["id"]]
 
@@ -176,33 +182,125 @@ def test_form_that_changes_after_approval_is_not_submitted(env):
     pages[GH] = GREENHOUSE.replace("<p id=\"err\">", '<div><label for="x">Security clearance *</label><input id="x" name="x" required></div><p id="err">')
     tg.tap("Submit")
     agent.handle(tg.poll()[0])
-    assert job["status"] == "handed_off" and logged[0][0] == "attempted" and "clearance" in logged[0][1]["reason"].lower()
+    assert job["status"] == "applied" and logged[0][0] == "applied"
 
 
-def test_with_asking_on_a_job_with_several_unanswered_questions_still_goes_to_adam(env):
-    agent, tg, logged, pages = env
-    agent.max_questions = 2  # asking is on in tests; several questions still mean Adam applies by hand
-    job = add(agent, GH, "greenhouse")
-    agent.advance()
-    assert job["status"] == "handed_off" and logged[0][0] == "attempted"
-    assert "too many unique questions" in logged[0][1]["reason"]
-
-
-def test_by_default_no_one_is_asked_a_missing_answer_is_a_gap_the_ai_logs(env):
-    agent, tg, logged, pages = env
-    agent.ask_adam = False
-    agent.max_questions = 5
-    job = add(agent, GH, "greenhouse")
-    agent.advance()
-    assert job["status"] == "handed_off" and logged[0][0] == "attempted"
-    assert "no answer yet for" in logged[0][1]["reason"]
-    assert not any(row for _, rows in tg.sent for r in (rows or []) for row in r if row[1].startswith("a:"))  # nothing was asked
-
-
-def test_too_many_unique_questions_is_blocked_not_a_gap(env):
+def test_several_standing_questions_are_answered_and_the_job_is_prepared(env):
     agent, tg, logged, pages = env
     agent.ask_adam = False
     agent.max_questions = 2
     job = add(agent, GH, "greenhouse")
     agent.advance()
-    assert job["status"] == "handed_off" and "too many unique questions" in logged[0][1]["reason"]
+    assert job["status"] == "ready" and not logged
+    assert job["answers"]["do you require sponsorship"] == "No"
+    assert job["answers"]["are you legally authorized to work in the united states"] == "Yes"
+    assert not any(row for _, rows in tg.sent for r in (rows or []) for row in r if row[1].startswith("a:"))
+
+
+def records_setup(env, tmp_path, monkeypatch, url, ats):
+    """Use production persistence, isolated entirely under the test directory."""
+    agent, tg, _, pages = env
+    daily = tmp_path / "records"
+    daily.mkdir()
+    monkeypatch.setattr(daily_digest, "DAILY", daily)
+    monkeypatch.setattr(daily_digest, "STORE_PATH", daily / "latest.json")
+    monkeypatch.setattr(daily_digest, "APPLIED_LOG_PATH", daily / "applied_for.json")
+    monkeypatch.setattr(applied_log, "LOG_PATH", daily / "applied_for.json")
+    monkeypatch.setattr(applied_log, "DOC_PATH", daily / "applied_for.docx")
+    monkeypatch.setattr(applied_log, "TRACKER_PATH", daily / "tracker.csv")
+    job = add(agent, url, ats)
+    job.update(title="Sales Engineer", location="Remote", body_status="opened")
+    daily_digest.STORE_PATH.write_text(json.dumps({"jobs": {daily_digest._key(url): job}, "sources": []}), encoding="utf-8")
+    bank = {key: {"label": key, "answer": value} for key, value in {
+        "are you legally authorized to work in the united states": "Yes",
+        "do you require sponsorship": "No",
+        "what is your favorite programming language": "Python",
+    }.items()}
+    agent.bank_path.write_text(json.dumps(bank), encoding="utf-8")
+    agent.log_write = apply_agent.log_result
+    agent.log_entries = applied_log.load_log
+    agent.auto_submit, agent.ask_adam = True, False
+    return agent, tg, job, daily
+
+
+def assert_records_agree(agent, job, daily):
+    entries = applied_log.load_log()
+    assert len(entries) == 1
+    entry = next(iter(entries.values()))
+    assert entry["status"] == "applied" and entry["resume"] == agent.profile["resume_pdf"]
+    with applied_log.TRACKER_PATH.open(encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert len(rows) == 1 and rows[0]["cv_file"] == agent.profile["resume_pdf"]
+    assert tracking_audit.audit(entries, agent.jobs, rows) == []
+    persisted = json.loads(agent.state_path.read_text(encoding="utf-8"))
+    assert persisted[job["id"]]["status"] == "applied"
+    for path in (daily / "latest.docx", applied_log.DOC_PATH):
+        with zipfile.ZipFile(path) as report:
+            xml = report.read("word/document.xml").decode()
+        assert "Sales Engineer" in xml and "AI applied" in xml
+
+
+@pytest.mark.parametrize("url,ats", [(GH, "greenhouse"), (LV, "lever"), (AB, "ashby")])
+def test_automatic_application_persists_through_reports_and_tracker(env, tmp_path, monkeypatch, url, ats):
+    agent, tg, job, daily = records_setup(env, tmp_path, monkeypatch, url, ats)
+    assert agent.advance()
+    assert job["status"] == "applied", [text for text, _ in tg.sent][-3:]
+    assert_records_agree(agent, job, daily)
+    assert agent.queue([job.copy()]) == []
+    assert agent.queue([{**job, "url": "https://other.example/same-role"}]) == []
+    assert_records_agree(agent, job, daily)
+
+
+def test_confirmed_handoff_reconciles_without_another_submission(env, tmp_path, monkeypatch):
+    agent, _, job, daily = records_setup(env, tmp_path, monkeypatch, AB, "ashby")
+    agent.advance()
+    job.update(status="handed_off", reason="No confirmation within 20 minutes", submission_unconfirmed=True)
+    agent.save()
+    monkeypatch.setattr(agent, "submit_job", lambda *a: pytest.fail("must not submit a confirmed job again"))
+    assert agent.reconcile() == 1
+    assert "submission_unconfirmed" not in job
+    assert_records_agree(agent, job, daily)
+
+
+def test_log_write_retry_restores_complete_records_without_resubmitting(env, tmp_path, monkeypatch):
+    agent, _, job, daily = records_setup(env, tmp_path, monkeypatch, AB, "ashby")
+    agent.log_write = lambda *a, **kw: False
+    agent.advance()
+    assert job["status"] == "applied" and job["unlogged"]["status"] == "applied"
+    agent.log_write = apply_agent.log_result
+    monkeypatch.setattr(agent, "submit_job", lambda *a: pytest.fail("retry must only write records"))
+    assert agent.retry_unlogged() == 1
+    assert "unlogged" not in job
+    assert_records_agree(agent, job, daily)
+
+
+@pytest.mark.parametrize("kind", ["receipt", "security_code", "wrong_role", "unreadable"])
+def test_email_fallback_preserves_evidence_and_prevents_duplicate_applications(env, tmp_path, monkeypatch, kind):
+    import time
+    from tests.test_mail_codes import FakeBox, message
+    agent, _, job, daily = records_setup(env, tmp_path, monkeypatch, AB, "ashby")
+    body = {
+        "receipt": "We received your application for Sales Engineer at Acme.",
+        "security_code": "Thanks for applying for Sales Engineer at Acme. Your security code is 482913.",
+        "wrong_role": "We received your application for Software Engineer at Acme.",
+        "unreadable": "",
+    }[kind]
+    raw = message("Ashby <no-reply@ashbyhq.com>", "Application update", body, time.time() - 1)
+    lookup = apply_agent.mail_codes.find_confirmation
+
+    def mail(since, company, role=""):
+        assert role == "Sales Engineer"
+        return lookup(since, company, role=role, creds=("fixture", "fixture"),
+                      connect=lambda host: FakeBox([raw], fail_login=kind == "unreadable"))
+
+    monkeypatch.setattr(apply_agent.mail_codes, "find_confirmation", mail)
+    monkeypatch.setattr(agent.forms, "submit", lambda *a, **kw: ("unknown", "connection ended before response"))
+    agent.advance()
+    if kind == "receipt":
+        assert_records_agree(agent, job, daily)
+    else:
+        assert job["status"] == "handed_off" and job["submission_unconfirmed"] is True
+        assert next(iter(applied_log.load_log().values()))["status"] != "applied"
+        assert not applied_log.TRACKER_PATH.exists()
+        assert "second attempt" in job["reason"]
+    assert agent.queue([job.copy()]) == []

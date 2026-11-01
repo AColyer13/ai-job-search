@@ -79,6 +79,29 @@ def resume(tmp_path):
     return str(f)
 
 
+def test_split_upload_widget_does_not_hide_application_questions(page):
+    page.set_content('<main><form><label>Resume<input type="file" required></label></form>'
+                     '<form><label>Full name<input name="full_name" required></label>'
+                     '<label>Email<input name="email" required></label>'
+                     '<label>Why this role?<textarea required></textarea></label></form></main>')
+    form = af.read_form(page, '', 'https://employer.example/apply')
+    assert len(form.fields) == 4
+    assert any('why this role' in f.key for f in form.fields)
+
+
+def test_thanks_boilerplate_is_not_confirmation_while_required_form_is_editable(page):
+    page.set_content('<form><input name="name" required value="Adam"><p>Thank you for your interest</p></form>')
+    assert not af.confirmed(page)
+    page.set_content('<h1>Your application has been received</h1>')
+    assert af.confirmed(page)
+
+
+def test_submit_prefers_the_application_over_a_newsletter_button(page):
+    page.set_content('<form><button type="submit" id="newsletter">Subscribe</button></form>'
+                     '<main><form><button type="submit" id="application">Submit Application</button></form></main>')
+    assert af._find_submit(page).get_attribute('id') == 'application'
+
+
 def load(page, html, ats="greenhouse"):
     page.set_content(html)
     return af.read_form(page, ats, "http://localhost/test")
@@ -232,9 +255,10 @@ def test_resolve_fills_known_profile_fields(key, expected):
     assert apply_answers.resolve(make(key), PROFILE, {})[:2] == ("fill", expected)
 
 
-def test_resolve_never_answers_legal_questions_on_its_own():
-    for key in ("are you authorized to work in the us", "do you require sponsorship", "do you have a security clearance"):
-        assert apply_answers.resolve(make(key), PROFILE, {})[0] == "ask", key
+def test_work_authorization_sponsorship_and_clearance_are_standing_facts():
+    assert apply_answers.resolve(make("are you authorized to work in the us", "radio", options=["Yes", "No"]), PROFILE, {})[:2] == ("fill", "Yes")
+    assert apply_answers.resolve(make("do you require sponsorship", "radio", options=["Yes", "No"]), PROFILE, {})[:2] == ("fill", "No")
+    assert apply_answers.resolve(make("do you have a security clearance", "radio", options=["Yes", "No"]), PROFILE, {})[:2] == ("fill", "No")
 
 
 def test_resolve_optional_unknown_fields_are_skipped():
@@ -292,8 +316,8 @@ def serve_page(page, url, html):
 
 def test_assist_fills_the_form_then_waits_for_a_persons_own_submit(page):
     url = "https://jobs.lever.co/a/b/apply"
-    later = LEVER.replace("</body>", "<script>setTimeout(() => document.body.insertAdjacentHTML('beforeend',"
-                                     "'<p>Thank you for applying</p>'), 2500)</script></body>")
+    later = LEVER.replace("</body>", "<script>setTimeout(() => document.body.innerHTML = "
+                                     "'<p>Thank you for applying</p>', 2500)</script></body>")
     serve_page(page, url, later)
     try:
         assert af.assist(page, "https://jobs.lever.co/a/b", {"full name": "Adam Colyer", "email": "a@b.co"}, 20) == ("submitted", "")
@@ -484,6 +508,107 @@ def test_a_login_wall_on_an_unknown_site_is_reported_not_logged_into(page):
     assert "login" in af.discover(page, "https://careers.example.org/jobs/4").blocker.lower()
 
 
+def test_create_account_fills_email_and_password_then_submits(page):
+    page.set_content("""<form onsubmit="event.preventDefault(); this.dataset.sent='yes'">
+      <input type="email" name="email"><input type="password" name="password">
+      <input type="password" name="confirm"><button type="submit">Create account</button></form>""")
+    profile = {**apply_answers.DEFAULT_PROFILE, "account_password": "correct horse"}
+    assert af.create_account(page, profile) == "opened"
+    assert page.input_value("input[name=email]") == profile["email"]
+    assert page.input_value("input[name=password]") == "correct horse"
+    assert page.locator("form").get_attribute("data-sent") == "yes"
+
+
+def test_a_workday_account_opens_the_email_link_and_signs_in(page):
+    page.set_content("""<form onsubmit="event.preventDefault(); if (!this.terms.checked) return;
+      document.body.innerHTML = '<p>Check your email to verify your account.</p>';">
+      <input type="email" name="email"><input type="password" name="password"><input type="password" name="confirm">
+      <label><input type="checkbox" name="terms"> I agree to the terms</label>
+      <button type="submit">Create account</button></form>""")
+    serve_page(page, "https://acme.wd5.myworkdayjobs.com/en-US/site/login", """
+      <form id="in" onsubmit="event.preventDefault(); this.dataset.sent='yes'">
+        <h1>Sign In</h1>
+        <input type="email" name="email"><input type="password" name="password">
+        <button type="submit">Sign In</button></form>""")
+    profile = {**apply_answers.DEFAULT_PROFILE, "account_password": "correct horse"}
+    opened = []
+
+    def link_getter(since):
+        opened.append(since)
+        return "https://acme.wd5.myworkdayjobs.com/en-US/site/login", ""
+
+    assert af.create_account(page, profile, link_getter=link_getter) == "opened"
+    assert opened and page.input_value("input[name=email]") == profile["email"]
+    assert page.input_value("input[name=password]") == "correct horse"
+    assert page.locator("#in").get_attribute("data-sent") == "yes"
+
+
+def test_a_missing_verification_email_is_reported(page):
+    page.set_content("""<form onsubmit="event.preventDefault(); document.body.innerHTML='<p>Check your email to verify your account.</p>'">
+      <input type="email" name="email"><input type="password" name="password">
+      <button type="submit">Create account</button></form>""")
+    profile = {**apply_answers.DEFAULT_PROFILE, "account_password": "correct horse"}
+    assert af.create_account(page, profile, link_getter=lambda since: ("", "no verification email arrived")) == "unverified"
+
+
+def test_a_captcha_on_signup_is_not_solved(page):
+    page.set_content('<div class="h-captcha" data-sitekey="x"></div><input type="password" name="pw"><button>Create account</button>')
+    profile = {**apply_answers.DEFAULT_PROFILE, "account_password": "secret"}
+    assert af.create_account(page, profile) == "captcha"
+    assert page.input_value("input[name=pw]") == ""
+
+
+def test_a_posting_without_a_form_follows_a_hosted_apply_link(page):
+    posting = '<html><body><h1>Engineer</h1><a href="https://job-boards.greenhouse.io/acme/jobs/1">View role</a></body></html>'
+    serve_page(page, "https://careers.example.org/jobs/9", posting)
+    serve_page(page, "https://job-boards.greenhouse.io/acme/jobs/1", GREENHOUSE)
+    form = af.discover(page, "https://careers.example.org/jobs/9")
+    assert "first name" in by_key(form)
+
+
+def test_an_apply_address_written_in_the_page_is_opened(page):
+    posting = ('<html><body><h1>Engineer</h1>'
+               '<script>{"applyLink":"https://salesforce.wd12.myworkdayjobs.com/site/job/Engineer_JR1"}</script>'
+               '</body></html>')
+    serve_page(page, "https://boards.example.org/jobs/20", posting)
+    serve_page(page, "https://salesforce.wd12.myworkdayjobs.com/site/job/Engineer_JR1", GREENHOUSE)
+    form = af.discover(page, "https://boards.example.org/jobs/20")
+    assert "first name" in by_key(form)
+
+
+def test_a_greenhouse_embed_is_opened_as_the_job_form(page):
+    posting = ('<html><body><h1>Engineer</h1><a href="#application-form">Apply for this role</a>'
+               '<div id="grnhse_app"></div>'
+               '<link rel="canonical" href="https://careers.example.org/apply/?gh_jid=4436798009">'
+               '<!-- https://boards.greenhouse.io/embed/job_board/js?for=acme -->'
+               '</body></html>')
+    serve_page(page, "https://careers.example.org/apply/cast", posting)
+    serve_page(page, "https://job-boards.greenhouse.io/acme/jobs/4436798009", GREENHOUSE)
+    form = af.discover(page, "https://careers.example.org/apply/cast")
+    assert form.url.endswith("/acme/jobs/4436798009")
+    assert "first name" in by_key(form)
+
+
+def test_a_second_click_reaches_the_application(page):
+    posting = ('<html><body><h1>Engineer</h1>'
+               '<a href="https://acme.example/jobs/21">Apply on company website</a></body></html>')
+    middle = '<html><body><h1>Engineer</h1><p>Read the role, then apply.</p><a href="/jobs/21/form">Apply</a></body></html>'
+    serve_page(page, "https://jobs.example.org/jobs/21", posting)
+    serve_page(page, "https://acme.example/jobs/21", middle)
+    serve_page(page, "https://acme.example/jobs/21/form", OWN_SITE)
+    form = af.discover(page, "https://jobs.example.org/jobs/21")
+    assert form.url.endswith("/jobs/21/form")
+    assert "first name" in by_key(form)
+
+
+def test_a_general_careers_link_is_not_the_application(page):
+    posting = '<html><body><h1>Engineer</h1><a href="/en/apply-now">Find me a job</a></body></html>'
+    serve_page(page, "https://careers.example.org/vacancy/22", posting)
+    serve_page(page, "https://careers.example.org/en/apply-now", OWN_SITE)
+    with pytest.raises(af.FormError, match="no application form"):
+        af.discover(page, "https://careers.example.org/vacancy/22")
+
+
 # --- standing answers Adam gave on 2026-10-29: decline demographics, relocate/on-site yes, start now, pay open ---
 @pytest.mark.parametrize("label,options,expected", [
     ("Gender", ["Male", "Female", "Decline to self-identify"], "Decline to self-identify"),
@@ -611,6 +736,16 @@ def test_preferred_name_in_a_question_is_the_first_name():
     assert (outcome, value) == ("fill", "Adam")
 
 
+def test_datacor_current_title_and_previous_employment_grammar_use_profile_facts():
+    assert apply_answers.resolve(make("what is your current or previous job title"), PROFILE, {})[:2] == (
+        "fill", PROFILE["current_title"])
+    label = "Have you previously been employed by Datacor or a Datacor subsidiary (TrackAbout, Chemstations, Format Solutions, AFT, etc.)?"
+    f = make(apply_answers.normalize_label(label), label=label)
+    assert apply_answers.resolve(f, PROFILE, {})[:2] == ("fill", "No")
+    known = "Have you previously been employed by Mercor?"
+    assert apply_answers.resolve(make(apply_answers.normalize_label(known), label=known), PROFILE, {})[0] == "ask"
+
+
 def test_a_cloudflare_interstitial_is_a_robot_check_not_a_missing_form():
     apply_forms = af
     assert apply_forms.robot_check_page("himalayas.app\nPerforming security verification\nThis website uses a security service to protect against malicious bots.", "Just a moment...")
@@ -732,7 +867,7 @@ def test_questions_the_resume_already_answers_are_not_asked():
     assert answer("Have you been previously employed by Mercor?")[0] == "ask"  # he works there now
     assert answer("Do you physically reside in one of the Pacific Northwest states (Washington, Oregon, or Idaho) *") == ("fill", "No")
     assert answer("Are you currently located in Wyoming or Illinois?") == ("fill", "No")
-    assert answer("Have you been referred to us? *")[0] == "ask"
+    assert answer("Have you been referred to us? *") == ("fill", "No")
     assert answer("Do you have experience in the Material Handling industry?") == ("fill", "No")
     assert answer("Do you have experience working as a practitioner at an audit, advisory, or CPA firm?") == ("fill", "No")
     assert answer("Have you supported the sale of data infrastructure, streaming, databases, or distributed systems products?") == ("fill", "No")

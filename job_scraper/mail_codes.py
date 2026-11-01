@@ -18,6 +18,7 @@ import email
 import imaplib
 import re
 import time
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header, make_header
 from email.utils import parsedate_to_datetime
@@ -25,7 +26,8 @@ from email.utils import parsedate_to_datetime
 import telegram_notify
 
 IMAP_HOST = "imap.gmail.com"
-SENDER_DOMAINS = ("greenhouse-mail.io", "greenhouse.io", "lever.co", "ashbyhq.com", "hire.lever.co")
+SENDER_DOMAINS = ("greenhouse-mail.io", "greenhouse.io", "lever.co", "ashbyhq.com", "hire.lever.co",
+                   "myworkday.com", "myworkdayjobs.com", "myworkdaysite.com")
 FOLDERS = ('"[Gmail]/All Mail"', "INBOX", '"[Gmail]/Spam"', '"[Gmail]/Trash"')
 CODE_LABEL = re.compile(r"(?:security|verification|confirmation|one[- ]time|access|login|sign[- ]in|authentication)\s+code|\bpasscode\b|\byour code\b", re.I)
 TOKEN = re.compile(r"(?<![A-Za-z0-9])[A-Za-z0-9]{4,10}(?![A-Za-z0-9])")
@@ -52,6 +54,49 @@ def _text_of(message):
                 text = re.sub(r"&nbsp;", " ", text)
             parts.append(text)
     return "\n".join(parts)
+
+
+VERIFY_HOST = (".myworkday.com", ".myworkdayjobs.com", ".myworkdaysite.com")
+VERIFY_MAIL = re.compile(r"verify your (email|account)|activate your (account|email)|confirm your email|"
+                         r"email verification|check your email|candidate account", re.I)
+VERIFY_PATH = re.compile(r"verify|activat|confirm|token", re.I)
+SKIP_LINK = re.compile(r"unsubscribe|privacy|facebook|linkedin|twitter|mailto:|\.(png|gif|jpe?g|svg)(?:$|\?)", re.I)
+
+
+def _hrefs_of(message):
+    """Links in the HTML, kept before the tags are stripped. The visible words are often only 'Verify Email'."""
+    hrefs = []
+    parts = message.walk() if message.is_multipart() else [message]
+    for part in parts:
+        if part.get_content_type() != "text/html":
+            continue
+        payload = part.get_payload(decode=True) or b""
+        html = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+        hrefs.extend(re.findall(r"href\s*=\s*[\"'](https?://[^\"']+)", html, re.I))
+    return hrefs
+
+
+def extract_verify_link(subject, body, hrefs=()):
+    """The account-verification link in a Workday email, or ''.
+
+    Only a link on a Workday host is returned. An unsubscribe link, an image, or a link on any other site is ignored.
+    """
+    urls = []
+    for raw in list(hrefs) + re.findall(r"https?://[^\s<>\"']+", body or ""):
+        url = raw.replace("&amp;", "&").rstrip(".,)")
+        if not url.startswith("http") or SKIP_LINK.search(url):
+            continue
+        host = urllib.parse.urlparse(url).netloc.lower()
+        if not any(host == item[1:] or host.endswith(item) for item in VERIFY_HOST):
+            continue
+        urls.append(url)
+    if not urls:
+        return ""
+    named = bool(VERIFY_MAIL.search(f"{subject}\n{body}"))
+    for url in urls:
+        if VERIFY_PATH.search(url):
+            return url
+    return urls[0] if named else ""
 
 
 def extract_code(subject, body):
@@ -93,7 +138,27 @@ CONFIRMATION = re.compile(r"thank you for applying|thanks for applying|applicati
                           r"we (have )?received your application|successfully submitted", re.I)
 
 
-def find_confirmation(since, company="", creds=None, connect=imaplib.IMAP4_SSL):
+def _confirmation_company_words(company):
+    # Keep the identifying phrase, rather than treating a word such as "True" as a brand.
+    generic = {"the", "inc", "llc", "ltd", "corp", "corporation", "company", "group", "holdings",
+               "partners", "solutions", "project", "management"}
+    return [word for word in re.findall(r"[a-z0-9]+", company.lower()) if word not in generic and len(word) > 1]
+
+
+def confirmation_matches(subject, body, company, role=""):
+    """A code prompt is not a receipt; a receipt must identify this employer and role."""
+    text = f"{subject}\n{body}"
+    words = _confirmation_company_words(company)
+    if not words or not CONFIRMATION.search(text) or CODE_LABEL.search(text):
+        return False
+    if not re.search(r"\b" + r"\W+".join(re.escape(word) for word in words) + r"\b", text, re.I):
+        return False
+    role_words = [word for word in re.findall(r"[a-z0-9]+", role.lower())
+                  if word not in {"the", "and", "or", "of", "for", "a", "an"}]
+    return all(re.search(r"\b" + re.escape(word) + r"\b", text, re.I) for word in role_words)
+
+
+def find_confirmation(since, company="", creds=None, connect=imaplib.IMAP4_SSL, role=""):
     """True when a confirmation mail for this company arrived after `since`.
 
     False when the mailbox was read and nothing matched. None when mail could not be read.
@@ -103,16 +168,88 @@ def find_confirmation(since, company="", creds=None, connect=imaplib.IMAP4_SSL):
     if not creds:
         return None
     try:
-        return _confirmation(connect, creds, since, company)
+        return _confirmation(connect, creds, since, company, role)
     except (imaplib.IMAP4.error, OSError, TypeError, ValueError):
         return None
 
 
-def _confirmation(connect, creds, since, company):
+def _confirmation(connect, creds, since, company, role=""):
     box = connect(IMAP_HOST)
     try:
         box.login(*creds)
         day = (datetime.fromtimestamp(since, timezone.utc) - timedelta(days=1)).strftime("%d-%b-%Y")
+        words = _confirmation_company_words(company)
+        if not words:
+            return False
+        searched, complete = False, True
+        for folder in FOLDERS:
+            status, _ = box.select(folder, readonly=True)
+            if status != "OK":
+                continue
+            # Search the whole date range for the employer, not the newest 40 unrelated emails.
+            status, data = box.search(None, "SINCE", day, "TEXT", '"' + words[0] + '"')
+            if status != "OK":
+                complete = False
+                continue
+            searched = True
+            if not data or not data[0]:
+                continue
+            for num in reversed(data[0].split()):
+                status, raw = box.fetch(num, "(BODY.PEEK[])")
+                if status != "OK" or not raw or not isinstance(raw[0], tuple):
+                    complete = False
+                    continue
+                message = email.message_from_bytes(raw[0][1])
+                try:
+                    sent = parsedate_to_datetime(message.get("Date")).timestamp()
+                except (TypeError, ValueError):
+                    continue
+                if sent < since - 30:
+                    continue
+                sender = str(make_header(decode_header(message.get("From", ""))))
+                subject = str(make_header(decode_header(message.get("Subject", ""))))
+                body = _text_of(message)
+                if confirmation_matches(subject, body, company, role):
+                    return True
+        return False if searched and complete else None
+    finally:
+        try:
+            box.logout()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def fetch_verify_link(since, company="", creds=None, timeout=120, poll=5, connect=imaplib.IMAP4_SSL, sleep=time.sleep):
+    """Wait for the verification link a site (Workday) emailed after `since`. Returns (url, note).
+
+    Read-only, and only a Workday link from mail that arrived after the account was created. Nothing else in the
+    message is followed or treated as an instruction.
+    """
+    creds = creds or credentials()
+    if not creds:
+        return "", "no Gmail IMAP login in .env (GMAIL_IMAP_USER, GMAIL_IMAP_PASSWORD)"
+    deadline = time.time() + timeout
+    last_note = "no verification email arrived"
+    while True:
+        try:
+            url = _look_link(connect, creds, since, company)
+            if url:
+                return url, ""
+        except imaplib.IMAP4.error as e:
+            return "", f"Gmail IMAP refused the login or search ({str(e)[:80]})"
+        except OSError as e:
+            last_note = f"could not reach Gmail ({type(e).__name__})"
+        if time.time() >= deadline:
+            return "", last_note
+        sleep(poll)
+
+
+def _look_link(connect, creds, since, company):
+    box = connect(IMAP_HOST)
+    try:
+        box.login(*creds)
+        day = (datetime.fromtimestamp(since, timezone.utc) - timedelta(days=1)).strftime("%d-%b-%Y")
+        best = ("", 0.0)
         for folder in FOLDERS:
             status, _ = box.select(folder, readonly=True)
             if status != "OK":
@@ -125,18 +262,21 @@ def _confirmation(connect, creds, since, company):
                 if status != "OK" or not raw or not isinstance(raw[0], tuple):
                     continue
                 message = email.message_from_bytes(raw[0][1])
+                sender = str(make_header(decode_header(message.get("From", ""))))
                 try:
                     sent = parsedate_to_datetime(message.get("Date")).timestamp()
                 except (TypeError, ValueError):
                     continue
                 if sent < since - 30:
                     continue
-                sender = str(make_header(decode_header(message.get("From", ""))))
                 subject = str(make_header(decode_header(message.get("Subject", ""))))
                 body = _text_of(message)
-                if CONFIRMATION.search(f"{subject}\n{body}") and _names_company(company, sender, subject, body):
-                    return True
-        return False
+                if not _sender_ok(sender) and not _names_company(company, sender, subject, body):
+                    continue
+                url = extract_verify_link(subject, body, _hrefs_of(message))
+                if url and sent > best[1]:
+                    best = (url, sent)
+        return best[0]
     finally:
         try:
             box.logout()

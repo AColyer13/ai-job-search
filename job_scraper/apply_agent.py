@@ -9,13 +9,14 @@
 
 By default, the agent submits automatically once every required answer is known.
 Set APPLY_AUTO_SUBMIT=0 in .env to require a Submit tap on the current Telegram
-summary. --dry-run never clicks Submit. Unknown questions are logged without
-asking Adam unless APPLY_ASK_ADAM=1. The listener works during configured active
-hours (default 06:00 to 16:30 local time).
+summary. --dry-run never clicks Submit. Questions are answered from the profile,
+standing facts, and a draft checked against the resume. APPLY_ASK_ADAM=1 brings
+Telegram questions back. The listener works during configured active hours
+(default 06:00 to 16:30 local time).
 
-Answers come from the profile, saved answers and drafts checked against the resume.
-Forms are read again before submission. Accounts, login walls and robot checks
-are reported as blockers; the agent never solves or bypasses a CAPTCHA.
+A page that says to create an account is signed up with Adam's email and a
+password stored in daily/apply_accounts.json, then the application continues.
+The agent never solves or bypasses a CAPTCHA. A robot check is the stop.
 Only confirmed submissions are recorded as applied. Other outcomes keep their
 reason in the log. /issues, /errors and /audit expose gaps and tracking problems.
 
@@ -30,6 +31,7 @@ import html
 import json
 import os
 import re
+import secrets
 import sys
 import time
 import urllib.parse
@@ -124,6 +126,11 @@ def off_hours_seconds(a, b, hours):
 def email_code_getter(job):
     """The function submit() calls to read the security code a site just emailed Adam."""
     return lambda since: mail_codes.fetch_code(since, company=job.get("company", ""))
+
+
+def email_link_getter(job):
+    """The function account creation calls when the site emails a link instead of a code. Workday does this."""
+    return lambda since: mail_codes.fetch_verify_link(since, company=job.get("company", ""))
 
 
 ISSUES_PATH = daily_digest.DAILY / "apply_issues.jsonl"
@@ -423,14 +430,30 @@ class Agent:
         decides (a form it can fill, a login wall, a robot check), and a job it could not finish is logged as attempted.
         """
         import applied_log
-        applied = {daily_digest._key(e.get("url")) for e in self.log_entries().values() if not unfilled_reason(e.get("reason"))}
+        entries = self.log_entries()
+        applied = {daily_digest._key(e.get("url")) for e in entries.values() if not unfilled_reason(e.get("reason"))}
+        handled, uncertain_roles, applied_roles = set(), set(), set()
+        for known in list(entries.values()) + list(self.jobs.values()):
+            if unfilled_reason(known.get("reason")):
+                continue
+            identity = daily_digest.pipeline_dedupe_key(known)
+            if identity is not None:
+                handled.add(identity)
+                if known.get("status") == "applied":
+                    applied_roles.add(identity[:2])
+                if (known.get("submission_unconfirmed")
+                        or "submission unconfirmed" in (known.get("reason") or "").lower()):
+                    uncertain_roles.add(identity[:2])
         added = []
         for j in candidates:
             url = daily_digest.apply_link(j)
             if (j.get("fit") or "low") not in fits or not url:
                 continue
             jid = job_id(url)
-            if jid in self.jobs or daily_digest._key(url) in applied:
+            identity = daily_digest.pipeline_dedupe_key(j)
+            if (jid in self.jobs or daily_digest._key(url) in applied
+                    or identity is not None and (identity in handled or identity[:2] in uncertain_roles
+                                                 or identity[:2] in applied_roles)):
                 continue
             ats = self.forms.detect_ats(url)
             if not ats and "gh_jid=" in url:
@@ -442,12 +465,15 @@ class Agent:
                     ats = self.forms.detect_ats(url)
             rec = {"id": jid, "url": self.forms.clean_url(url) if ats else url, "title": j.get("title"),
                    "company": j.get("company"), "fit": j.get("fit"), "fit_score": j.get("fit_score"),
+                   "location": j.get("location"), "work_mode": j.get("work_mode"),
                    "ats": ats, "description": (j.get("description") or "")[:3500], "status": "queued",
                    "created": self.now(), "updated": self.now(), "answers": {}, "fields": {}, "pending": [],
                    "drafts": {}, "asked": None, "ver": 0}
             if len(added) < limit:
                 self.jobs[jid] = rec
                 added.append(rec)
+                if identity is not None:
+                    handled.add(identity)
         self.save()
         if added:
             self.say(self.queue_summary(added))
@@ -512,20 +538,133 @@ class Agent:
         self.set_status(job, "skipped")
         self.say(f"⏭ Skipped {self.title_of(job)}. It will not come back.")
 
+    def site_password(self, url):
+        """The password this site's account was created with. One per host, kept out of git in daily/."""
+        host = urllib.parse.urlparse(url or "").netloc.lower() or "account"
+        path = Path(self.bank_path).with_name("apply_accounts.json") if self.bank_path else (daily_digest.DAILY / "apply_accounts.json")
+        try:
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        if not data.get(host):
+            data[host] = secrets.token_urlsafe(16)
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            Path(path).write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        return data[host]
+
+    def _try_create_account(self, page, job, profile):
+        creator = getattr(self.forms, "create_account", None)
+        if creator is None:
+            return "stuck"  # a test double, or a page the reader cannot sign up on
+        profile["account_password"] = self.site_password(job.get("url") or "")
+        try:
+            return creator(page, profile, code_getter=email_code_getter(job), link_getter=email_link_getter(job))
+        except Exception as e:  # noqa: BLE001
+            self.note_error("create_account", e, job)
+            return "stuck"
+
+    def _account_then_reread(self, page, job, profile, err):
+        text = str(err)
+        if re.search(r"account|login|sign in", text, re.I) and not ROBOT_CHECK.search(text):
+            outcome = self._try_create_account(page, job, profile)
+            if outcome == "captcha":
+                self.handoff(job, "A robot check blocks this application. No challenge was solved and no retry will be made.")
+                return None
+            if outcome == "unverified":
+                self.handoff(job, "The account was created, but the verification email did not arrive.")
+                return None
+            if outcome == "opened":
+                try:
+                    return self.forms.discover(page, getattr(page, "url", None) or job["url"])
+                except self.forms.FormError as again:
+                    self.handoff(job, str(again), attempted="closed or gone" not in str(again))
+                    return None
+        self.handoff(job, text, attempted="closed or gone" not in text)
+        return None
+
+    def _pass_account_wall(self, page, job, profile, form):
+        """A login wall is signed up for. A password field on the application itself is filled. A CAPTCHA is left for later."""
+        if form is None or not form.blocker or ROBOT_CHECK.search(form.blocker):
+            return form
+        if not re.search(r"account|login|sign in", form.blocker, re.I):
+            self.handoff(job, f"The page needs a human step ({form.blocker}).")
+            return None
+        has_password = any(getattr(f, "kind", "") == "password" or re.search(r"password", f.label or "", re.I) for f in form.fields)
+        has_resume = any(f.kind == "file" and re.search(r"resume|cv", (f.key or "") + (f.label or ""), re.I) for f in form.fields)
+        if has_password and has_resume:
+            profile["account_password"] = self.site_password(form.url or job.get("url") or "")
+            form.blocker = ""
+            return form
+        outcome = self._try_create_account(page, job, profile)
+        if outcome == "captcha":
+            self.handoff(job, "A robot check blocks this application. No challenge was solved and no retry will be made.")
+            return None
+        if outcome == "unverified":
+            self.handoff(job, "The account was created, but the verification email did not arrive.")
+            return None
+        if outcome != "opened":
+            self.handoff(job, f"The page needs a human step ({form.blocker}).")
+            return None
+        try:
+            form = self.forms.discover(page, getattr(page, "url", None) or job["url"])
+        except self.forms.FormError as e:
+            self.handoff(job, str(e), attempted="closed or gone" not in str(e))
+            return None
+        if form.blocker and not ROBOT_CHECK.search(form.blocker):
+            self.handoff(job, f"The page needs a human step ({form.blocker}).")
+            return None
+        return form
+
+    def _open_application(self, page, job, profile):
+        try:
+            form = self.forms.discover(page, job["url"])
+        except self.forms.FormError as e:
+            form = self._account_then_reread(page, job, profile, e)
+            if form is None:
+                return None
+        return self._pass_account_wall(page, job, profile, form)
+
+    def _answer_new_fields(self, job, form):
+        """Fill required questions that appeared after the form was first read. Returns the ones still blank."""
+        profile = dict(self.profile or apply_answers.load_profile())
+        if any(getattr(f, "kind", "") == "password" for f in form.fields):
+            profile["account_password"] = self.site_password(form.url or job.get("url") or "")
+        bank = apply_answers.load_bank(self.bank_path)
+        standard = apply_answers.standard_answers()
+        missing = [f for f in form.fields if f.required and f.key not in job["answers"]]
+        for f in missing:
+            outcome, value, _source = apply_answers.resolve(f, profile, bank, standard, job)
+            if outcome == "giveup":
+                return f"a required GPA ({clip(f.label, 60)})"
+            if outcome in ("fill", "consent") and value not in (None, ""):
+                job["answers"][f.key] = value
+                job["fields"][f.key] = {"label": f.label, "kind": f.kind, "required": True,
+                                         "options": list(f.options), "outcome": outcome}
+            elif outcome == "draft":
+                text = apply_answers.base_cover_letter() if re.search(r"cover letter|letter", f.key) or apply_answers.ESSAY.search(f.label or "") else ""
+                if text:
+                    job["answers"][f.key] = text
+        still = [f.label or f.key for f in form.fields if f.required and f.key not in job["answers"]]
+        return "; ".join(clip(m, 60) for m in still[:4])
+
     # ---- step 1 and 2: read the form, fill in what we know, draft, ask
     def prepare(self, job):
         self.set_status(job, "preparing")
-        profile = self.profile or apply_answers.load_profile()
+        profile = dict(self.profile or apply_answers.load_profile())
         bank = apply_answers.load_bank(self.bank_path)
         if not Path(profile["resume_pdf"]).exists():
             return self.handoff(job, f"The resume PDF is missing: {profile['resume_pdf']}")
         try:
             with self.browser() as page:
-                form = self.forms.discover(page, job["url"])
+                form = self._open_application(page, job, profile)
+                if form is None:
+                    return None
                 job["form_url"] = form.url
-                if form.blocker and not ROBOT_CHECK.search(form.blocker):
-                    return self.handoff(job, f"The page needs a human step ({form.blocker}).")
-                job["human_click"] = bool(form.blocker)  # a robot check: I do the rest, Adam makes the last click
+                job["human_click"] = bool(form.blocker and ROBOT_CHECK.search(form.blocker))
+                if any(getattr(f, "kind", "") == "password" for f in form.fields):
+                    profile["account_password"] = self.site_password(form.url or job["url"])
                 standard = apply_answers.standard_answers()
                 plan = [(f, *apply_answers.resolve(f, profile, bank, standard, job)) for f in form.fields]
                 giveup = next((why for _, outcome, _, why in plan if outcome == "giveup"), "")
@@ -533,7 +672,16 @@ class Agent:
                     return self.handoff(job, f"{giveup} ({clip(next(f.label for f, o, _, _ in plan if o == 'giveup'), 60)}).")
                 letter = self._draft_all(job, plan, page, profile)
         except self.forms.FormError as e:
-            return self.handoff(job, str(e), attempted="closed or gone" not in str(e))  # a dead posting is nothing to fix
+            text = str(e)
+            if "closed or gone" in text or ROBOT_CHECK.search(text):
+                return self.handoff(job, text, attempted="closed or gone" not in text)
+            if "no application form" in text and not job.get("form_again"):
+                job["form_again"] = True  # one fresh visit: the button may have drawn late
+                self.save()
+                return self.prepare(job)
+            if "no application form" in text:
+                return self.handoff(job, text, attempted=True)
+            return self.handoff(job, text)
         except Exception as e:  # noqa: BLE001 - browser trouble must not stop the agent
             self.note_error("read_form", e, job)
             return self.handoff(job, f"Could not read the form ({type(e).__name__}).")
@@ -545,9 +693,12 @@ class Agent:
             for k in job["pending"]:
                 self.note_issue("asked", job, label=job["fields"][k]["label"])  # /issues shows which rule to add
             self.save()
-            if len(job["pending"]) >= self.max_questions:
+            if len(job["pending"]) >= self.max_questions and self.ask_adam:
                 return self.handoff(job, f"too many unique questions ({len(job['pending'])}): {labels}")
-            return self.handoff(job, f"the project has no answer yet for: {labels}")
+            from application_knowledge import question_kind
+            kinds = sorted({question_kind(type('Question', (), meta)()) for k, meta in job['fields'].items() if k in job['pending']})
+            job['unresolved_question_kinds'] = kinds
+            return self.handoff(job, f"Unresolved required questions ({', '.join(kinds)}): {labels}")
         self.save()
         return self.next_step(job)
 
@@ -566,6 +717,10 @@ class Agent:
                             if is_letter else f.label)
                 text, provider = apply_answers.draft(question, posting, self.runner,
                                                      "cover letter" if is_letter else "answer")
+                if text is None and (is_letter or apply_answers.ESSAY.search(f.label or "")):
+                    fallback = apply_answers.base_cover_letter()
+                    if fallback:
+                        text, provider = fallback, "base cover letter"
                 if text is None:
                     if provider.startswith(("no AI provider", "draft made claims")):
                         self.note_error("ai_draft", provider, job)
@@ -735,6 +890,8 @@ class Agent:
                 lines.append(f"{esc(clip(meta.get('label', key), 70))}: ✔")
             elif isinstance(value, str) and re.search(r"\.(pdf|docx?)$", value, re.I):
                 lines.append(f"{esc(clip(meta.get('label', key), 40))}: {esc(Path(value).name)}")
+            elif re.search(r"password", key + (meta.get("label") or ""), re.I):
+                lines.append(f"{esc(clip(meta.get('label', key), 50))}: ••••")
             else:
                 lines.append(f"{esc(clip(meta.get('label', key), 50))}: {esc(clip(value, 120))}")
         drafts = list(job["drafts"].items())
@@ -772,17 +929,21 @@ class Agent:
         self.set_status(job, "submitting")
         answers = job["answers"]
         shots = self.shot_dir
+        submission_started = False
         try:
             with self.browser() as page:
                 form = self.forms.discover(page, job["url"])
                 if form.blocker and ROBOT_CHECK.search(form.blocker):
                     pass  # the robot check is handled after this block, by Adam
+                elif form.blocker and re.search(r"account|login|sign in", form.blocker, re.I):
+                    form = self._pass_account_wall(page, job, dict(self.profile or apply_answers.load_profile()), form)
+                    if form is None:
+                        return None
                 elif form.blocker:
                     return self.handoff(job, f"The page now needs a human step ({form.blocker}).")
-                missing = [f.label or f.key for f in form.fields if f.required and f.key not in answers]
-                if missing:
-                    return self.handoff(job, "The form changed after you approved it and now asks: "
-                                        + "; ".join(clip(m, 60) for m in missing[:4]))
+                still = self._answer_new_fields(job, form)
+                if still:
+                    return self.handoff(job, "The form changed after you approved it and now asks: " + still)
                 errors = self.forms.fill(page, form, answers)
                 required_bad = {k: v for k, v in errors.items() if any(f.key == k and f.required for f in form.fields)}
                 if required_bad:
@@ -797,11 +958,14 @@ class Agent:
                 if form.blocker:
                     status, detail = "blocked", form.blocker
                 else:
+                    submission_started = True
                     status, detail = self.forms.submit(page, code_getter=email_code_getter(job))
                     self.forms.screenshot(page, shots / f"{job['id']}-after.png")
         except self.forms.FormError as e:
             return self.handoff(job, f"Submit stopped: {e}")
         except Exception as e:  # noqa: BLE001
+            if submission_started:
+                job['submission_unconfirmed'] = True
             self.note_error("submit", e, job)
             return self.handoff(job, f"Something broke before the result was known ({type(e).__name__}). "
                                 "Check your email for a confirmation before applying again.")
@@ -809,6 +973,8 @@ class Agent:
 
     # ---- a robot check: the form opens in Chrome on Adam's PC and he makes the last click
     def start_assist(self, job, auto=False):
+        if self.auto_submit and not self.ask_adam:
+            return self.handoff(job, "A robot check blocks this application. No challenge was solved; no manual browser was launched.")
         job["assisted"], job["assist_started"], job["assist_auto"] = True, self.now(), auto
         self.set_status(job, "assisting")
         self.state_path.with_name(f"apply_assist_{job['id']}.json").unlink(missing_ok=True)
@@ -861,7 +1027,10 @@ class Agent:
             if key in job["drafts"]:
                 continue
             label = job["fields"].get(key, {}).get("label", key)
-            shown = Path(value).name if isinstance(value, str) and re.search(r"\.(pdf|docx?)$", value, re.I) else ("yes" if value is True else value)
+            if re.search(r"password", key + label, re.I):
+                shown = "••••"
+            else:
+                shown = Path(value).name if isinstance(value, str) and re.search(r"\.(pdf|docx?)$", value, re.I) else ("yes" if value is True else value)
             rows.append(f"{esc(clip(label, 40))}: {esc(clip(shown, 60))}")
         for d in job["drafts"].values():
             rows.append(f"<i>{esc(clip(d['label'], 50))}</i>: {esc(clip(d['text'], 300))}")
@@ -869,7 +1038,11 @@ class Agent:
 
     def finish_submit(self, job, status, detail):
         profile = self.profile or apply_answers.load_profile()
+        if status == "blocked" and "email verification code" in (detail or "").lower():
+            if mail_codes.find_confirmation(time.time() - 300, job.get("company") or "", role=job.get("title") or ""):
+                return self.finish_submit(job, "submitted", "Confirmation email proves receipt despite verification UI")
         if status == "submitted":
+            job.pop("submission_unconfirmed", None)
             self.set_status(job, "applied")
             for d in job["drafts"].values():  # what was actually sent, so the next draft can reuse it
                 apply_answers.log_answer(d["label"], d["text"], "Adam edited" if d["provider"] == "you" else f"AI draft ({d['provider']})",
@@ -882,13 +1055,16 @@ class Agent:
         elif status == "blocked" and ROBOT_CHECK.search(detail or ""):
             self.start_assist(job)  # the site asked for a human mid-submit: nothing was sent, so Adam finishes it
         elif status == "unknown":
-            found = mail_codes.find_confirmation(time.time() - 300, job.get("company") or "")
+            found = mail_codes.find_confirmation(time.time() - 300, job.get("company") or "", role=job.get("title") or "")
             if found:
                 return self.finish_submit(job, "submitted", "")
-            else:
-                note = ("and email could not be checked" if found is None else "never received an email")
-                return self.handoff(job, f"Clicked Submit, never saw a confirmation page, {note}. AI tried; Adam needs to apply.",
-                                    attempted=False)
+            note = "email could not be checked" if found is None else "no confirmation email"
+            job["submission_unconfirmed"] = True
+            if not job.get("confirm_again"):
+                job["confirm_again"] = True  # no page and no email: the first click did not go through
+                self.save()
+                return self.submit_job(job)
+            return self.handoff(job, f"No confirmation page, and {note}, after a second attempt.", attempted=True)
         else:  # blocked or invalid
             self.handoff(job, f"The site did not accept it ({status}): {clip(detail, 200)}")
 
@@ -1017,8 +1193,9 @@ class Agent:
         done = {daily_digest._key(e.get("url")) for e in self.log_entries().values() if e.get("status") == "applied"}
         changed = 0
         for job in self.jobs.values():
-            if job["status"] in OPEN + ("unsent",) and daily_digest._key(job["url"]) in done:
+            if job["status"] != "applied" and daily_digest._key(job["url"]) in done:
                 job["status"], job["updated"], job["note"] = "applied", self.now(), "applied elsewhere"
+                job.pop("submission_unconfirmed", None)
                 changed += 1
         if changed:
             self.save()
@@ -1190,12 +1367,7 @@ Adam's question: {question}
 
     def serve(self, minutes=None, idle_exit=False, wait=25, listen=False, fits=("high", "medium"), limit=10):
         deadline = self.now() + minutes * 60 if minutes else None
-        self.recover()
-        reopened = self.reopen_unfilled()
-        if reopened:
-            self.say(f"🔁 Trying {reopened} job{'s' if reopened != 1 else ''} again that I had handed back only because of the site's address.")
-        self.reconcile()
-        self.release_ready()
+        initialized = False
         slept = False
         while True:
             if listen and self.active_hours and not in_active_hours(self.now(), self.active_hours):
@@ -1207,6 +1379,14 @@ Adam's question: {question}
                 time.sleep(min(60, max(1, next_active_start(self.now(), self.active_hours) - self.now())))
                 continue
             slept = False
+            if not initialized:
+                self.recover()
+                reopened = self.reopen_unfilled()
+                if reopened:
+                    self.say(f"🔁 Trying {reopened} job{'s' if reopened != 1 else ''} again that I had handed back only because of the site's address.")
+                self.reconcile()
+                self.release_ready()
+                initialized = True
             if listen:
                 try:
                     self.take_queue_request(fits=fits, limit=limit)
@@ -1265,11 +1445,24 @@ def _lock_holder_alive(path):
             pass
         return True
     import ctypes
-    handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+    kernel.GetExitCodeProcess.restype = wintypes.BOOL
+    kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel.CloseHandle.restype = wintypes.BOOL
+    handle = kernel.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
     if not handle:
-        return False
-    ctypes.windll.kernel32.CloseHandle(handle)
-    return True
+        return ctypes.get_last_error() == 5  # access denied is not proof the owner exited
+    try:
+        code = wintypes.DWORD()
+        if not kernel.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return True
+        return code.value == 259  # STILL_ACTIVE; an open handle can also name an exited process
+    finally:
+        kernel.CloseHandle(handle)
 
 
 def acquire_lock(path=None, listener=False):
