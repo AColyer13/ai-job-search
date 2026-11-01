@@ -673,9 +673,10 @@ class FoundInTodaysAudit(unittest.TestCase):
         self.assertEqual(grade("Sales Engineer"), "high")
 
     def test_a_remote_card_tied_to_a_state_that_is_not_his_is_low(self):
-        for location in ("Remote (California)", "Remote - Utah", "Remote, Pennsylvania"):
+        for location in ("Remote (California)", "Remote, Pennsylvania"):
             self.assertEqual(grade("Sales Engineer", location=location), "low", location)
-        for location in ("Remote (Texas)", "Remote - Minnesota", "Remote in USA", "Remote (United States)"):
+        for location in ("Remote (Texas)", "Remote - Utah", "Remote - South Carolina", "Remote - Minnesota",
+                         "Remote in USA", "Remote (United States)"):
             self.assertEqual(grade("Sales Engineer", location=location), "high", location)
 
     def test_a_science_degree_with_no_alternative_is_low(self):

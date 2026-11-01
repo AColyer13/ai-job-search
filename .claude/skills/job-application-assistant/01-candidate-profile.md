@@ -14,11 +14,11 @@ framework_version: 1.0.0
 - **GitHub:** https://github.com/AColyer13
 - **Portfolio:** https://acolyer13.github.io/WebPortfolio/
 - **Cursor:** https://cursor.com/@colyer
-- **Languages:** English (native)
+- **Languages:** English (native), Spanish (Beginner — minimal; the resume label is Beginner, and Elementary when that is the form's lowest step)
 - **Citizenship:** US citizen
 - **Country of birth:** United States
 - **Status:** Actively job searching. Activus Connect contract ended June 2026. Building and shipping independent full-stack/AI projects while applying.
-- **Constraints:** Open to relocation — Mississippi preferably Gulfport–Biloxi; Twin Cities office roles from Rogers, MN through Chanhassen, MN (west/NW/SW suburbs, including Garmin)
+- **Constraints:** Open to relocation anywhere in the US. Grade higher: Minnesota, fully remote, Mississippi, Texas, Alabama, Oklahoma, Florida, Georgia, Utah, South Carolina. A role that requires he already live outside Minnesota is not applied. Twin Cities office roles from Rogers, MN through Chanhassen, MN (west/NW/SW suburbs, including Garmin) stay the local preference.
 - **Canonical resume source:** `documents/cv/adam_colyer_resume.txt`. Mercor is included. The OneDrive PDF may still be an older export.
 
 ## Education

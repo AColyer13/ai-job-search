@@ -316,8 +316,8 @@ def serve_page(page, url, html):
 
 def test_assist_fills_the_form_then_waits_for_a_persons_own_submit(page):
     url = "https://jobs.lever.co/a/b/apply"
-    later = LEVER.replace("</body>", "<script>setTimeout(() => document.body.innerHTML = "
-                                     "'<p>Thank you for applying</p>', 2500)</script></body>")
+    later = LEVER.replace("</body>", "<script>setTimeout(() => { document.querySelector('form').style.display = 'none'; "
+                                     "document.body.insertAdjacentHTML('beforeend', '<p>Thank you for applying</p>'); }, 2500)</script></body>")
     serve_page(page, url, later)
     try:
         assert af.assist(page, "https://jobs.lever.co/a/b", {"full name": "Adam Colyer", "email": "a@b.co"}, 20) == ("submitted", "")
@@ -614,16 +614,16 @@ def test_a_general_careers_link_is_not_the_application(page):
     ("Gender", ["Male", "Female", "Decline to self-identify"], "Decline to self-identify"),
     ("Race/Ethnicity", ["Asian", "White", "I don't wish to answer"], "I don't wish to answer"),
     ("Veteran Status", ["I am a veteran", "I prefer not to say"], "I prefer not to say"),
-    ("Do you have a disability?", ["Yes", "No", "Choose not to disclose"], "Choose not to disclose"),
+    ("Do you have a disability?", ["Yes", "No", "Choose not to disclose"], "No"),
 ])
 def test_required_demographic_questions_take_the_decline_choice(label, options, expected):
     f = make(apply_answers.normalize_label(label), "select", label=label, options=options)
     assert apply_answers.resolve(f, PROFILE, {}) == ("fill", expected, "profile")
 
 
-def test_a_demographic_question_with_no_decline_choice_is_asked_not_guessed():
+def test_a_demographic_question_with_only_male_and_female_is_male():
     f = make("gender", "select", label="Gender", options=["Male", "Female"])
-    assert apply_answers.resolve(f, PROFILE, {})[0] == "ask"
+    assert apply_answers.resolve(f, PROFILE, {})[:2] == ("fill", "Male")
 
 
 def test_an_optional_demographic_question_stays_skipped():
@@ -652,13 +652,22 @@ def test_start_date_and_notice_say_immediately():
         assert apply_answers.resolve(f, PROFILE, {}) == ("fill", "Immediately", "profile")
 
 
-def test_salary_is_open_unless_the_posting_states_a_range():
+def test_salary_is_open_unless_the_posting_states_a_range(monkeypatch, tmp_path):
     f = make("salary expectations", "text", label="Salary expectations")
     assert apply_answers.resolve(f, PROFILE, {}, job={"description": "Great team."})[1] == "Open / negotiable"
     stated = {"description": "Pay range: $120,000 - $150,000 plus bonus."}
     assert apply_answers.resolve(f, PROFILE, {}, job=stated)[1] == "$120,000 - $150,000"
-    pick = make("salary expectations", "select", label="Salary expectations", options=["<100k", "100k+"])
-    assert apply_answers.resolve(pick, PROFILE, {})[0] == "ask"  # a list of bands is Adam's call
+    flexible = make("salary expectations", "select", label="Salary expectations",
+                    options=["$80,000 - $100,000", "Open / negotiable", "$140,000 - $160,000"])
+    assert apply_answers.resolve(flexible, PROFILE, {})[1] == "Open / negotiable"
+    overlap = make("salary expectations", "select", label="Salary expectations",
+                   options=["$80,000 - $100,000", "$110,000 - $140,000", "$160,000 - $180,000"])
+    assert apply_answers.resolve(overlap, PROFILE, {}, job=stated)[1] == "$110,000 - $140,000"
+    monkeypatch.setattr(apply_answers, "LOG_PATH", tmp_path / "answers.json")
+    middle = make("salary expectations", "select", label="Salary expectations", options=["<100k", "100k+", "150k+"])
+    assert apply_answers.resolve(middle, PROFILE, {})[1] == "100k+"
+    logged = __import__("json").loads((tmp_path / "answers.json").read_text(encoding="utf-8"))
+    assert logged[-1]["source"] == "middle pay band" and logged[-1]["answer"] == "100k+"
 
 
 def test_an_answer_adam_saved_beats_a_standing_one():
@@ -864,9 +873,16 @@ def test_questions_the_resume_already_answers_are_not_asked():
 
     assert answer("Do you have a Bachelor's Degree? *") == ("fill", "Yes")
     assert answer("Have you been previously employed by Chainalysis as an Intern, Full Time Employee, or Contractor?") == ("fill", "No")
-    assert answer("Have you been previously employed by Mercor?")[0] == "ask"  # he works there now
-    assert answer("Do you physically reside in one of the Pacific Northwest states (Washington, Oregon, or Idaho) *") == ("fill", "No")
-    assert answer("Are you currently located in Wyoming or Illinois?") == ("fill", "No")
+    assert answer("Have you been previously employed by Mercor?") == ("fill", "Yes")
+    assert answer("Do you physically reside in one of the Pacific Northwest states (Washington, Oregon, or Idaho) *")[0] == "giveup"
+    assert answer("Are you currently located in Wyoming or Illinois?")[0] == "giveup"
+    assert answer("Are you willing to relocate to Wyoming?") == ("fill", "Yes")
+    spanish = "What is your Spanish proficiency?"
+    assert apply_answers.resolve(
+        make(apply_answers.normalize_label(spanish), "select", label=spanish,
+             options=["Native", "Fluent", "Elementary", "None"]),
+        PROFILE, {})[:2] == ("fill", "Elementary")
+    assert apply_answers.resolve(make(apply_answers.normalize_label(spanish), label=spanish), PROFILE, {})[:2] == ("fill", "Beginner")
     assert answer("Have you been referred to us? *") == ("fill", "No")
     assert answer("Do you have experience in the Material Handling industry?") == ("fill", "No")
     assert answer("Do you have experience working as a practitioner at an audit, advisory, or CPA firm?") == ("fill", "No")
@@ -892,6 +908,26 @@ STARTUPS = """<form>
 </div>
 <label for="n">Name *</label><input id="n" name="name" required>
 </form>"""
+
+
+GENDER = """<form>
+<fieldset>
+  <legend>Gender</legend>
+  <label><input type="radio" name="g-male" required> Male</label>
+  <label><input type="radio" name="g-female"> Female</label>
+  <input type="search" aria-label="Select" name="section_1_question_0">
+</fieldset>
+<label for="n">Name *</label><input id="n" name="name" required>
+</form>"""
+
+
+def test_a_gender_fieldset_is_one_question_and_a_search_box_is_not(page):
+    form = load(page, GENDER)
+    radios = [f for f in form.fields if f.kind == "radio"]
+    assert len(radios) == 1 and radios[0].label == "Gender"
+    assert radios[0].options == ["Male", "Female"]
+    assert not any(f.label.lower() in ("select", "search") or f.label.startswith("section_") for f in form.fields)
+    assert apply_answers.resolve(radios[0], PROFILE, {})[1] == "Male"
 
 
 def test_checkbox_options_with_their_own_names_are_one_question(page):

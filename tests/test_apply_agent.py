@@ -446,6 +446,34 @@ def test_submit_exception_quarantines_instead_of_allowing_requeue(env):
     assert agent.queue([{**job, 'url': 'https://another.example/job'}]) == []
 
 
+def test_many_questions_prepare_when_asking_is_off_and_gpa_still_stops(env):
+    extra = [field("nursing", "radio", "Do you have experience in nursing?", options=["Yes", "No"]),
+             field("estonian", "select", "What is your Estonian proficiency?", options=["None", "Fluent"]),
+             field("county", "text", "County"),
+             field("kafka", "radio", "Have you sold Kafka?", options=["Yes", "No"])]
+    agent, tg, forms, job = make_agent(env, BASIC + extra, auto=True)
+    agent.ask_adam = False
+    agent.advance()
+    assert job["status"] == "applied" and forms.submitted == 1
+    assert job["answers"]["nursing"] == "No" and job["answers"]["estonian"] == "None"
+    assert job["answers"]["county"] == "Hennepin" and job["answers"]["kafka"] == "No"
+    assert not [label for label, _ in tg.last_buttons() if label not in ("Submit",)]
+    gpa_agent, _, gpa_forms, gpa = make_agent(env, BASIC + [field("gpa", "text", "What is your GPA?")], auto=True)
+    gpa_agent.ask_adam = False
+    gpa_agent.advance()
+    assert gpa["status"] == "handed_off" and "GPA" in gpa["reason"] and gpa_forms.submitted == 0
+
+
+def test_a_rejected_email_code_is_tried_once_more(env, monkeypatch):
+    monkeypatch.setattr(apply_agent.mail_codes, "find_confirmation", lambda *a, **k: False)
+    agent, _, forms, job = make_agent(env, BASIC, auto=True, submit_result=("blocked", "the site did not accept the code"))
+    agent.ask_adam = False
+    agent.advance()
+    assert forms.submitted == 2 and job["status"] == "handed_off"
+    assert "second attempt" in job["reason"]
+    assert apply_agent.daily_digest.not_applied_kind(job["reason"]) == "other"
+
+
 def test_autonomous_robot_check_does_not_open_a_manual_helper(env):
     agent, _, _, job = make_agent(env, BASIC, auto=True)
     agent.ask_adam = False

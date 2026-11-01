@@ -17,13 +17,74 @@ def field(label, kind='combobox', options=None):
 
 
 @pytest.mark.parametrize('label,expected', [
-    ('Are you currently based in the US East Coast ?*', 'No'),
     ('Have you worked with AI coding agents ?*', 'Yes'),
     ('Do you have the right to work in the United States, without requiring company sponsorship?', 'Yes'),
     ('Are you authorized to work in the country you currently reside in?', 'Yes'),
 ])
 def test_historical_known_questions(label, expected):
     assert aa.resolve(field(label), aa.DEFAULT_PROFILE, BANK)[:2] == ('fill', expected)
+
+
+def test_a_required_question_that_he_already_live_elsewhere_skips_the_job():
+    outcome, _value, why = aa.resolve(field('Are you currently based in the US East Coast ?*'), aa.DEFAULT_PROFILE, BANK)
+    assert outcome == 'giveup' and 'Minnesota' in why
+
+
+def test_birth_date_clearance_car_and_termination():
+    assert aa.resolve(field('Date of birth', 'text', []), aa.DEFAULT_PROFILE, {})[:2] == ('fill', '09/13/1995')
+    assert aa.resolve(field('Date of birth', 'date', []), aa.DEFAULT_PROFILE, {})[:2] == ('fill', '1995-09-13')
+    assert aa.resolve(field('Are you eligible to obtain a security clearance?'), aa.DEFAULT_PROFILE, {})[:2] == ('fill', 'No')
+    assert aa.resolve(field('Do you currently hold a clearance?'), aa.DEFAULT_PROFILE, {})[:2] == ('fill', 'No')
+    assert aa.resolve(field('What is your current salary?', 'text', []), aa.DEFAULT_PROFILE, {})[:2] == ('fill', 'N/A')
+    assert aa.resolve(field('May we contact your current employer?'), aa.DEFAULT_PROFILE, {})[:2] == ('fill', 'No')
+    assert aa.resolve(field('Do you own a car?'), aa.DEFAULT_PROFILE, {})[:2] == ('fill', 'Yes')
+    assert aa.resolve(field('Are you at least 21 years of age?'), aa.DEFAULT_PROFILE, {})[:2] == ('fill', 'Yes')
+    assert aa.resolve(field('What country are you based in?', 'text', []), aa.DEFAULT_PROFILE, {})[:2] == ('fill', 'United States')
+    policy = ('Orbis maintains a zero-tolerance policy on unauthorized assistance. During interviews you may not use AI tools.')
+    assert aa.resolve(field(policy), aa.DEFAULT_PROFILE, {})[:2] == ('fill', 'Yes')
+    assert aa.resolve(field("Driver's license number", 'text', []), aa.DEFAULT_PROFILE, {})[0] == 'ask'
+    fired = field('Have you ever been fired or terminated?')
+    assert aa.resolve(fired, aa.DEFAULT_PROFILE, {})[:2] == ('fill', 'Yes')
+    reason = field('If yes, explain the reason for leaving', 'textarea', [])
+    text = aa.resolve(reason, aa.DEFAULT_PROFILE, {})[1]
+    assert 'Epicor' in text and 'Citizen Observer' in text and 'tip411' not in text
+
+
+def test_references_id_record_schedule_and_travel():
+    assert aa.resolve(field('Please list your professional references', 'text', []), aa.DEFAULT_PROFILE, {})[:2] == ('fill', 'None')
+    assert aa.resolve(field('Do you have professional references?'), aa.DEFAULT_PROFILE, {})[:2] == ('fill', 'No')
+    assert aa.resolve(field('Do you have a valid driver\'s license?'), aa.DEFAULT_PROFILE, {})[:2] == ('fill', 'Yes')
+    assert aa.resolve(field('Have you ever been convicted of a felony?'), aa.DEFAULT_PROFILE, {})[:2] == ('fill', 'No')
+    assert aa.resolve(field('Are you willing to work overtime, nights, and weekends?'), aa.DEFAULT_PROFILE, {})[:2] == ('fill', 'Yes')
+    veteran = field('Veteran Status', 'select', ['I am a veteran', 'I am not a protected veteran', 'I prefer not to say'])
+    assert aa.resolve(veteran, aa.DEFAULT_PROFILE, {})[1] == 'I am not a protected veteran'
+    bands = field('What percentage of travel are you comfortable with?', 'select', ['10%', '25%', '50%', '75%'])
+    assert aa.resolve(bands, aa.DEFAULT_PROFILE, {}, job={'description': 'No travel mentioned.'})[1] == '50%'
+    posted = field('Travel requirement', 'select', ['Up to 25%', 'Up to 50%', 'Up to 75%'])
+    assert aa.resolve(posted, aa.DEFAULT_PROFILE, {}, job={'description': 'This role includes up to 75% travel.'})[1] == 'Up to 75%'
+    volume = field('How many customer interactions have you handled per day in previous support roles?', 'text', [])
+    assert aa.resolve(volume, aa.DEFAULT_PROFILE, {})[:2] == ('fill', '0')
+
+
+def test_languages_pay_and_work_he_has_not_done():
+    estonian = field('What is your Estonian proficiency?', 'select', ['None', 'Beginner', 'Fluent'])
+    assert aa.resolve(estonian, aa.DEFAULT_PROFILE, {})[:2] == ('fill', 'None')
+    county = field('County', 'text', [])
+    assert aa.resolve(county, aa.DEFAULT_PROFILE, {})[:2] == ('fill', 'Hennepin')
+    tickets = field('How many years of customer support experience do you have?', 'text', [])
+    assert aa.resolve(tickets, aa.DEFAULT_PROFILE, {})[:2] == ('fill', '0')
+    kafka = field('Have you sold Kafka?')
+    assert aa.resolve(kafka, aa.DEFAULT_PROFILE, {})[:2] == ('fill', 'No')
+    nursing = field('Do you have experience in nursing?')
+    assert aa.resolve(nursing, aa.DEFAULT_PROFILE, {})[:2] == ('fill', 'No')
+    applied = field('Have you applied to this company in the last 6 months?')
+    assert aa.resolve(applied, aa.DEFAULT_PROFILE, {}, job={'company': 'Acme'})[:2] == ('fill', 'No')
+    original = aa._applied_recently
+    aa._applied_recently = lambda company, within_days=183: company == 'Acme'
+    try:
+        assert aa.resolve(applied, aa.DEFAULT_PROFILE, {}, job={'company': 'Acme'})[:2] == ('fill', 'Yes')
+    finally:
+        aa._applied_recently = original
 
 
 def test_inference_answer_keeps_infrastructure_gap_visible():

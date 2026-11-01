@@ -45,6 +45,22 @@ USER_AGENT = "Mozilla/5.0 (personal-job-search; contact: adam)"
 HTTP_TIMEOUT = 30
 
 
+def _load_env():
+    env_file = ROOT / ".env"
+    if env_file.is_file():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, _, v = line.partition("=")
+                k = k.strip()
+                v = v.strip().strip('"').strip("'")
+                if k and k not in os.environ:
+                    os.environ[k] = v
+
+
+_load_env()
+
+
 # ---------------------------------------------------------------------------
 # Location tiers and fit scoring (ported from the _run_2026-09-14 process.py)
 # ---------------------------------------------------------------------------
@@ -261,6 +277,10 @@ def _card_in_requested_location(loc, work_mode=None):
     tier = loc_tier(loc, work_mode)
     if tier in ("mn", "ms"):
         return True
+    import scoring
+    code = _region_code(low)
+    if code and code.upper() in scoring.PREFERRED_STATES:
+        return True
     if _generic_us_remote(low):
         return True
     if (work_mode or "").lower() == "remote" and not low:
@@ -298,10 +318,10 @@ def location_high_block(loc, work_mode=None, description=None, title=None):
     import scoring
 
     named = scoring.title_states(title)
-    if named and not {"MN", "MS"} & set(named):
+    if named and not scoring.PREFERRED_STATES & set(named):
         return f"the title ties the seat to {', '.join(named)}, so you would relocate"
     limited_to = scoring.state_restriction(description)
-    if limited_to and not {"MN", "MS"} & set(limited_to):
+    if limited_to and not scoring.PREFERRED_STATES & set(limited_to):
         return f"the posting is limited to {', '.join(limited_to)}, so you would relocate"
     if _card_in_requested_location(loc, work_mode):
         return None

@@ -139,6 +139,11 @@ DISCOVER_JS = r"""
   };
   // Checkboxes that are one multi-select even when each option has its own name (Ashby does this).
   // Stops at the first ancestor that also holds a text box, so two consent boxes on a form stay separate.
+  const radioSet = (el) => {
+    const fs = el.closest('fieldset');
+    if (!fs) return null;
+    return fs.querySelectorAll('input[type=radio]').length > 1 ? fs : null;
+  };
   const checkGroup = (el) => {
     let box = el.parentElement, found = null;
     for (let n = 0; box && n < 7; n++, box = box.parentElement) {
@@ -177,7 +182,7 @@ DISCOVER_JS = r"""
     if (type === 'radio' || type === 'checkbox') {
       const name = el.name || '';
       const optLabel = labelOf(el);
-      const grouped = type === 'checkbox' ? checkGroup(el) : null;
+      const grouped = type === 'checkbox' ? checkGroup(el) : radioSet(el);
       const heading = grouped ? headingOf(grouped) : '';
       const key = heading ? (type + ':group:' + heading) : (type + ':' + (name || groupLabel(el)));
       let g = seenGroups.get(key);
@@ -194,6 +199,8 @@ DISCOVER_JS = r"""
       return;
     }
     const label = type === 'file' ? fileLabel(el) : labelOf(el);
+    const legend = el.closest('fieldset') && el.closest('fieldset').querySelector('legend');
+    if (legend && clean(legend.innerText) && (type === 'search' || GENERIC_LABEL.test(label) || MACHINE_LABEL.test(label))) return;
     let kind = 'text', options = [];
     if (el.tagName === 'TEXTAREA') kind = 'textarea';
     else if (el.tagName === 'SELECT') { kind = 'select'; options = Array.from(el.options).map(o => clean(o.textContent)).filter(Boolean); }

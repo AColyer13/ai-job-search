@@ -317,7 +317,8 @@ class Agent:
     def __init__(self, tg, state_path=None, forms=apply_forms, runner=agent_runner.run_agent,
                  log=log_result, browser=open_browser, profile=None, bank_path=None,
                  dry_run=False, headed=False, letter_dir=None, shot_dir=None, now=time.time, log_entries=None, fit_of=None,
-                 embed_resolver=None, assist_launcher=None, auto_submit=None, audit_rows=None, ask_adam=None):
+                 embed_resolver=None, assist_launcher=None, auto_submit=None, audit_rows=None, ask_adam=None,
+                 company_check=None):
         self.assist_launcher = assist_launcher or launch_assist
         self.tg, self.forms, self.runner, self.log_write = tg, forms, runner, log
         self.audit_rows, self.audit_alerted, self.audit_last, self.retry_last = audit_rows, set(), 0, 0
@@ -345,6 +346,8 @@ class Agent:
         self.ask_adam = (setting("APPLY_ASK_ADAM") == "1") if ask_adam is None else ask_adam
         self.active_hours = None  # (start, end) in minutes after midnight; set for the always-on listener only
         self.jobs = self._load()
+        # None in tests. The listener passes a check that searches the first time a company arrives.
+        self.company_check = company_check
 
     def waited(self, job):
         """Seconds a job has been waiting on Adam, not counting the hours the listener is off."""
@@ -420,7 +423,9 @@ class Agent:
             return None
 
     def title_of(self, job):
-        return f"<b>{esc(job.get('title') or 'Untitled')}</b> · {esc(job.get('company') or 'company not listed')}"
+        import company_standing
+        mark = company_standing.mark_line(job.get("company"))
+        return f"{mark}\n<b>{esc(job.get('title') or 'Untitled')}</b> · {esc(job.get('company') or 'company not listed')}"
 
     # ---- queue
     def queue(self, candidates, limit=10, fits=("high", "medium")):
@@ -475,6 +480,12 @@ class Agent:
                 if identity is not None:
                     handled.add(identity)
         self.save()
+        if added and self.company_check:
+            for rec in added:
+                try:
+                    self.company_check(rec.get("company") or "")
+                except Exception:
+                    pass
         if added:
             self.say(self.queue_summary(added))
         return added
@@ -642,10 +653,6 @@ class Agent:
                 job["answers"][f.key] = value
                 job["fields"][f.key] = {"label": f.label, "kind": f.kind, "required": True,
                                          "options": list(f.options), "outcome": outcome}
-            elif outcome == "draft":
-                text = apply_answers.base_cover_letter() if re.search(r"cover letter|letter", f.key) or apply_answers.ESSAY.search(f.label or "") else ""
-                if text:
-                    job["answers"][f.key] = text
         still = [f.label or f.key for f in form.fields if f.required and f.key not in job["answers"]]
         return "; ".join(clip(m, 60) for m in still[:4])
 
@@ -688,17 +695,18 @@ class Agent:
         if letter is False:
             return None
         job["pending"] = [k for k, m in job["fields"].items() if m["outcome"] == "ask" and k not in job["answers"]]
-        if job["pending"] and (not self.ask_adam or len(job["pending"]) >= self.max_questions):
+        if job["pending"] and not self.ask_adam:
             labels = "; ".join(clip(job["fields"][k]["label"], 60) for k in job["pending"][:4])
             for k in job["pending"]:
-                self.note_issue("asked", job, label=job["fields"][k]["label"])  # /issues shows which rule to add
+                self.note_issue("asked", job, label=job["fields"][k]["label"])
             self.save()
-            if len(job["pending"]) >= self.max_questions and self.ask_adam:
-                return self.handoff(job, f"too many unique questions ({len(job['pending'])}): {labels}")
-            from application_knowledge import question_kind
-            kinds = sorted({question_kind(type('Question', (), meta)()) for k, meta in job['fields'].items() if k in job['pending']})
-            job['unresolved_question_kinds'] = kinds
-            return self.handoff(job, f"Unresolved required questions ({', '.join(kinds)}): {labels}")
+            return self.handoff(job, f"no answer yet for: {labels}")
+        if job["pending"] and len(job["pending"]) >= self.max_questions:
+            labels = "; ".join(clip(job["fields"][k]["label"], 60) for k in job["pending"][:4])
+            for k in job["pending"]:
+                self.note_issue("asked", job, label=job["fields"][k]["label"])
+            self.save()
+            return self.handoff(job, f"too many unique questions ({len(job['pending'])}): {labels}")
         self.save()
         return self.next_step(job)
 
@@ -1065,6 +1073,12 @@ class Agent:
                 self.save()
                 return self.submit_job(job)
             return self.handoff(job, f"No confirmation page, and {note}, after a second attempt.", attempted=True)
+        elif re.search(r"did not accept the code", detail or "", re.I):
+            if not job.get("code_again"):
+                job["code_again"] = True
+                self.save()
+                return self.submit_job(job)
+            self.handoff(job, "The company rejected the number from the email, after a second attempt.", attempted=True)
         else:  # blocked or invalid
             self.handoff(job, f"The site did not accept it ({status}): {clip(detail, 200)}")
 
@@ -1375,6 +1389,12 @@ Adam's question: {question}
                     slept = True
                     wake = datetime.fromtimestamp(next_active_start(self.now(), self.active_hours))
                     print(f"{datetime.now():%H:%M} outside active hours; not polling Telegram until {wake:%a %H:%M}.", file=sys.stderr)
+                    if os.environ.get("APPLY_QUESTION_REVIEW", "1") != "0":
+                        try:
+                            import question_review
+                            question_review.review_today(self.say)
+                        except Exception as err:
+                            self.note_error("question review", err)
                 touch_lock()
                 time.sleep(min(60, max(1, next_active_start(self.now(), self.active_hours) - self.now())))
                 continue
@@ -1582,8 +1602,10 @@ def main(argv=None):
             return 1
         try:
             # Load only after ownership: another writer may have saved while we waited.
+            import company_standing
             agent = Agent(tg, dry_run=args.dry_run, headed=args.headed,
-                          audit_rows=tracking_audit._tracker_rows if listen else None)
+                          audit_rows=tracking_audit._tracker_rows if listen else None,
+                          company_check=company_standing.ensure)
             if listen:
                 agent.active_hours = active_hours()
             if args.cmd == "queue":

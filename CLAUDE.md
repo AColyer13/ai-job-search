@@ -15,7 +15,7 @@ This repo is a job application workspace. The AI agent running this session (Cla
 - **Name:** Adam Colyer
 - **Location:** Edina, MN, USA (open to relocation; see location tiers under Deal-breakers below)
 - **Preferred name:** Adam (what he goes by; "preferred / nickname / what should we call you" fields get "Adam", `preferred_name` in `apply_answers.DEFAULT_PROFILE`)
-- **Languages:** English (native)
+- **Languages:** English (native), Spanish (Beginner)
 - **Citizenship:** US citizen (born in the United States). Recorded in `daily/apply_profile.json` as citizenship `US Citizen` and birth country `United States`.
 - **CV language:** English
 
@@ -79,7 +79,7 @@ None.
   1. Ideal: Fully remote
   2. Acceptable: Twin Cities west/NW/SW suburbs from **Rogers, MN** (north) through **Chanhassen, MN** (south), including Edina, Eden Prairie, Minnetonka, Hopkins, St. Louis Park, Golden Valley, Plymouth, Maple Grove, Osseo, Brooklyn Park, Rogers, Dayton, Medina, Wayzata, Orono, Chaska, Victoria, Bloomington, and Richfield. Garmin in Chanhassen is in range. Still skip a required downtown Minneapolis 5-day commute when a west-suburb office exists; hybrid with 1–2 days in Minneapolis is acceptable.
   3. Acceptable (relocation): Mississippi, preferably the Gulfport–Biloxi area (also nearby Gulf Coast: Long Beach, D'Iberville, Ocean Springs, Pass Christian)
-  4. Acceptable (relocation, stated by Adam): Texas, Oklahoma, Arkansas, Louisiana, Alabama, Georgia, Florida. A remote role limited to these states ("TX/OK/AR/LA only") is Medium, not Low.
+  4. Grade higher (Adam, 2026-11-01): Minnesota, fully remote, Mississippi, Texas, Alabama, Oklahoma, Florida, Georgia, Utah, and South Carolina. He will relocate anywhere in the US. A required question that he already live outside Minnesota is not applied. Arkansas and Louisiana stay acceptable and are Medium when the posting is limited to only those. A remote role limited to a list that includes a higher-grade state can stay High.
   5. Borderline: Other US locations requiring relocation
   6. Too far: St. Paul or anywhere east of Minneapolis, unless the role is fully remote; Mississippi roles well inland from the Gulf Coast
 - Prefers remote/hybrid; open otherwise (no other hard deal-breakers specified yet)

@@ -35,6 +35,12 @@ and engineering or technical-delivery seats with no sign they take a career
 changer 69. The target roles (entry full-stack / AI engineering, technical sales,
 sales / solutions engineering, pre-sales / solutions architecture) have no ceiling.
 
+Company standing (company_standing.py) is applied after that score, from stored
+public pages only. A fake employer is low. Two recent negative pages and no
+positive ones cap the score at 49. Disagreement caps it at 64. Two positive
+pages and no negative ones add 12, still inside any role ceiling. No record
+leaves the score alone.
+
 A posting whose text could not be read is medium when the title fits a target role
 (the requirements are unchecked, not failed) and low when the title is adjacent. It is
 retried on later runs while it is inside the 14-day window, and graded properly once
@@ -45,6 +51,8 @@ Every weight, threshold and assumption is written down in job_scraper/FIT_SCALE.
 Stdlib only. `score(job)` returns a dict; `grade_job(job)` writes it onto the job.
 """
 import re
+
+import company_standing
 
 # --- Adam's background, in whole years -------------------------------------
 SALES_YEARS = 4          # stated minimum. A posting that REQUIRES more is left off the list.
@@ -140,7 +148,7 @@ _REGION_RE = re.compile(
     re.I,
 )
 _REGION_OK_RE = re.compile(
-    r"(?i:\b(?:mid ?west|central|great lakes|south ?east|south|gulf|minnesota|mississippi|national|nationwide|south ?west|texas|oklahoma|arkansas|louisiana|alabama|georgia|florida)\b)|\b(?:MN|MS|TX|OK|AR|LA|AL|GA|FL)\b"
+    r"(?i:\b(?:mid ?west|central|great lakes|south ?east|south|gulf|minnesota|mississippi|national|nationwide|south ?west|texas|oklahoma|arkansas|louisiana|alabama|georgia|florida|utah|south carolina)\b)|\b(?:MN|MS|TX|OK|AR|LA|AL|GA|FL|UT|SC)\b"
 )
 _US_STATES = frozenset(
     "AL AK AZ AR CA CO CT DE FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY".split()
@@ -150,8 +158,12 @@ _STATE_LIST_RE = re.compile(r"\b(?:[NSEW]{1,2}\s+)?[A-Z]{2}(?:\s*[/,&]\s*(?:[NSE
 
 
 # Home (Minnesota, Mississippi) and the states he has said he would relocate to.
+# Preferred seats grade higher: Minnesota, remote, and the states in PREFERRED_STATES.
+# Arkansas and Louisiana stay acceptable. A posting that requires he already live
+# somewhere outside Minnesota is not applied (see apply_answers).
 HOME_STATES = frozenset({"MN", "MS"})
-RELOCATION_STATES = frozenset({"TX", "OK", "AR", "LA", "AL", "GA", "FL"})
+RELOCATION_STATES = frozenset({"TX", "OK", "AR", "LA", "AL", "GA", "FL", "UT", "SC"})
+PREFERRED_STATES = frozenset({"MN", "MS", "TX", "OK", "AL", "GA", "FL", "UT", "SC"})
 
 
 def territory_excludes_him(title):
@@ -297,7 +309,7 @@ _STATE_NAME_ONLY_RE = re.compile(
     re.I,
 )
 _ALLOWED_STATE_NAMES = frozenset({"minnesota", "mississippi", "texas", "oklahoma", "arkansas", "louisiana", "alabama",
-                                  "georgia", "florida"})
+                                  "georgia", "florida", "utah", "south carolina"})
 
 
 def card_state_limit(location):
@@ -1145,7 +1157,8 @@ def score(job):
     verified = has_text(desc) and job.get("body_status") not in ("shell", "unread")
     family = role_family(title)
 
-    state = {"score": 0, "parts": None, "stretch_notes": []}
+    stood = company_standing.lookup(company)
+    state = {"score": 0, "parts": None, "stretch_notes": [], "standing": stood.get("standing") or "unknown"}
 
     def result(grade, entry=False, disqualified=False):
         if grade == _LOW:
@@ -1172,9 +1185,29 @@ def score(job):
             "verified": verified,
             "entry_evidence": entry,
             "family": family,
+            "company_standing": state["standing"],
         }
 
+    def attach_standing():
+        kind, sentence = company_standing.grade_note(company, stood)
+        if not sentence:
+            return
+        if kind == "blocker":
+            blockers.append(sentence)
+        else:
+            reasons.append(sentence)
+
     # -- hard no's from the title / company ---------------------------------
+    if stood.get("standing") == "fake" or company_standing.fake_posting(f"{title}\n{desc}"):
+        if stood.get("standing") == "fake":
+            attach_standing()
+        if company_standing.fake_posting(f"{title}\n{desc}"):
+            blockers.append(
+                "The posting asks for a fee, a payment, or a private-chat interview, which is a fake-job pattern."
+            )
+        if not blockers:
+            blockers.append("The employer is recorded as a fake or scam.")
+        return result(_LOW, disqualified=True)
     if INTERN_RE.search(title):
         blockers.append("The title says intern or co-op.")
         return result(_LOW)
@@ -1279,8 +1312,13 @@ def score(job):
         dom, _ = domain_points(title, "", industrial)
         beh, _, _ = behavior_points("")
         parts = {"career": role + dom, "technical": tech, "experience": 18, "behavior": beh}
-        state["score"] = min(sum(parts.values()), CAP_UNREAD)
+        total = company_standing.effect(min(sum(parts.values()), CAP_UNREAD), CAP_UNREAD, stood.get("standing"))
+        state["score"] = total
         state["parts"] = parts
+        if total < MEDIUM_AT:
+            attach_standing()
+            return result(_LOW)
+        attach_standing()
         return result(_MED)
 
     if not industrial and industrial_domain(desc):
@@ -1439,7 +1477,7 @@ def score(job):
     if technical_bridge and unproven:
         cap = min(cap, CAP_UNPROVEN)
         blockers.append("This title is mostly technical delivery; it needs proof it is open to sales backgrounds.")
-    total = min(raw, cap)
+    total = company_standing.effect(min(raw, cap), cap, stood.get("standing"))
     if cap_why and raw >= HIGH_AT:
         blockers.append(cap_why)
     elif industrial:
@@ -1452,7 +1490,9 @@ def score(job):
             f"The fit score is {total}/100, under the {MEDIUM_AT} that earns a place on the list. "
             f"Weakest areas: {' and '.join(_PART_NAMES[k] for k in weakest)}."
         )
+        attach_standing()
         return result(_LOW, entry_evidence)
+    attach_standing()
 
     reasons.insert(0, role_why)
     if dom_why:
@@ -1490,4 +1530,5 @@ def grade_job(job):
     job["minimums"] = out["minimums"]
     job["minimums_note"] = out["minimums_note"]
     job["disqualified"] = out["disqualified"]
+    job["company_standing"] = out.get("company_standing") or "unknown"
     return job

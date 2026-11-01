@@ -263,7 +263,9 @@ def test_high_requires_a_requested_location():
     assert pipeline.location_high_block("Remote - Canada, USA", "remote")
     assert pipeline.location_high_block("Richmond, VA, USA", "remote")
     assert pipeline.location_high_block("Farmington, NM, United States", "remote")
-    assert pipeline.location_high_block("Austin, TX", "remote")
+    assert pipeline.location_high_block("Austin, TX", "remote") is None
+    assert pipeline.location_high_block("Salt Lake City, UT", None) is None
+    assert pipeline.location_high_block("Charleston, SC", None) is None
     assert pipeline.location_high_block("Dayton, Marengo County", None)
     madison = (
         "Please note that this position is based on our campus in Madison, WI, "
@@ -926,7 +928,9 @@ def test_a_post_body_makes_get_a_post(monkeypatch):
 
 
 def test_state_limited_remote_job_is_a_relocation_medium():
-    block = pipeline.location_high_block("Remote (United States)", "remote", "Candidates in TX/OK/AR/LA only.")
+    # Texas is on the higher-grade list, so a restriction that includes it can stay high.
+    assert pipeline.location_high_block("Remote (United States)", "remote", "Candidates in TX/OK/AR/LA only.") is None
+    block = pipeline.location_high_block("Remote (United States)", "remote", "Candidates in AR/LA only.")
     assert block and "relocate" in block
     assert pipeline.location_high_block("Remote (United States)", "remote", "Candidates in MN/WI only.") is None
 
@@ -1058,8 +1062,10 @@ def test_enrich_reads_himalayas_rows_through_the_api(monkeypatch):
 
 
 def test_title_tied_to_a_relocation_state_caps_high_to_medium():
-    block = pipeline.location_high_block("Remote (United States)", "remote", "", "Solutions Engineer, Florida (Enterprise)")
-    assert block and "FL" in block
+    assert pipeline.location_high_block("Remote (United States)", "remote", "", "Solutions Engineer, Florida (Enterprise)") is None
+    assert pipeline.location_high_block("Remote (United States)", "remote", "", "Solutions Engineer, Utah") is None
+    block = pipeline.location_high_block("Remote (United States)", "remote", "", "Solutions Engineer, Virginia")
+    assert block and "VA" in block
     assert pipeline.location_high_block("Remote (United States)", "remote", "", "Solutions Engineer, Minnesota") is None
     assert pipeline.location_high_block("Remote (United States)", "remote", "", "Solutions Engineer") is None
 
