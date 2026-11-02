@@ -47,9 +47,13 @@ def env(tmp_path, chromium):
     @contextlib.contextmanager
     def browser():
         context = chromium.new_context()
+        def body_for(url):
+            body = pages.get(url, "<html><body>Not found</body></html>")
+            return body() if callable(body) else body
+
         context.route("**/*", lambda route: route.fulfill(
             status=200 if route.request.url.split("?")[0] in pages else 404, content_type="text/html",
-            body=pages.get(route.request.url.split("?")[0], "<html><body>Not found</body></html>")))
+            body=body_for(route.request.url.split("?")[0])))
         opened.append(context)
         try:
             yield context.new_page()
@@ -62,9 +66,8 @@ def env(tmp_path, chromium):
                               log=lambda job, status, **kw: logged.append((status, kw)) or True, browser=browser,
                               profile={**apply_answers.DEFAULT_PROFILE, "resume_pdf": str(resume)},
                               bank_path=tmp_path / "bank.json", letter_dir=tmp_path / "letters",
-                              shot_dir=tmp_path / "shots", assist_launcher=lambda jid: agent.launched.append(jid), auto_submit=False)
-    agent.max_questions = 99  # these forms ask two questions; the several-questions rule has its own test
-    agent.launched = []  # Chrome on Adam's PC is never opened by a test
+                              shot_dir=tmp_path / "shots")
+    agent.launched = []  # a robot check must not open Chrome
     return agent, tg, logged, pages
 
 
@@ -76,72 +79,42 @@ def add(agent, url, ats):
     return job
 
 
-def drive(agent, tg, answer_text="Yes"):
-    """Play Adam: answer every question (buttons first, else text) and finally tap Submit."""
-    for _ in range(20):
-        job = next(iter(agent.jobs.values()))
-        if job["status"] == "asking":
-            labels = [l for l, _ in tg.last_buttons()]
-            pick = next((l for l in labels if l in ("No", "Yes")), None)
-            if job["fields"][job["asked"]]["label"].lower().startswith(("do you require", "are you")):
-                pick = "No" if "sponsorship" in job["fields"][job["asked"]]["label"].lower() else "Yes"
-            if pick:
-                tg.tap(pick)
-            else:
-                tg.events.append({"type": "text", "text": answer_text})
-        elif job["status"] == "ready":
-            tg.tap("Submit")
-        else:
-            return job
-        for ev in tg.poll():
-            agent.handle(ev)
-    return next(iter(agent.jobs.values()))
-
-
 def test_greenhouse_end_to_end(env):
     agent, tg, logged, _ = env
     job = add(agent, GH, "greenhouse")
     agent.advance()
-    assert job["status"] == "ready"  # work authorization and sponsorship are standing facts
+    assert job["status"] == "applied", [t for t, _ in tg.sent][-3:]
     assert job["answers"]["do you require sponsorship"] == "No"
-    done = drive(agent, tg)
-    assert done["status"] == "applied", [t for t, _ in tg.sent][-3:]
     assert logged[0][0] == "applied" and logged[0][1]["resume"].endswith("resume.pdf")
     assert any("Applied" in t for t, _ in tg.sent)
-    drafts = [t for t, _ in tg.sent if "Draft 1" in t]
-    assert drafts and "Tailored answer." in drafts[0]
+    assert any("Tailored answer." in t for t, _ in tg.sent)
+    assert agent.launched == []
 
 
-def test_lever_end_to_end(env):
+def test_lever_robot_check_is_logged_and_chrome_is_not_opened(env):
     agent, tg, logged, pages = env
-    pages[LV + "/apply"] = LEVER.replace("</body>", '<div class="h-captcha" data-sitekey="x"></div></body>')  # Lever draws this container on the page
+    pages[LV + "/apply"] = LEVER.replace("</body>", '<div class="h-captcha" data-sitekey="x"></div></body>')
     job = add(agent, LV, "lever")
     agent.advance()
-    assert job["human_click"]  # seen on the page, not assumed from the link
-    done = drive(agent, tg, "Python")
-    assert done["status"] == "assisting" and agent.launched == [job["id"]] and not logged  # Lever's hCaptcha: Adam clicks
-    agent.state_path.with_name(f"apply_assist_{job['id']}.json").write_text(json.dumps({"status": "submitted", "detail": ""}))
-    agent.collect_assists()
-    assert job["status"] == "applied" and logged[0][0] == "applied"
+    assert job["status"] == "handed_off" and agent.launched == [] and logged[0][0] == "attempted"
+    assert "robot check" in logged[0][1]["reason"].lower()
 
 
-def test_ashby_end_to_end(env):
+def test_a_submit_the_site_refuses_is_not_retried_in_chrome(env):
     agent, tg, logged, pages = env
     pages[AB + "/application"] = ASHBY.replace("</body>", '<div style="position:fixed;inset:0;background:#fff;z-index:9">check</div></body>')
     job = add(agent, AB, "ashby")
     agent.advance()
-    assert not job.get("human_click")  # nothing on the page says robot check until Submit is pressed
-    assert drive(agent, tg)["status"] == "assisting" and agent.launched == [job["id"]]  # the site refused the script, so Chrome tries it
+    assert job["status"] != "assisting" and agent.launched == []
 
 
-def test_captcha_page_is_prepared_and_left_for_adams_click(env):
+def test_captcha_page_is_logged_and_chrome_is_not_opened(env):
     agent, tg, logged, pages = env
     pages[GH] = CAPTCHA
     job = add(agent, GH, "greenhouse")
     agent.advance()
-    assert job["human_click"] and job["status"] == "ready" and not logged  # filled, then Adam's last click on the robot check
-    done = drive(agent, tg)
-    assert done["status"] == "assisting" and agent.launched == [job["id"]]
+    assert job["status"] == "handed_off" and agent.launched == [] and logged[0][0] == "attempted"
+    assert "robot check" in job["reason"].lower()
 
 
 def test_closed_posting_is_handed_off(env):
@@ -157,7 +130,7 @@ def test_a_number_404_in_a_real_posting_does_not_look_like_a_missing_page(env):
     pages[GH] = GREENHOUSE.replace("<h2>Apply</h2>", "<h2>Apply</h2><p>Salary band 404 to 520 thousand, room 404.</p>")
     job = add(agent, GH, "greenhouse")
     agent.advance()
-    assert job["status"] in ("asking", "ready")
+    assert job["status"] == "applied"
 
 
 def test_page_that_returns_404_is_logged_as_tried_not_recommended(env):
@@ -167,34 +140,32 @@ def test_page_that_returns_404_is_logged_as_tried_not_recommended(env):
     assert job["status"] == "handed_off" and logged[0][0] == "attempted"
 
 
-def test_form_that_changes_after_approval_is_not_submitted(env):
+def test_a_new_required_question_on_the_second_read_is_not_submitted(env):
     agent, tg, logged, pages = env
+    seen = {"n": 0}
+
+    def page():
+        seen["n"] += 1
+        extra = ""
+        if seen["n"] > 1:
+            extra = '<div><label for="x">Favorite color *</label><input id="x" name="x" required></div>'
+        return GREENHOUSE.replace("<p id=\"err\">", extra + '<p id="err">')
+
+    pages[GH] = page
     job = add(agent, GH, "greenhouse")
     agent.advance()
-    for _ in range(10):
-        if job["status"] != "asking":
-            break
-        label = job["fields"][job["asked"]]["label"].lower()
-        tg.tap("No" if "sponsorship" in label else "Yes")
-        for ev in tg.poll():
-            agent.handle(ev)
-    assert job["status"] == "ready"
-    pages[GH] = GREENHOUSE.replace("<p id=\"err\">", '<div><label for="x">Security clearance *</label><input id="x" name="x" required></div><p id="err">')
-    tg.tap("Submit")
-    agent.handle(tg.poll()[0])
     assert job["status"] == "applied" and logged[0][0] == "applied"
+    assert any("Tailored answer." in str(value) for value in job["answers"].values())
 
 
-def test_several_standing_questions_are_answered_and_the_job_is_prepared(env):
+def test_several_standing_questions_are_answered_and_the_job_is_sent(env):
     agent, tg, logged, pages = env
-    agent.ask_adam = False
-    agent.max_questions = 2
     job = add(agent, GH, "greenhouse")
     agent.advance()
-    assert job["status"] == "ready" and not logged
+    assert job["status"] == "applied" and logged[0][0] == "applied"
     assert job["answers"]["do you require sponsorship"] == "No"
     assert job["answers"]["are you legally authorized to work in the united states"] == "Yes"
-    assert not any(row for _, rows in tg.sent for r in (rows or []) for row in r if row[1].startswith("a:"))
+    assert tg.last_buttons() == []
 
 
 def records_setup(env, tmp_path, monkeypatch, url, ats):

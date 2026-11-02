@@ -128,8 +128,12 @@ def fetch_himalayas(job):
     The posting page itself refuses a plain request; the search API (the one src_himalayas
     uses) carries the full text. Searches the title, then title and company, three pages each.
     """
-    slug = _himalayas_slug(job.get("url"))
-    if not slug:
+    def posting_identity(url):
+        match = re.match(r"https?://(?:www\.)?himalayas\.app/companies/([\w-]+)/jobs/([\w-]+)", url or "")
+        return match.groups() if match else None
+
+    wanted = posting_identity(job.get("url"))
+    if not wanted:
         return "unread", ""
     for q in (job.get("title") or "", f"{job.get('title') or ''} {job.get('company') or ''}".strip()):
         if not q:
@@ -143,7 +147,7 @@ def fetch_himalayas(job):
                 break
             hits = data.get("jobs") or []
             for hit in hits:
-                if _himalayas_slug(hit.get("guid") or hit.get("applicationLink")) == slug:
+                if posting_identity(hit.get("guid") or hit.get("applicationLink")) == wanted:
                     text = html_to_text(hit.get("description") or "")
                     return ("opened", text[:MAX_CHARS]) if len(text) >= 200 else ("shell", text)
             if len(hits) < 20:
@@ -186,6 +190,14 @@ def greenhouse_form_url(url, company, fetch=None):
     guesses = [labels[0]] if labels and labels[0] else []
     guesses += board_slugs({"company": company, "url": url})
     fetch = fetch or _get
+    try:
+        employer_html = fetch(url, "text/html")
+        # Read the employer's embedded board token instead of guessing its slug.
+        # Still require the jobs API to prove that the requisition belongs there.
+        embedded = re.findall(r'https?://(?:boards|job-boards)\.greenhouse\.io/embed/[^"\s<>]+[?&](?:amp;)?for=([\w-]+)', employer_html)
+        guesses = embedded + guesses
+    except Exception:
+        pass
     for slug in dict.fromkeys(g for g in guesses if len(g) >= 3):
         try:
             data = json.loads(fetch(f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs/{jid}", "application/json"))

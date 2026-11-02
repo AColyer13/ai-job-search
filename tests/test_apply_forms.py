@@ -652,7 +652,7 @@ def test_start_date_and_notice_say_immediately():
         assert apply_answers.resolve(f, PROFILE, {}) == ("fill", "Immediately", "profile")
 
 
-def test_salary_is_open_unless_the_posting_states_a_range(monkeypatch, tmp_path):
+def test_salary_is_open_unless_the_posting_states_a_range():
     f = make("salary expectations", "text", label="Salary expectations")
     assert apply_answers.resolve(f, PROFILE, {}, job={"description": "Great team."})[1] == "Open / negotiable"
     stated = {"description": "Pay range: $120,000 - $150,000 plus bonus."}
@@ -663,11 +663,8 @@ def test_salary_is_open_unless_the_posting_states_a_range(monkeypatch, tmp_path)
     overlap = make("salary expectations", "select", label="Salary expectations",
                    options=["$80,000 - $100,000", "$110,000 - $140,000", "$160,000 - $180,000"])
     assert apply_answers.resolve(overlap, PROFILE, {}, job=stated)[1] == "$110,000 - $140,000"
-    monkeypatch.setattr(apply_answers, "LOG_PATH", tmp_path / "answers.json")
     middle = make("salary expectations", "select", label="Salary expectations", options=["<100k", "100k+", "150k+"])
-    assert apply_answers.resolve(middle, PROFILE, {})[1] == "100k+"
-    logged = __import__("json").loads((tmp_path / "answers.json").read_text(encoding="utf-8"))
-    assert logged[-1]["source"] == "middle pay band" and logged[-1]["answer"] == "100k+"
+    assert apply_answers.resolve(middle, PROFILE, {})[0] == "ask"
 
 
 def test_an_answer_adam_saved_beats_a_standing_one():

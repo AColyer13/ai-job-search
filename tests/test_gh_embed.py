@@ -33,6 +33,15 @@ def test_embedded_link_becomes_the_hosted_form_after_the_api_confirms_it():
     assert posting_text.greenhouse_form_url(EMBED, "Expel", fetch=fetch) == FORM
 
 
+def test_actual_embed_script_token_overrides_company_slug_guess():
+    url = 'https://cast.ai/careers/apply/?gh_jid=4436798009'
+    def fetch(target, accept='application/json'):
+        if target == url:
+            return '<script src="https://boards.greenhouse.io/embed/job_board/js?for=castaigroupinc"></script>'
+        return board_api(('castaigroupinc', '4436798009'))(target, accept)
+    assert posting_text.greenhouse_form_url(url, 'Cast AI', fetch) == 'https://job-boards.greenhouse.io/embed/job_app?for=castaigroupinc&token=4436798009'
+
+
 def test_the_board_name_can_come_from_the_site_domain_when_the_company_name_differs():
     fetch = board_api(("databricks", "7001"))
     assert posting_text.greenhouse_form_url("https://www.databricks.com/company/careers/x?gh_jid=7001", "Databricks, Inc.", fetch=fetch) \

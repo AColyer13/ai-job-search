@@ -24,6 +24,7 @@ from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import company_standing  # noqa: E402
 import daily_digest  # noqa: E402
 
 ENV_PATH = daily_digest.ROOT / ".env"
@@ -138,6 +139,21 @@ def poll(env=None, wait=0, offset_path=None):
             raise
         updates = _call(token, "getUpdates", {**payload, "timeout": 0}, timeout=TIMEOUT)
     if updates:
+        # Preserve only Adam's accepted events before advancing the offset. Never
+        # turn arbitrary chat prose into an application answer automatically.
+        archive = Path(offset_path or OFFSET_PATH).with_name("telegram_history.jsonl")
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with archive.open("a", encoding="utf-8") as file:
+                for update in updates:
+                    accepted = parse_updates([update], chat)
+                    if accepted:
+                        message = update.get("message") or {}
+                        file.write(json.dumps({"update_id": update["update_id"], "events": accepted,
+                            "date": message.get("date"), "reply_context":
+                            (message.get("reply_to_message") or {}).get("text")}, ensure_ascii=False) + "\n")
+        except OSError as exc:
+            raise TelegramError("Could not preserve Telegram history; offset was not advanced") from exc
         _save_offset(max(u["update_id"] for u in updates) + 1, offset_path)
     return parse_updates(updates, chat)
 
@@ -213,7 +229,7 @@ def format_job(job):
     company = esc(job.get("company") or "Company not listed")
     fit = (job.get("fit") or "").upper()
     score = job.get("fit_score")
-    head = f"<b>{title}</b> at {company}"
+    head = f"{company_standing.mark_line(job.get('company'))}\n<b>{title}</b> at {company}"
     meta = f"{fit} fit" + (f" ({score})" if score is not None else "") + f" | {esc(daily_digest._where(job))}"
     link = daily_digest.apply_link(job)
     lines = [head, meta, handling_label(link)]
@@ -240,8 +256,12 @@ def build_messages(jobs, day):
     return messages
 
 
-def notify_new_jobs(store, day=None, env=None, send=send_message):
-    """Send today's unsent fit jobs. Returns how many jobs were sent."""
+def notify_new_jobs(store, day=None, env=None, send=send_message, company_check=None):
+    """Send today's unsent fit jobs. Returns how many jobs were sent.
+
+    Each company is checked once, the first time it arrives, so the message can say
+    good, undecided, or not a company you want to work for.
+    """
     env = read_env() if env is None else env
     if not env.get("TELEGRAM_BOT_TOKEN") or not env.get("TELEGRAM_CHAT_ID"):
         return 0
@@ -253,6 +273,12 @@ def notify_new_jobs(store, day=None, env=None, send=send_message):
     if not jobs:
         return 0
     shown = jobs[:MAX_JOBS_PER_RUN]
+    check = company_standing.ensure if company_check is None else company_check
+    for job in shown:
+        try:
+            check(job.get("company") or "")
+        except Exception:
+            pass
     for message in build_messages(jobs, day):
         send(message, env)
     save_sent(sent | {j.get("url") for j in shown if j.get("url")})

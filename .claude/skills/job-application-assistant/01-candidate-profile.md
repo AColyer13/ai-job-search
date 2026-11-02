@@ -18,7 +18,7 @@ framework_version: 1.0.0
 - **Citizenship:** US citizen
 - **Country of birth:** United States
 - **Status:** Actively job searching. Activus Connect contract ended June 2026. Building and shipping independent full-stack/AI projects while applying.
-- **Constraints:** Open to relocation anywhere in the US. Grade higher: Minnesota, fully remote, Mississippi, Texas, Alabama, Oklahoma, Florida, Georgia, Utah, South Carolina. A role that requires he already live outside Minnesota is not applied. Twin Cities office roles from Rogers, MN through Chanhassen, MN (west/NW/SW suburbs, including Garmin) stay the local preference.
+- **Constraints:** Open to relocation anywhere in the US. Grade higher: Minnesota, fully remote, Mississippi, Texas, Alabama, Oklahoma, Florida, Georgia, Utah, South Carolina. A role that requires he already live outside Minnesota, Texas, Mississippi, Louisiana, Alabama, Florida, Georgia, or South Carolina is not applied. Twin Cities office roles from Rogers, MN through Chanhassen, MN (west/NW/SW suburbs, including Garmin) stay the local preference.
 - **Canonical resume source:** `documents/cv/adam_colyer_resume.txt`. Mercor is included. The OneDrive PDF may still be an older export.
 
 ## Education

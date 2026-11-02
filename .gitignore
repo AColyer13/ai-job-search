@@ -34,6 +34,7 @@ job_scraper/_run_*/
 daily/*.txt
 daily/*.log
 daily/*.json
+daily/*.jsonl
 daily/*.docx
 *_BehavioralReport.pdf
 linkedin_Profile.pdf
@@ -105,3 +106,6 @@ daily/apply_agent.log
 
 # Personal career facts; never commit (same reason documents/cv/** is ignored)
 research/master_profile.*
+
+# Daily runtime subdirectories
+daily/*/

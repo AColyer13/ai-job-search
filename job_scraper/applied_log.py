@@ -628,6 +628,11 @@ NOT_APPLIED_LABEL = {"blocked": "AI blocked", "gap": "AI gap", "closed": "Not ap
 
 
 def _print_entries(entries, only_open=False):
+    if sys.platform == 'win32' and hasattr(sys.stdout, 'reconfigure'):
+        try:
+            sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        except Exception:
+            pass
     grouped = months(entries)
     for key, bucket in grouped.items():
         for slot in SLOTS:

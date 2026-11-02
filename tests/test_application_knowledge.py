@@ -28,6 +28,9 @@ def test_historical_known_questions(label, expected):
 def test_a_required_question_that_he_already_live_elsewhere_skips_the_job():
     outcome, _value, why = aa.resolve(field('Are you currently based in the US East Coast ?*'), aa.DEFAULT_PROFILE, BANK)
     assert outcome == 'giveup' and 'Minnesota' in why
+    for state in ('Texas', 'Mississippi', 'Louisiana', 'Alabama', 'Florida', 'Georgia', 'South Carolina'):
+        answer = aa.resolve(field(f'Are you currently based in {state}?'), aa.DEFAULT_PROFILE, BANK)
+        assert answer[:2] == ('fill', 'Yes'), state
 
 
 def test_birth_date_clearance_car_and_termination():
@@ -76,7 +79,7 @@ def test_languages_pay_and_work_he_has_not_done():
     kafka = field('Have you sold Kafka?')
     assert aa.resolve(kafka, aa.DEFAULT_PROFILE, {})[:2] == ('fill', 'No')
     nursing = field('Do you have experience in nursing?')
-    assert aa.resolve(nursing, aa.DEFAULT_PROFILE, {})[:2] == ('fill', 'No')
+    assert aa.resolve(nursing, aa.DEFAULT_PROFILE, {})[0] == 'ask'
     applied = field('Have you applied to this company in the last 6 months?')
     assert aa.resolve(applied, aa.DEFAULT_PROFILE, {}, job={'company': 'Acme'})[:2] == ('fill', 'No')
     original = aa._applied_recently
@@ -109,9 +112,9 @@ def test_standing_facts_answer_without_telegram(label, expected):
     assert aa.resolve(field(label), aa.DEFAULT_PROFILE, {})[:2] == ('fill', expected)
 
 
-def test_a_plain_arithmetic_blank_is_not_a_captcha():
+def test_a_plain_arithmetic_blank_is_left_unanswered():
     question = 'To help us prevent automated job applications, solve for X: 1 + X = 3'
-    assert aa.resolve(field(question, 'text', []), aa.DEFAULT_PROFILE, {})[:2] == ('fill', '2')
+    assert aa.resolve(field(question, 'text', []), aa.DEFAULT_PROFILE, {})[0] == 'ask'
 
 
 def test_citizenship_and_birth_country_stay_blank_until_the_profile_records_them():

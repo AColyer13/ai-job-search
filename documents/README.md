@@ -24,6 +24,8 @@ One subfolder per application, named `<company>_<role>` in lowercase with unders
 | `job_posting.md` | The full posting text. Postings expire, so keep a copy. |
 | `cv_draft.*` | The resume that was submitted, copied (never moved). |
 | `outcome.md` | Status and notes, in the format below. |
+| `interview_intel.md` | Public interview reports for this company, from `interview_intel.py`. Says so when none were found. |
+| `company_reviews.md` | Public employee reviews for this company, from `company_reviews.py`. Says so when none were found. |
 | `interview_prep_<stage>.md` | Written by `/interview`, one per stage. |
 | `followup_YYYY-MM-DD.md` | Follow-up notes written by `/outcome`. |
 

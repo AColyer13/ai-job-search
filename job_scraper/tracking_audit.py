@@ -65,7 +65,8 @@ def audit(entries=None, jobs=None, tracker_rows=None, now=None):
         if job.get("status") == "assisting" and now - job.get("assist_started", now) > STUCK_SECONDS:
             problems.append(f"STUCK: {name} has been waiting on a Chrome window for over {STUCK_SECONDS // 60} minutes")
         reason = job.get("reason") or ""
-        if job.get("status") == "handed_off" and any(s in reason for s in UNSURE_REASONS):
+        if (job.get("status") == "handed_off" and any(s in reason for s in UNSURE_REASONS)
+                and (not entry or entry.get("status") != "applied")):
             problems.append(f"VERIFY BY EMAIL: {name} was handed back ({reason[:70]}). If you did press Submit, a confirmation email will log it")
 
     for entry in entries.values():

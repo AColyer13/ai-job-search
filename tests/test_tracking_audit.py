@@ -60,3 +60,8 @@ def test_a_closed_window_handoff_says_to_verify_by_email():
     assert tracking_audit.audit({}, handed, [], now=0)[0].startswith("VERIFY BY EMAIL")
     plain = job(status="handed_off", reason="Needs a work authorization answer")
     assert tracking_audit.audit({}, plain, [], now=0) == []
+
+
+def test_a_confirmed_log_entry_resolves_an_old_uncertain_handoff():
+    handed = job(status="handed_off", reason="No confirmation within 20 minutes")
+    assert tracking_audit.audit(entry(), handed, ROW, now=0) == []

@@ -2,6 +2,7 @@
 from pathlib import Path
 import subprocess
 import sys
+import os
 
 import pytest
 
@@ -93,6 +94,17 @@ def test_process_crash_releases_os_lock(tmp_path):
     subprocess.run([sys.executable, "-c", code, str(lock)], cwd=SCRAPER, check=True, timeout=15)
     assert apply_agent.acquire_lock(lock)
     apply_agent.release_lock(lock)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows retains exited processes while handles remain open")
+def test_exited_process_with_open_handle_does_not_block_lock_recovery(tmp_path):
+    lock = tmp_path / "agent.lock"
+    with subprocess.Popen([sys.executable, "-c", "pass"]) as child:
+        child.wait(timeout=10)
+        lock.write_text(f"listen {child.pid}", encoding="utf-8")
+        assert apply_agent._lock_holder_alive(lock) is False
+        assert apply_agent.acquire_lock(lock) is True
+        apply_agent.release_lock(lock)
 
 
 def test_dead_listener_does_not_receive_queue_requests(tmp_path, monkeypatch):

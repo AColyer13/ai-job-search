@@ -1,6 +1,19 @@
 """Telegram job notifications. No network: send is replaced by a list."""
 import sys
+import json
 from pathlib import Path
+
+
+def test_poll_preserves_authorized_reply_context_before_advancing_offset(tmp_path, monkeypatch):
+    update = {'update_id': 7, 'message': {'chat': {'id': 42}, 'from': {'id': 42},
+        'text': 'My answer', 'date': 123, 'reply_to_message': {'message_id': 5, 'text': 'The original question'}}}
+    other = {'update_id': 8, 'message': {'chat': {'id': 99}, 'from': {'id': 99}, 'text': 'Unrelated private message'}}
+    monkeypatch.setattr(telegram_notify, '_call', lambda *args, **kwargs: [update, other])
+    offset = tmp_path / 'offset.json'
+    telegram_notify.poll({'TELEGRAM_BOT_TOKEN': 'test', 'TELEGRAM_CHAT_ID': '42'}, offset_path=offset)
+    archived = [json.loads(line) for line in offset.with_name('telegram_history.jsonl').read_text(encoding='utf8').splitlines()]
+    assert len(archived) == 1 and archived[0]['reply_context'] == 'The original question'
+    assert json.loads(offset.read_text()) == 9
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "job_scraper"))
 import telegram_notify  # noqa: E402
@@ -71,7 +84,9 @@ def test_notify_sends_once_then_remembers(tmp_path, monkeypatch):
     store = {"a": job(1), "b": job(2)}
     env = {"TELEGRAM_BOT_TOKEN": "t", "TELEGRAM_CHAT_ID": "1"}
     sent = []
-    assert telegram_notify.notify_new_jobs(store, "2026-10-28", env, send=lambda m, e: sent.append(m)) == 2
+    assert telegram_notify.notify_new_jobs(
+        store, "2026-10-28", env, send=lambda m, e: sent.append(m), company_check=lambda company: None,
+    ) == 2
     assert len(sent) == 1
     assert telegram_notify.notify_new_jobs(store, "2026-10-28", env, send=lambda m, e: sent.append(m)) == 0
     assert len(sent) == 1

@@ -625,6 +625,8 @@ class SnippetGates(unittest.TestCase):
         self.assertKept("Must be based in Minneapolis, MN and travel to accounts.")
         self.assertKept("Must live in Dallas, TX to cover the territory.")
         self.assertKept("Must be based in Georgia. Partner with account executives on technical demos.")
+        self.assertKept("Must live in South Carolina to cover the territory.")
+        self.assertKept("Must be based in Louisiana. Partner with account executives on technical demos.")
         self.assertKept("We are based in Chicago and hire remote sales engineers across the country.")
         self.assertKept("Applicants must be based in one of our hub states and run technical demos.")
         # Eastern holds Georgia and Florida, and a short region acronym does not say which states it covers.

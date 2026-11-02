@@ -160,7 +160,7 @@ _STATE_LIST_RE = re.compile(r"\b(?:[NSEW]{1,2}\s+)?[A-Z]{2}(?:\s*[/,&]\s*(?:[NSE
 # Home (Minnesota, Mississippi) and the states he has said he would relocate to.
 # Preferred seats grade higher: Minnesota, remote, and the states in PREFERRED_STATES.
 # Arkansas and Louisiana stay acceptable. A posting that requires he already live
-# somewhere outside Minnesota is not applied (see apply_answers).
+# somewhere outside Minnesota, Texas, Mississippi, Louisiana, Alabama, Florida, Georgia, or South Carolina is not applied (see apply_answers).
 HOME_STATES = frozenset({"MN", "MS"})
 RELOCATION_STATES = frozenset({"TX", "OK", "AR", "LA", "AL", "GA", "FL", "UT", "SC"})
 PREFERRED_STATES = frozenset({"MN", "MS", "TX", "OK", "AL", "GA", "FL", "UT", "SC"})
@@ -567,8 +567,8 @@ _BASED_IN_STOP_RE = re.compile(r"\s+(?:AND|OR|WITH|TO|FOR|HAVE|AS|WHO|IN|OF)\b")
 # contains a place he would live, and his home or relocation states.
 _BASED_OK_RE = re.compile(
     r"\b(?:u\.?s\.?a?|united states|america|country|midwest|southeast|central|north america|"
-    r"texas|oklahoma|arkansas|louisiana|alabama|georgia|florida|mississippi|minnesota|"
-    r"time zone|cst|cdt|eastern|est|edt)\b|,\s*(?:TX|OK|AR|LA|AL|GA|FL|MN|MS)\b",  # Eastern holds Georgia and Florida
+    r"texas|oklahoma|arkansas|louisiana|alabama|georgia|florida|mississippi|minnesota|south carolina|"
+    r"time zone|cst|cdt|eastern|est|edt)\b|,\s*(?:TX|OK|AR|LA|AL|GA|FL|MN|MS|SC)\b",  # Eastern holds Georgia and Florida
     re.I,
 )
 _TRAINING_FIRM_RE = re.compile(

@@ -1,5 +1,5 @@
 ---
-framework_version: 1.1.0
+framework_version: 1.2.0
 ---
 
 # Job Evaluation Framework
@@ -140,7 +140,8 @@ Present the evaluation as:
 
 ### Company Research Checklist
 - [ ] Checked company website (mission, values, recent news)
-- [ ] Checked review sites (Glassdoor, Jobindex, etc.)
+- [ ] Checked review sites (Glassdoor, Jobindex, etc.). Run `python job_scraper/company_reviews.py "<company>"`. It does not open Glassdoor, Indeed, ZipRecruiter, or Blind. Quote what it found. A blank result is not a rating.
+- [ ] Recorded company standing when the public write-ups judge the employer: `python job_scraper/company_standing.py refresh "<company>"`. That file is what the grader reads. Unknown does not change the score. Do not mark a company outstanding from memory. See `job_scraper/FIT_SCALE.md`.
 - [ ] Checked LinkedIn for team size, recent hires, connections
 - [ ] Checked media for restructuring, growth, or workplace issues
 - [ ] Identified network contacts who may know the team/manager

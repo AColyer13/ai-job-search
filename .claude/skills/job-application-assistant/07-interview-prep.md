@@ -1,5 +1,5 @@
 ---
-framework_version: 1.0.0
+framework_version: 1.3.0
 ---
 
 # Interview Preparation Guide
@@ -123,6 +123,23 @@ Keep answers to 1-2 minutes. Be specific. End with what you learned or would do 
 - When you receive any update (interview invitation, rejection, or status update), send a brief thank-you message
 - Express appreciation for their time and the process
 - Keep it short (2-3 sentences)
+
+## Company-specific interview reports
+
+`python job_scraper/interview_intel.py "Company" --role "Role"` searches DuckDuckGo, Hacker News, and Reddit for write-ups of that company's interviews.
+
+- Glassdoor, Indeed, ZipRecruiter, and Blind pages are not opened. A search snippet from those sites can be cited as a snippet only.
+- If reports turn up, prep says what they describe and links them. One write-up is one person's experience. A report older than three years may describe a process that has changed.
+- If nothing turns up, or a search is blocked, say that in the first sentence. Then add general preparation whose first line is `AI estimate. This is not a report of what <company> does.` Do not invent rounds, questions, or review-site scores for that company.
+
+## Company reviews
+
+`python job_scraper/company_reviews.py "Company"` searches the same public sources for what employees wrote about working there.
+
+- Glassdoor, Indeed, ZipRecruiter, and Blind pages are not opened. A snippet from those sites can be cited as a snippet only. A blank result is not a star rating.
+- Quote the reviews and the themes they actually mention (pay, hours, management, layoffs, culture, remote policy). One review is one person's account. A review older than three years may be out of date.
+- If nothing turns up, or a search is blocked, say that. Do not write a culture summary or a score to fill the gap.
+- To let those write-ups move future grades, run `python job_scraper/company_standing.py refresh "Company"`. One page does not change the score. The grader reads the stored file and does not search during a scrape. See `job_scraper/FIT_SCALE.md`.
 
 ## Roleplay Guidelines
 When the user asks for interview practice:

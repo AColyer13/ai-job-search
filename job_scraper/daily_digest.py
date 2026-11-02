@@ -1202,6 +1202,7 @@ def _rule_lines():
         "A posting is left out when its qualifications require a degree in engineering or computer science and do not accept another degree or equivalent experience.",
         "A star means the posting names a business or marketing degree, a bootcamp or coding certificate, or a business analytics certificate. The sentence from the posting is on the card.",
         "High and medium jobs are grouped by position type. Low-fit jobs (managers, senior levels, another region or language, hardware or trade engineering sales, jobs that require a degree or years you do not have) are left out.",
+        "Company evidence is separate from the role score and is read from daily/company_standing.json, not from a live search. Two recent public write-ups against working there, and none for it, cap the score at 49 and the job is left out. Write-ups that disagree cap it at 64, so it cannot be high. Two write-ups for it, and none against, add 12 points and still cannot lift a role the posting itself caps. One write-up, or no write-up, does not change the score. A posting that asks for a fee or a private-chat interview is left out as a fake. The rules are in job_scraper/FIT_SCALE.md.",
         "Each card says why the grade is high or medium. The posting sentence is on the card when the page could be read.",
         "Each card also says whether you meet the posting's stated minimums: yes, stretch (it asks for some years, tools or credentials you are short of), not checked (the text could not be read), or no.",
         "When a job came from an aggregator such as Himalayas, the link is the employer's own apply page whenever it could be found on Greenhouse, Lever, Ashby or Workable. The grade is then based on that page's text.",
@@ -1388,7 +1389,7 @@ def _listener_running():
 
 
 def _start_apply_agent():
-    """Run the apply agent after the search: it works today's fit jobs and asks Adam on Telegram.
+    """Run the apply agent after the search: it works today's fit jobs and submits them.
 
     It runs here, inside the scheduled task, so Task Scheduler cannot end it as an orphan. It stops itself
     after APPLY_MINUTES, or sooner when nothing is waiting. Off when APPLY_AGENT=0 in .env, when Telegram is

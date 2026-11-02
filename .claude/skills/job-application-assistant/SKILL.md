@@ -19,6 +19,8 @@ When the user provides a job posting (URL or text), follow this workflow:
 ### Step 1: Research & Evaluate Fit
 - Fetch the job posting content (use WebFetch for URLs)
 - Analyze the posting for required competencies, keywords, and priorities
+- Run `python job_scraper/company_reviews.py "<company>"` for public employee reviews. Quote what they say. If none turn up, or the search is blocked, say that. Do not invent a rating or a culture summary. Glassdoor, Indeed, ZipRecruiter, and Blind are not opened.
+- Company standing is what moves the grade. `python job_scraper/company_standing.py refresh "<company>"` stores those public write-ups. Two recent pages against working there, and none for it, take the job off the list. Two pages for it, and none against, add 12 points and still cannot lift a role the posting itself caps. No stored pages leave the grade alone. Do not mark a company outstanding from memory. The rules are in `job_scraper/FIT_SCALE.md`.
 - Research the company (website, LinkedIn, mission, recent news)
 - Score the posting against the candidate's profile using the framework in `04-job-evaluation.md`
 - Present the evaluation table and verdict
@@ -32,7 +34,10 @@ When the user provides a job posting (URL or text), follow this workflow:
 - Adjust: profile statement, skills section, experience bullet emphasis, section order
 
 ### Step 3: Interview Preparation
-- Follow the framework in `07-interview-prep.md`
+- Follow the framework in `07-interview-prep.md` and `/interview`
+- Run `python job_scraper/interview_intel.py "<company>" --role "<role>"` for public write-ups of that company's interviews
+- Run `python job_scraper/company_reviews.py "<company>"` for public employee reviews of that company. Quote them. Do not invent a rating when none turn up.
+- If reports turn up, say what those write-ups describe and link them. If none turn up, or the search is blocked, say that first, then add general preparation labeled `AI estimate. This is not a report of what <company> does.`
 - Prepare STAR-format answers for likely questions
 - Identify role-specific talking points
 - Draft questions the candidate should ask the interviewer
@@ -48,7 +53,7 @@ When the user provides a job posting (URL or text), follow this workflow:
 | `03-writing-style.md` | Tone, structure, do's and don'ts |
 | `04-job-evaluation.md` | Scoring framework for job fit |
 | `05-cv-tailoring.md` | CV tailoring rules, page budget, ATS checks |
-| `07-interview-prep.md` | STAR examples, tough questions, roleplay guidelines |
+| `07-interview-prep.md` | STAR examples, tough questions, roleplay guidelines, sourced vs AI interview reports |
 
 ---
 
@@ -57,5 +62,5 @@ When the user provides a job posting (URL or text), follow this workflow:
 The user may also ask for individual steps without the full workflow:
 - "Evaluate this job posting" - Step 1 only
 - "Write a CV for [company]" - Step 2 only
-- "Help me prepare for an interview at [company]" - Step 4 only
+- "Help me prepare for an interview at [company]" - Step 3, including company interview reports
 - "What jobs should I look for?" - Career strategy discussion using profile + evaluation framework
