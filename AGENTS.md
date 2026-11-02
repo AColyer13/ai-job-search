@@ -4,6 +4,8 @@ framework_version: 1.0.0
 
 # Agent Guidelines: AI Job Search
 
+The goal is a fully autonomous job search with no human in the loop. Do not stop an application to ask Adam to approve it, answer a form, or press Submit. Search, grade, answer, and submit under the rules in [CLAUDE.md](CLAUDE.md).
+
 This workspace is structured to manage job search activities, scraper tools, CVs, and interview preparation.
 
 ## Thin-Pointer Design (Single Source of Truth)

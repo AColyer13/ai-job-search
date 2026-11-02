@@ -207,6 +207,76 @@ def save_sent(urls, path=None):
     path.write_text(json.dumps(sorted(urls)), encoding="utf-8")
 
 
+OUTBOX_PATH = daily_digest.DAILY / "telegram_outbox.jsonl"
+
+
+def queue_notice(text, path=None):
+    """Hold an automatic notice for the next two-hour summary instead of sending it now."""
+    path = Path(path or OUTBOX_PATH)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps({"t": time.time(), "text": text}, ensure_ascii=False) + "\n")
+
+
+def take_notices(path=None):
+    """Everything waiting in the outbox, oldest first. The file is moved aside first so a notice queued
+    meanwhile is kept for the next summary."""
+    path = Path(path or OUTBOX_PATH)
+    if not path.exists():
+        return []
+    taken = path.with_suffix(".sending")
+    try:
+        if taken.exists():  # a send that failed earlier: keep its notices first
+            with taken.open("a", encoding="utf-8") as out:
+                out.write(path.read_text(encoding="utf-8"))
+            path.unlink()
+        else:
+            path.replace(taken)
+    except OSError:
+        return []
+    notices = []
+    for line in taken.read_text(encoding="utf-8").splitlines():
+        try:
+            notices.append(json.loads(line)["text"])
+        except (ValueError, KeyError, TypeError):
+            continue
+    return notices
+
+
+def done_notices(path=None):
+    taken = Path(path or OUTBOX_PATH).with_suffix(".sending")
+    try:
+        taken.unlink()
+    except OSError:
+        pass
+
+
+def build_summary(notices, jobs, day):
+    """One summary: what the agent did since the last one, then the new jobs. Split only at Telegram's length cap."""
+    blocks = []
+    if notices:
+        blocks.append(f"<b>Application updates ({len(notices)})</b>")
+        blocks.extend(notices)
+    shown = jobs[:MAX_JOBS_PER_RUN]
+    if jobs:
+        head = f"<b>{len(jobs)} new job{'s' if len(jobs) != 1 else ''} for {day}</b>"
+        if len(jobs) > len(shown):
+            head += f" (top {len(shown)} shown, the rest are in daily/latest.docx)"
+        blocks.append(head)
+        blocks.extend(format_job(j) for j in shown)
+    messages, current = [], ""
+    for block in blocks:
+        block = block[:MESSAGE_LIMIT]
+        if current and len(current) + len(block) + 2 > MESSAGE_LIMIT:
+            messages.append(current)
+            current = block
+        else:
+            current = f"{current}\n\n{block}" if current else block
+    if current:
+        messages.append(current)
+    return messages
+
+
 def pending_jobs(store, day, sent, applied_urls=()):
     """Fit jobs found on `day` that were not sent before and are not in the applied log, best first."""
     skip = {daily_digest._key(u) for u in applied_urls} | {daily_digest._key(u) for u in sent}
@@ -270,7 +340,8 @@ def notify_new_jobs(store, day=None, env=None, send=send_message, company_check=
     applied = [e.get("url") for e in applied_log.load_log().values()]
     sent = load_sent()
     jobs = pending_jobs(store, day, sent, applied)
-    if not jobs:
+    notices = take_notices()
+    if not jobs and not notices:
         return 0
     shown = jobs[:MAX_JOBS_PER_RUN]
     check = company_standing.ensure if company_check is None else company_check
@@ -279,8 +350,12 @@ def notify_new_jobs(store, day=None, env=None, send=send_message, company_check=
             check(job.get("company") or "")
         except Exception:
             pass
-    for message in build_messages(jobs, day):
-        send(message, env)
+    try:
+        for message in build_summary(notices, jobs, day):
+            send(message, env)
+    except Exception:
+        raise  # the outbox file stays as .sending and goes out with the next summary
+    done_notices()
     save_sent(sent | {j.get("url") for j in shown if j.get("url")})
     return len(shown)
 

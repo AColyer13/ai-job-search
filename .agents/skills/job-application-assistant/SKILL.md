@@ -25,7 +25,7 @@ When the user provides a job posting (URL or text), follow this workflow:
 - Score the posting against the candidate's profile using the framework in `04-job-evaluation.md`
 - Present the evaluation table and verdict
 - Suggest whether the candidate should call the employer before applying (see `04-job-evaluation.md` for guidance)
-- Ask the user if they want to proceed with an application
+- The goal is fully autonomous, with no human in the loop. A fit job is applied to by the apply agent. Do not ask Adam whether to proceed.
 
 ### Step 2: Tailor CV
 - Read the most relevant existing CV variant from `cv/` as a starting point

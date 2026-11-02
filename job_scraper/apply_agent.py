@@ -230,7 +230,8 @@ class Agent:
     def __init__(self, tg, state_path=None, forms=apply_forms, runner=agent_runner.run_agent,
                  log=log_result, browser=open_browser, profile=None, bank_path=None,
                  dry_run=False, headed=False, letter_dir=None, shot_dir=None, now=time.time, log_entries=None, fit_of=None,
-                 embed_resolver=None, audit_rows=None, company_check=None):
+                 embed_resolver=None, audit_rows=None, company_check=None, batch_notices=False):
+        self.batch_notices, self._interactive = batch_notices, False
         self.tg, self.forms, self.runner, self.log_write = tg, forms, runner, log
         self.audit_rows, self.audit_alerted, self.audit_last, self.retry_last = audit_rows, set(), 0, 0
         self.browser_factory, self.dry_run, self.headed, self.now = browser, dry_run, headed, now
@@ -310,6 +311,14 @@ class Agent:
         return self.browser_factory(self.headed) if self.browser_factory is open_browser else self.browser_factory()
 
     def say(self, text, buttons=None):
+        # Automatic notices (applied, could not finish, queued, tracking problem) wait in an outbox and go out as one
+        # summary with each two-hour job digest. Replies to Adam's own messages and anything with buttons go at once.
+        if self.batch_notices and not buttons and not self._interactive:
+            try:
+                telegram_notify.queue_notice(text)
+                return None
+            except OSError as e:
+                self.note_error("telegram_outbox", e)
         try:
             return self.tg.send(text, buttons)
         except telegram_notify.TelegramError as e:
@@ -849,9 +858,13 @@ class Agent:
 
     # ---- events
     def handle(self, ev):
-        if ev["type"] == "button":
-            return self.on_button(ev)
-        return self.on_text(ev["text"])
+        self._interactive = True  # a reply to Adam's own message is sent at once, never batched
+        try:
+            if ev["type"] == "button":
+                return self.on_button(ev)
+            return self.on_text(ev["text"])
+        finally:
+            self._interactive = False
 
     def on_button(self, ev):
         self.tg.answer(ev.get("callback_id"), "The agent applies on its own. Nothing is waiting on you.")
@@ -1245,7 +1258,7 @@ def main(argv=None):
             import company_standing
             agent = Agent(tg, dry_run=args.dry_run, headed=args.headed,
                           audit_rows=tracking_audit._tracker_rows if listen else None,
-                          company_check=company_standing.ensure)
+                          company_check=company_standing.ensure, batch_notices=True)
             if args.cmd == "queue":
                 queue_now()
                 return 0

@@ -1,6 +1,8 @@
 # AI Job Search
 
-Finds and grades jobs seven times a day. Grok is the default AI for drafts and questions, with Antigravity as the fallback. The apply agent submits eligible jobs automatically under the standing instructions in [CLAUDE.md](CLAUDE.md). Candidate profile and agent rules are in that file and [AGENTS.md](AGENTS.md).
+The goal is a fully autonomous job search with no human in the loop. Search, grading, answers, and submission run on their own. Nobody is asked to approve a job, answer a form, or press Submit.
+
+Finds and grades jobs seven times a day. Grok is the default AI for drafts and questions, with Antigravity as the fallback. The apply agent submits eligible jobs under the standing instructions in [CLAUDE.md](CLAUDE.md). Candidate profile and agent rules are in that file and [AGENTS.md](AGENTS.md).
 
 ## Finding jobs
 

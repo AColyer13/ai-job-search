@@ -113,3 +113,24 @@ def test_notify_does_nothing_without_credentials(tmp_path, monkeypatch):
     sent = []
     assert telegram_notify.notify_new_jobs({"a": job(1)}, "2026-10-28", {}, send=lambda m, e: sent.append(m)) == 0
     assert sent == []
+
+
+def test_notices_are_batched_into_one_summary_with_the_jobs(tmp_path):
+    outbox = tmp_path / "outbox.jsonl"
+    telegram_notify.queue_notice("Applied: A", path=outbox)
+    telegram_notify.queue_notice("Could not finish: B", path=outbox)
+    notices = telegram_notify.take_notices(path=outbox)
+    assert notices == ["Applied: A", "Could not finish: B"]
+    messages = telegram_notify.build_summary(notices, [], "2026-11-02")
+    assert len(messages) == 1
+    assert "Application updates (2)" in messages[0] and "Applied: A" in messages[0]
+    telegram_notify.done_notices(path=outbox)
+    assert telegram_notify.take_notices(path=outbox) == []
+
+
+def test_failed_send_keeps_notices_for_next_summary(tmp_path):
+    outbox = tmp_path / "outbox.jsonl"
+    telegram_notify.queue_notice("one", path=outbox)
+    assert telegram_notify.take_notices(path=outbox) == ["one"]  # taken, send "failed", done_notices not called
+    telegram_notify.queue_notice("two", path=outbox)
+    assert telegram_notify.take_notices(path=outbox) == ["one", "two"]
