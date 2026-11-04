@@ -58,7 +58,8 @@ def html_to_text(html):
     return "\n".join(line for line in lines if line)
 
 
-def _jsonld_description(html):
+def _jobpostings(html):
+    """Every schema.org JobPosting node in the page's JSON-LD."""
     for raw in _JSONLD_RE.findall(html or ""):
         try:
             data = json.loads(raw.strip())
@@ -77,10 +78,35 @@ def _jsonld_description(html):
             else:
                 type_names = [str(raw_type).lower()]
             if "jobposting" in type_names:
-                desc = node.get("description") or ""
-                if desc:
-                    return html_to_text(desc)
+                yield node
+
+
+def _jsonld_description(html):
+    for node in _jobpostings(html):
+        desc = node.get("description") or ""
+        if desc:
+            return html_to_text(desc)
     return ""
+
+
+def _jsonld_expired(html, today=None):
+    """True when the page's JobPosting says its own validThrough date is already past.
+
+    Google requires an expired job to say so (validThrough in the past, a 404/410, or the markup removed).
+    Only a date strictly before today counts, so a posting valid through today is still open. A page with
+    no validThrough says nothing: many omit it, so a missing date never means the job is open or closed.
+    """
+    from datetime import date
+    today = today or date.today()
+    for node in _jobpostings(html):
+        raw = str(node.get("validThrough") or "").strip()
+        try:
+            through = date.fromisoformat(raw[:10])
+        except ValueError:
+            continue
+        if through < today:
+            return True
+    return False
 
 
 def _ats_api_url(url):
@@ -245,6 +271,8 @@ def fetch_text(url, company=""):
         time.sleep(2)
     if html is None:
         return "unread", ""
+    if _jsonld_expired(html):
+        return "gone", ""
     text = _jsonld_description(html) or html_to_text(html)
     if _CLOSED_RE.search(text[:3000]):
         return "gone", ""

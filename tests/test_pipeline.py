@@ -1337,6 +1337,43 @@ def test_jsonld_type_list_and_ats_error_fallback(monkeypatch):
     assert "Sell the product." in text
 
 
+def _posting_page(extra=""):
+    return (
+        '<script type="application/ld+json">'
+        '{"@type": "JobPosting", "description": "' + "Sell the product. " * 20 + '"' + extra + "}"
+        "</script>"
+    )
+
+
+def test_jsonld_valid_through_in_the_past_is_expired():
+    import posting_text
+    from datetime import date
+
+    today = date(2026, 11, 2)
+    assert posting_text._jsonld_expired(_posting_page(', "validThrough": "2026-10-31T00:00"'), today)
+    assert posting_text._jsonld_expired(_posting_page(', "validThrough": "2026-11-01"'), today)
+    # valid through today is still open; no date and a bad date say nothing
+    assert not posting_text._jsonld_expired(_posting_page(', "validThrough": "2026-11-02"'), today)
+    assert not posting_text._jsonld_expired(_posting_page(', "validThrough": "2026-12-01T00:00"'), today)
+    assert not posting_text._jsonld_expired(_posting_page(), today)
+    assert not posting_text._jsonld_expired(_posting_page(', "validThrough": "soon"'), today)
+    assert not posting_text._jsonld_expired("<html>no markup</html>", today)
+
+
+def test_fetch_text_reports_an_expired_jsonld_posting_as_gone(monkeypatch):
+    import posting_text
+
+    page = "<html>" + _posting_page(', "validThrough": "2020-01-01"') + "</html>"
+    monkeypatch.setattr(posting_text, "_get", lambda url, accept="text/html,application/json": page)
+    monkeypatch.setattr(posting_text.time, "sleep", lambda _s: None)
+    assert posting_text.fetch_text("https://example.com/jobs/1") == ("gone", "")
+
+    live = "<html>" + _posting_page(', "validThrough": "2999-01-01"') + "</html>"
+    monkeypatch.setattr(posting_text, "_get", lambda url, accept="text/html,application/json": live)
+    status, text = posting_text.fetch_text("https://example.com/jobs/1")
+    assert status == "opened" and "Sell the product." in text
+
+
 def test_enrich_refetches_a_long_shell(monkeypatch):
     import posting_text
 

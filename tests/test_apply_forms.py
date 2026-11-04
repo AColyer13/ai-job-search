@@ -749,7 +749,8 @@ def test_datacor_current_title_and_previous_employment_grammar_use_profile_facts
     f = make(apply_answers.normalize_label(label), label=label)
     assert apply_answers.resolve(f, PROFILE, {})[:2] == ("fill", "No")
     known = "Have you previously been employed by Mercor?"
-    assert apply_answers.resolve(make(apply_answers.normalize_label(known), label=known), PROFILE, {})[0] == "ask"
+    # Mercor is where he works now, so the answer is a settled fact and nobody is asked.
+    assert apply_answers.resolve(make(apply_answers.normalize_label(known), label=known), PROFILE, {})[:2] == ("fill", "Yes")
 
 
 def test_a_cloudflare_interstitial_is_a_robot_check_not_a_missing_form():
@@ -874,6 +875,9 @@ def test_questions_the_resume_already_answers_are_not_asked():
     assert answer("Do you physically reside in one of the Pacific Northwest states (Washington, Oregon, or Idaho) *")[0] == "giveup"
     assert answer("Are you currently located in Wyoming or Illinois?")[0] == "giveup"
     assert answer("Are you willing to relocate to Wyoming?") == ("fill", "Yes")
+    excluded = ("Do you reside in any of the following locations (Alaska, Hawaii, Montana, North Dakota, South Dakota, "
+                "New Mexico, Wyoming, American Samoa, Guam, Northern Mariana Islands, Puerto Rico, Trust Territories, Virgin Islands)")
+    assert answer(excluded) == ("fill", "No")  # Precisely: a list of places they do not hire, not a place to live
     spanish = "What is your Spanish proficiency?"
     assert apply_answers.resolve(
         make(apply_answers.normalize_label(spanish), "select", label=spanish,

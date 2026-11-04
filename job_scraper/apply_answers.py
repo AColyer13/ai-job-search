@@ -225,6 +225,22 @@ KNOWN_EMPLOYER = re.compile(r"\b(mercor|activus|tech mahindra|citizen observer|d
 PRIOR_JOB = re.compile(r"previously (been )?(employed|worked)|ever (been )?employed|employment history|applied .{0,80}(another role|within the last|in the (last|past))", re.I)
 
 
+TERRITORY = re.compile(r"\b(guam|puerto rico|american samoa|virgin islands|northern mariana|trust territories)\b", re.I)
+
+
+def _is_exclusion_list(field):
+    """'Do you reside in any of the following (Alaska, Hawaii, ... Guam)?' lists where the company does not hire.
+
+    Living in Minnesota, he answers No. A territory in the list, or eight or more different places, marks it;
+    a requirement ('located in Wyoming or Illinois?') names a few places.
+    """
+    label = field.label or ""
+    if not LIVE_THERE.search(label) or HERE.search(label):
+        return False
+    places = {m.group(0).lower() for m in OTHER_PLACE.finditer(label)}
+    return bool(TERRITORY.search(label)) or len(places) >= 8
+
+
 def _must_already_live_elsewhere(field):
     """A required question that he already live somewhere he will not claim.
 
@@ -788,6 +804,10 @@ def resolve(field, profile, bank, standard=None, job=None):
                 return "fill", yes, source
     if GPA.search(label) and field.required and field.kind in ("text", "textarea", "select", "combobox", "radio"):
         return "giveup", None, "Adam: a required GPA means move on from the job"
+    if field.required and _is_exclusion_list(field):
+        no = _no_choice(field)
+        if no:
+            return "fill", no, "profile (Minnesota is not in the excluded list)"
     if _must_already_live_elsewhere(field):
         return "giveup", None, "The role requires living in that area, and Adam lives in Minnesota"
     known = known_answer(field, profile)
