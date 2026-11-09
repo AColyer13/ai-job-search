@@ -312,7 +312,7 @@ class Agent:
 
     def say(self, text, buttons=None):
         # Automatic notices (applied, could not finish, queued, tracking problem) wait in an outbox and go out as one
-        # summary with each two-hour job digest. Replies to Adam's own messages and anything with buttons go at once.
+        # summary at the next job digest (8:30, 11:30, 2:30, 4:35). Replies to Adam's own messages and anything with buttons go at once.
         if self.batch_notices and not buttons and not self._interactive:
             try:
                 telegram_notify.queue_notice(text)

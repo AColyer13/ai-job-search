@@ -1358,20 +1358,10 @@ def main():
         write_backfill_files(store)
     print(dated)
     print(latest)
-    _notify_telegram(store, day)
+    # No Telegram message here (Adam, 2026-11-08): the job summary goes out only at 8:30, 11:30, 2:30 and 4:35
+    # from its own scheduled task ("Adam job alerts", run_telegram_digest.cmd), not after every search.
     _start_apply_agent()
     return 0
-
-
-def _notify_telegram(store, day):
-    """Message Adam the new fit jobs. Never fails the run: Telegram is a convenience."""
-    try:
-        import telegram_notify
-        sent = telegram_notify.notify_new_jobs(store, day)
-        if sent:
-            print(f"telegram: sent {sent} job(s)")
-    except Exception as exc:  # noqa: BLE001 - a notification problem must not lose the day's files
-        print(f"telegram: skipped ({type(exc).__name__}: {exc})")
 
 
 APPLY_MINUTES = 80  # the scheduled task stops after 2 hours; the search itself takes the rest

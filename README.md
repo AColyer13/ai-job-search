@@ -8,7 +8,7 @@ Finds and grades jobs seven times a day. Grok is the default AI for drafts and q
 
 Run `python jobs.py` to see up to five saved matches with usable posting links. Unattempted jobs come first, ranked by fit; previously handled jobs appear afterward. Missing or invalid links are counted and excluded. This reads the saved shortlist without starting a search or applying. The full list is in `daily/latest.docx`.
 
-The Windows scheduled task "Adam daily job search" runs `job_scraper/run_daily.cmd` at 6 AM, 8 AM, 10 AM, noon, 2 PM, 4 PM and 6 PM. After each search the apply agent works the new jobs and logs anything it cannot answer (see `job_scraper/apply_agent.py`). Each run searches every source in [job_scraper/SOURCES.md](job_scraper/SOURCES.md): LinkedIn and FreeHire through the CLI tools in `.agents/skills/`, plus public feeds, company boards and JSearch (a paid plan of 10,000 requests a month). Queries live in `job_scraper/queries.json`.
+The Windows scheduled task "Adam daily job search" runs `job_scraper/run_daily.cmd` at 6 AM, 8 AM, 10 AM, noon, 2 PM, 4 PM and 6 PM. After each search the apply agent works the new jobs and logs anything it cannot answer (see `job_scraper/apply_agent.py`). The searches send nothing to Telegram: the task "Adam job alerts" sends one summary of new jobs and application updates at 8:30 AM, 11:30 AM, 2:30 PM and 4:35 PM (`job_scraper/run_telegram_digest.cmd`). Each run searches every source in [job_scraper/SOURCES.md](job_scraper/SOURCES.md): LinkedIn and FreeHire through the CLI tools in `.agents/skills/`, plus public feeds, company boards and JSearch (a paid plan of 10,000 requests a month). Queries live in `job_scraper/queries.json`.
 
 ## Grading
 

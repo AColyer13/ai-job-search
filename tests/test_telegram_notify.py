@@ -67,6 +67,37 @@ def test_pending_skips_sent_applied_and_other_days_best_first():
     assert [j["title"] for j in out] == ["Engineer 2", "Engineer 1"]
 
 
+def test_the_morning_summary_picks_up_last_nights_jobs_but_not_older():
+    # The evening search runs after the 4:35 summary; its jobs go out at 8:30 the next day.
+    store = {"a": job(1, found_on="2026-10-28"), "b": job(2, found_on="2026-10-27"),
+             "c": job(3, found_on="2026-10-26")}
+    out = telegram_notify.pending_jobs(store, "2026-10-28", sent=set(), back=1)
+    assert sorted(j["title"] for j in out) == ["Engineer 1", "Engineer 2"]
+
+
+def test_a_search_run_sends_nothing_to_telegram():
+    # Adam, 2026-11-08: job messages go out only at the four summary times, never after a search.
+    import inspect
+    import daily_digest
+    assert "notify_new_jobs" not in inspect.getsource(daily_digest)
+    assert telegram_notify.DIGEST_TIMES == ("08:30", "11:30", "14:30", "16:35")
+
+
+def test_digest_rereads_a_store_caught_mid_write(monkeypatch):
+    import daily_digest
+    reads = iter([ValueError("half written"), {"a": job(1)}])
+
+    def fake():
+        value = next(reads)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    monkeypatch.setattr(daily_digest, "load_store", fake)
+    monkeypatch.setattr(telegram_notify.time, "sleep", lambda s: None)
+    assert telegram_notify.load_store_settled() == {"a": job(1)}
+
+
 def test_messages_stay_under_telegram_limit_and_escape_html():
     jobs = [job(i, title=f"<i>Dev {i}</i> & more " + "y" * 400) for i in range(12)]
     messages = telegram_notify.build_messages(jobs, "2026-10-28")

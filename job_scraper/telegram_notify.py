@@ -5,7 +5,9 @@
     python job_scraper/telegram_notify.py test      send a test message
     python job_scraper/telegram_notify.py digest    send today's new fit jobs that were not sent before
 
-daily_digest.py calls `notify_new_jobs` after each scheduled run. A failure here never fails the run.
+The searches send nothing. The Windows task "Adam job alerts" runs `run_telegram_digest.cmd` (this file's
+`digest`) at DIGEST_TIMES only, Adam's choice on 2026-11-08, so the new jobs and the queued application updates
+arrive as one summary at those four times and never in between.
 
 The bot token and chat id live in .env at the repo root (gitignored). Environment variables of the
 same name only fill in what the file leaves out. The bot only ever writes to the one saved chat id. It reads nothing but
@@ -20,7 +22,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -32,6 +34,7 @@ SENT_PATH = daily_digest.DAILY / "telegram_sent.json"
 API = "https://api.telegram.org/bot{token}/{method}"
 MESSAGE_LIMIT = 4000  # Telegram's cap is 4096 characters
 MAX_JOBS_PER_RUN = 15
+DIGEST_TIMES = ("08:30", "11:30", "14:30", "16:35")  # local time; the scheduled task uses these
 TIMEOUT = 20
 
 
@@ -211,7 +214,7 @@ OUTBOX_PATH = daily_digest.DAILY / "telegram_outbox.jsonl"
 
 
 def queue_notice(text, path=None):
-    """Hold an automatic notice for the next two-hour summary instead of sending it now."""
+    """Hold an automatic notice for the next job summary (DIGEST_TIMES) instead of sending it now."""
     path = Path(path or OUTBOX_PATH)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
@@ -277,10 +280,15 @@ def build_summary(notices, jobs, day):
     return messages
 
 
-def pending_jobs(store, day, sent, applied_urls=()):
-    """Fit jobs found on `day` that were not sent before and are not in the applied log, best first."""
+def pending_jobs(store, day, sent, applied_urls=(), back=0):
+    """Fit jobs found on `day` (or up to `back` days before it) that were not sent before and are not in the
+    applied log, best first."""
     skip = {daily_digest._key(u) for u in applied_urls} | {daily_digest._key(u) for u in sent}
-    jobs = daily_digest.fit_jobs(daily_digest.jobs_found_on(store, day))
+    first = date.fromisoformat(day)
+    found = []
+    for n in range(back + 1):
+        found += daily_digest.jobs_found_on(store, (first - timedelta(days=n)).isoformat())
+    jobs = daily_digest.fit_jobs(found)
     jobs = [j for j in jobs if daily_digest._key(j.get("url")) not in skip]
     return sorted(jobs, key=_rank)
 
@@ -339,7 +347,8 @@ def notify_new_jobs(store, day=None, env=None, send=send_message, company_check=
     import applied_log  # imported here because applied_log imports daily_digest
     applied = [e.get("url") for e in applied_log.load_log().values()]
     sent = load_sent()
-    jobs = pending_jobs(store, day, sent, applied)
+    # Yesterday too: the evening search runs after the last summary, and its jobs go out at 8:30 the next morning.
+    jobs = pending_jobs(store, day, sent, applied, back=1)
     notices = take_notices()
     if not jobs and not notices:
         return 0
@@ -358,6 +367,17 @@ def notify_new_jobs(store, day=None, env=None, send=send_message, company_check=
     done_notices()
     save_sent(sent | {j.get("url") for j in shown if j.get("url")})
     return len(shown)
+
+
+def load_store_settled(tries=6, pause=20):
+    """The job store, read again if a search is writing it at this moment (a half-written file is not JSON)."""
+    for attempt in range(tries):
+        try:
+            return daily_digest.load_store()
+        except ValueError:
+            if attempt == tries - 1:
+                raise
+            time.sleep(pause)
 
 
 def main(argv=None):
@@ -380,7 +400,7 @@ def main(argv=None):
             print("Sent.")
             return 0
         if cmd == "digest":
-            store = daily_digest.load_store()
+            store = load_store_settled()
             print(f"sent {notify_new_jobs(store)} job(s)")
             return 0
     except TelegramError as e:
