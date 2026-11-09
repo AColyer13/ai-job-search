@@ -57,13 +57,15 @@ class FakeForms:
     clean_url = staticmethod(apply_forms.clean_url)
     application_url = staticmethod(apply_forms.application_url)
 
-    def __init__(self, fields, blocker="", submit_result=("submitted", "")):
+    def __init__(self, fields, blocker="", submit_result=("submitted", ""), posting_text=""):
         self.fields, self.blocker, self.submit_result = fields, blocker, submit_result
+        self.posting_text = posting_text
         self.filled, self.submitted, self.pdfs = [], 0, []
         self.fill_errors = {}
 
     def discover(self, page, url):
-        return apply_forms.Form(ats="greenhouse", url=url, fields=list(self.fields), blocker=self.blocker)
+        return apply_forms.Form(ats="greenhouse", url=url, fields=list(self.fields), blocker=self.blocker,
+                                posting_text=self.posting_text)
 
     def fill(self, page, form, answers):
         self.filled.append(dict(answers))
@@ -1001,3 +1003,75 @@ def test_a_known_reason_is_not_an_error(env):
     agent, tg, forms, job = make_agent(env, BASIC)
     agent.handoff(job, "This posting is closed or gone", attempted=False)
     assert not agent.errors_path.exists() or not _errors(agent)
+
+
+# ---- apply-time regrade (2026-11-09): a job graded on its title alone is graded again on the posting it opens.
+SAAS_POSTING = "\n".join([
+    "Acme Cloud is hiring a Sales Engineer to join our go-to-market team.",
+    "About the role",
+    "You will partner with account executives to run discovery calls, technical demos and proofs of concept for our "
+    "SaaS platform. You will answer security questionnaires, scope integrations with customer IT teams and turn "
+    "product detail into business value for buyers.",
+    "Responsibilities",
+    "Run live product demonstrations for prospects and customers across the mid-market segment.",
+    "Build demo environments with our REST APIs, webhooks and the JavaScript and Python SDKs.",
+    "Write clear follow-up notes and handoff documents for the implementation team.",
+    "Work with product management to share customer feedback from the field.",
+    "Requirements",
+    "Experience in a customer-facing technical or sales role selling software.",
+    "Comfort explaining APIs, integrations and cloud architecture to technical and business audiences.",
+    "Strong written and verbal communication, and the ability to manage several deals at once.",
+    "Bachelor's degree or equivalent experience.",
+    "We offer a competitive base salary plus commission, health benefits and a remote-first culture.",
+])
+
+
+def regrade_agent(env, posting_text, fields=None, verified=None, title="Sales Engineer"):
+    agent, tg, forms, job = make_agent(env, fields or BASIC, posting_text=posting_text)
+    job.update({"title": title, "fit": "medium", "fit_score": 60, "verified": verified,
+                "location": "Remote (United States)", "work_mode": "remote"})
+    return agent, tg, forms, job
+
+
+def test_an_unread_job_whose_posting_grades_low_is_not_applied(env):
+    posting = SAAS_POSTING + "\nMinimum qualifications\n7+ years of experience as a sales engineer or solutions engineer is required."
+    agent, tg, forms, job = regrade_agent(env, posting)
+    agent.advance()
+    assert job["status"] == "skipped" and forms.submitted == 0 and forms.filled == []
+    status, kw = env.logged[0]
+    assert status == "attempted" and kw["reason"].startswith("Skipped: graded low once the posting was read.")
+    assert "pre-sales or sales engineering" in kw["reason"]
+    assert apply_agent.daily_digest.not_applied_kind(kw["reason"]) == "closed"  # shown as Not applied, not a bug to fix
+    assert "Not applied" in tg.sent[-1][0]
+
+
+def test_an_unread_job_whose_posting_fits_is_applied(env):
+    agent, tg, forms, job = regrade_agent(env, SAAS_POSTING)
+    agent.advance()
+    assert job["status"] == "applied" and forms.submitted == 1
+
+
+def test_a_job_already_graded_on_its_posting_is_not_graded_again(env):
+    posting = SAAS_POSTING + "\nMinimum qualifications\n7+ years of experience as a sales engineer or solutions engineer is required."
+    agent, tg, forms, job = regrade_agent(env, posting, verified=True)
+    agent.advance()
+    assert job["status"] == "applied" and forms.submitted == 1
+
+
+def test_a_page_that_is_only_the_form_keeps_the_stored_grade(env):
+    # No description on the page (an Ashby /application tab): nothing to grade, so the job goes on.
+    agent, tg, forms, job = regrade_agent(env, "Apply for this job\nFirst name\nLast name\nEmail\nResume/CV\nSubmit application",
+                                          title="Full Stack Developer")
+    agent.advance()
+    assert job["status"] == "applied" and forms.submitted == 1
+
+
+def test_a_form_question_is_not_read_as_a_job_requirement(env):
+    clearance = field("clearance", "radio", "Do you currently hold an active security clearance?", options=["Yes", "No"])
+    posting = SAAS_POSTING + "\nDo you currently hold an active security clearance?\nYes\nNo"
+    import scoring
+    # Read raw, the question line alone would make the job low.
+    assert scoring.score({"title": "Sales Engineer", "company": "Acme", "description": posting})["grade"] == "low"
+    agent, tg, forms, job = regrade_agent(env, posting, fields=BASIC + [clearance])
+    agent.advance()
+    assert job["status"] == "applied" and forms.submitted == 1

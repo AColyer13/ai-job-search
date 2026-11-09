@@ -192,6 +192,55 @@ def store_fit(url):
     return None
 
 
+# ---------------------------------------------------------------- apply-time regrade
+# Most jobs graded medium on the title alone because the posting page did not load during the search. The agent
+# opens that page anyway, so it grades the job again on what the posting says before it fills anything in. Only a
+# page that reads like a real posting counts: an application form with no description must not turn a job low.
+POSTING_MARKERS = re.compile(
+    r"\b(responsibilit\w+|requirements?|qualifications?|what you(?:'|’)?ll do|what you will do|about the role|"
+    r"about this role|about the job|you will|you'll|who you are|what we(?:'|’)?re looking for|the role)\b",
+    re.I,
+)
+MIN_POSTING_CHARS = 1200
+
+
+def posting_without_form(text, fields):
+    """The page text minus the form's own question lines, so "Do you hold an active clearance?" is not read as a
+    requirement of the job."""
+    labels = {apply_forms.normalize_label(getattr(f, "label", "")) for f in fields or ()}
+    labels.discard("")
+    keep = []
+    for line in (text or "").splitlines():
+        norm = apply_forms.normalize_label(line)
+        if not norm:
+            continue
+        if any(norm == lab or (len(lab) >= 12 and lab in norm) for lab in labels):
+            continue
+        keep.append(line)
+    return "\n".join(keep)
+
+
+def regrade_from_page(job, form):
+    """The reason to skip a job the posting itself shows is low, or "" to go on with the stored grade.
+
+    A job already graded on its posting text is not graded again. Neither is one whose page holds no
+    readable posting (an application form alone, a short page).
+    """
+    if job.get("verified") is True:
+        return ""
+    text = posting_without_form(getattr(form, "posting_text", "") or "", getattr(form, "fields", ()))
+    if len(" ".join(text.split())) < MIN_POSTING_CHARS or len(set(m.lower() for m in POSTING_MARKERS.findall(text))) < 2:
+        return ""
+    import scoring
+    out = scoring.score({"title": job.get("title"), "company": job.get("company"), "location": job.get("location"),
+                         "work_mode": job.get("work_mode"), "description": text})
+    if not out.get("verified") or out.get("grade") != "low":
+        return ""
+    blockers = out.get("blockers") or []
+    why = next((b for b in blockers if "fit score is" in b), blockers[-1] if blockers else "The fit score is under 50.")
+    return f"Skipped: graded low once the posting was read. {why}"
+
+
 def how_submitted(job):
     return "AI, sent automatically"
 
@@ -374,7 +423,7 @@ class Agent:
                     ats = self.forms.detect_ats(url)
             rec = {"id": jid, "url": self.forms.clean_url(url) if ats else url, "title": j.get("title"),
                    "company": j.get("company"), "fit": j.get("fit"), "fit_score": j.get("fit_score"),
-                   "location": j.get("location"), "work_mode": j.get("work_mode"),
+                   "verified": j.get("verified"), "location": j.get("location"), "work_mode": j.get("work_mode"),
                    "ats": ats, "description": (j.get("description") or "")[:3500], "status": "queued",
                    "created": self.now(), "updated": self.now(), "answers": {}, "fields": {}, "pending": [],
                    "drafts": {}, "asked": None, "ver": 0}
@@ -452,6 +501,15 @@ class Agent:
     def skip(self, job):
         self.set_status(job, "skipped")
         self.say(f"⏭ Skipped {self.title_of(job)}. It will not come back.")
+
+    def skip_low(self, job, reason):
+        """The posting, once read, grades low: nothing is filled in. Logged as Not applied with the reason."""
+        self.set_status(job, "skipped")
+        job["reason"], job["fit"] = reason, "low"
+        logged = self.log(job, "attempted", reason=reason)
+        self.say(f"⏭ <b>Not applied:</b> {self.title_of(job)}\n{esc(clip(reason, 200))}"
+                 + ("" if logged else "\n⚠ I could not write it to the applied log."))
+        self.save()
 
     def site_password(self, url):
         """The password this site's account was created with. One per host, kept out of git in daily/."""
@@ -580,6 +638,9 @@ class Agent:
                 job["form_url"] = form.url
                 if form.blocker and ROBOT_CHECK.search(form.blocker):
                     return self.handoff(job, ROBOT_STOP)
+                low = regrade_from_page(job, form)
+                if low:
+                    return self.skip_low(job, low)
                 if any(getattr(f, "kind", "") == "password" for f in form.fields):
                     profile["account_password"] = self.site_password(form.url or job["url"])
                 standard = apply_answers.standard_answers()

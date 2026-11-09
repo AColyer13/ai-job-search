@@ -251,6 +251,7 @@ class Form:
     title: str = ""
     fields: list = field(default_factory=list)
     blocker: str = ""
+    posting_text: str = ""  # the page text seen when the posting first opened, for the apply-time regrade
 
 
 class FormError(Exception):
@@ -470,7 +471,19 @@ def _combobox_options(page, f):
 
 
 def discover(page, url):
-    """Open the application page and read its fields. Types nothing."""
+    """Open the application page and read its fields. Types nothing.
+
+    The returned Form carries the page text seen when the posting opened (`posting_text`), so the agent can
+    grade the job again on what the posting actually says before it applies.
+    """
+    seen = {}
+    form = _discover(page, url, seen)
+    if not getattr(form, "posting_text", ""):
+        form.posting_text = seen.get("text", "")
+    return form
+
+
+def _discover(page, url, seen):
     ats = detect_ats(url)  # only names the site for the log and picks Lever's and Ashby's /apply sub-page; any link is tried
     target = application_url(url)
     try:
@@ -484,6 +497,7 @@ def discover(page, url):
         page_text = page.inner_text("body", timeout=5000)
     except Exception:  # noqa: BLE001
         pass
+    seen["text"] = page_text
     if robot_check_page(page_text, _title_of(page)):
         raise FormError("a robot check (Cloudflare or similar) blocked the page; the agent does not get around robot checks")
     if posting_closed(page_text, page.url):
