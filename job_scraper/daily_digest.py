@@ -12,7 +12,7 @@ posting goes up are when applications get read. A week is still worth acting
 on. At 14 days the listing is past the usual first review, and that is also as
 far back as the scraper looks.
 
-Inside each file, high and medium jobs are grouped by position type. Low-fit
+Inside each file, jobs are grouped by fit: High first, then Medium, best score first. Low-fit
 jobs are left out of the Word files (the intro says how many); they stay in
 latest.json so a later run does not list them again. A list at the top jumps
 to each heading, and the same headings show in Word's navigation pane. Each
@@ -803,14 +803,25 @@ def type_sections(jobs):
     return sections
 
 
-def _type_heading(label, jobs):
-    counts = _counts(jobs)
-    parts = []
-    for key, name in (("high", "High"), ("medium", "Medium")):
-        if counts[key]:
-            parts.append(f"{name} {counts[key]}")
-    detail = ", ".join(parts) if parts else "0"
-    return f"{label} ({len(jobs)}). {detail}"
+FIT_SECTIONS = (("high", "High fit"), ("medium", "Medium fit"))  # Low fits never go in the Word files (Adam, 2026-11-09)
+
+
+def fit_sections(jobs):
+    """Jobs split by grade (Adam, 2026-11-09): High, then Medium, each best score first. Low and empty grades are left out."""
+    buckets = {key: [] for key, _label in FIT_SECTIONS}
+    for job in jobs:
+        if job.get("fit") in buckets:
+            buckets[job["fit"]].append(job)
+    sections = []
+    for key, label in FIT_SECTIONS:
+        group = _ordered(buckets[key])
+        if group:
+            sections.append({"key": key, "label": label, "jobs": group})
+    return sections
+
+
+def _fit_heading(label, jobs):
+    return f"{label} ({len(jobs)})"
 
 
 def fit_jobs(jobs):
@@ -983,9 +994,9 @@ def _job_blocks(job, rel_id, number, entries=None):
 
 
 def write_docx(path, title, intro, jobs):
-    """Write a US Letter .docx grouped by position type.
+    """Write a US Letter .docx grouped by fit: High, then Medium. Low fits are never listed.
 
-    Each posting link is an external hyperlink. Each type heading is a
+    Each posting link is an external hyperlink. Each fit heading is a
     bookmark, and the list under the intro jumps to those bookmarks.
     """
     apply_location_caps(jobs)
@@ -993,7 +1004,7 @@ def write_docx(path, title, intro, jobs):
     body = [_p(title, bold=True, size=32, space_after=120)]
     for line in intro:
         body.append(_p(line, size=22, space_after=60))
-    upper = type_sections(fit_jobs(jobs))
+    upper = fit_sections(fit_jobs(jobs))
     entries = result_entries()
     link_n = 10
     bookmark_id = 1
@@ -1014,12 +1025,12 @@ def write_docx(path, title, intro, jobs):
     if not upper:
         body.append(_p("No high or medium jobs in this file.", size=22))
     else:
-        body.append(_p("High and medium by type", bold=True, size=24, space_after=60))
+        body.append(_p("Jobs by fit", bold=True, size=24, space_after=60))
         for section in upper:
-            anchor = "type_" + section["key"]
-            body.append(_anchor_p(anchor, _type_heading(section["label"], section["jobs"])))
+            anchor = "fit_" + section["key"]
+            body.append(_anchor_p(anchor, _fit_heading(section["label"], section["jobs"])))
     for section in upper:
-        _emit(section["jobs"], "type_" + section["key"], _type_heading(section["label"], section["jobs"]))
+        _emit(section["jobs"], "fit_" + section["key"], _fit_heading(section["label"], section["jobs"]))
     return write_docx_package(path, body, rels)
 
 

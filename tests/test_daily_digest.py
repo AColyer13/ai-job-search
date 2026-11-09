@@ -79,20 +79,26 @@ def test_position_type_families():
     assert daily_digest.position_type("Customer Success Engineer") == "other"
 
 
-def test_docx_groups_titles_under_different_headings(tmp_path):
+def test_docx_groups_by_fit_high_then_medium_not_by_role(tmp_path):
+    # Adam, 2026-11-09: the list is High, then Medium, not role first and fit second.
     import zipfile
 
     path = tmp_path / "sample.docx"
     jobs = [
-        {"title": "Solutions Consultant", "fit": "high", "company": "A", "url": "https://example.com/a", "found_on": "2026-10-19"},
-        {"title": "Junior Software Developer", "fit": "high", "company": "B", "url": "https://example.com/b", "found_on": "2026-10-19"},
+        {"title": "Solutions Consultant", "fit": "medium", "fit_score": 60, "company": "A", "location": "Remote", "url": "https://example.com/a", "found_on": "2026-10-19"},
+        {"title": "Junior Software Developer", "fit": "high", "fit_score": 70, "company": "B", "location": "Remote", "url": "https://example.com/b", "found_on": "2026-10-19"},
+        {"title": "Technical Sales Representative", "fit": "high", "fit_score": 90, "company": "C", "location": "Remote", "url": "https://example.com/c", "found_on": "2026-10-19"},
     ]
     daily_digest.write_docx(path, "Test", ["Intro"], jobs)
     xml = zipfile.ZipFile(path).read("word/document.xml").decode("utf-8")
     assert xml.count("Software Developer") == 1
     assert xml.count("Solutions Consultant") == 1
-    assert xml.index('w:name="type_engineering"') < xml.index("Software Developer")
-    assert xml.index('w:name="type_presales"') < xml.index("Solutions Consultant")
+    assert 'w:name="type_' not in xml
+    high, medium = xml.index('w:name="fit_high"'), xml.index('w:name="fit_medium"')
+    # Both high jobs come before the medium heading, best score first, whatever the role.
+    assert high < xml.index("Technical Sales Representative") < xml.index("Junior Software Developer") < medium
+    assert medium < xml.index("Solutions Consultant")
+    assert "High fit (2)" in xml and "Medium fit (1)" in xml
     assert "Heading1" in xml
 
 
