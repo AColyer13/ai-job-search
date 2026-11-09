@@ -91,6 +91,23 @@ ENTRY_TITLE_RE = re.compile(
     r"apprentice|(?:engineer|developer)\s+(?:i|1))\b",
     re.I,
 )
+# "Engineer I" is a level number, not a word. It marks entry level unless the title also says senior, staff,
+# principal or lead ("Senior Solutions Engineer I" is a senior seat, first band).
+_LEVEL_ONE_RE = re.compile(r"\b(?:engineer|developer)\s+(?:i|1)\b", re.I)
+_EXPLICIT_SENIOR_RE = re.compile(
+    r"\b(senior|sr\.?|staff|principal|lead|director|head of|vice president|vp|chief)\b", re.I
+)
+
+
+def entry_overrides_senior(title):
+    """True when an entry marker in the title outweighs a senior one ("Junior - Mid level").
+
+    A bare level number ("Engineer I") does not outweigh an explicit senior word.
+    """
+    t = title or ""
+    if ENTRY_TITLE_RE.search(_LEVEL_ONE_RE.sub(" ", t)):
+        return True
+    return bool(_LEVEL_ONE_RE.search(t)) and not _EXPLICIT_SENIOR_RE.search(t)
 INTERN_RE = re.compile(r"\b(intern|internship|co-?op)\b|2027", re.I)
 OFF_ROLE_RE = re.compile(
     r"\b(firmware|embedded|electrical|mechanical|manufacturing|scada|lidar|"
@@ -115,7 +132,7 @@ INDUSTRIAL_TITLE_RE = re.compile(
     r"power engineering|aftermarket|vehicle components|packaging|pumps?|hydraulic|pneumatic|plc|"
     r"environmental|wastewater|oil (?:and|&) gas|chemical|steel|aerospace|construction|roofing|"
     r"bas|building automation|hvac controls|electrification|motion control|industrial automation|"
-    r"adhesives?|sealants?|coatings?|lubricants?|polymers?|resins?)\b",
+    r"adhesives?|sealants?|coatings?|lubricants?|polymers?|resins?|bolting|fasteners?|torque tools?)\b",
     re.I,
 )
 _INDUSTRIAL_DESC_RE = re.compile(
@@ -144,7 +161,7 @@ PENTEST_TITLE_RE = re.compile(
 # (his relocation tier is the Gulf Coast) are fine; Northeast, West, NM/CO and the like are not.
 _REGION_RE = re.compile(
     r"\b(?:north ?east|east coast|west coast|west|east|south ?west|north ?west|pacific|mountain|"
-    r"new england|mid[- ]atlantic|tri[- ]state|bay area)\b",
+    r"new england|mid[- ]atlantic|tri[- ]state|bay area|pnw|nor ?cal|so ?cal)\b",
     re.I,
 )
 _REGION_OK_RE = re.compile(
@@ -258,7 +275,7 @@ _US_LOCATION_RE = re.compile(r"(?i:\b(?:united states|usa|u\.s\.|us)\b)|,\s*[A-Z
 INDUSTRIAL_COMPANY_RE = re.compile(
     r"\b(schneider electric|emerson|balluff|promach|envirogen|circor|rockwell|siemens|honeywell|"
     r"parker hannifin|bosch|eaton|abb|caterpillar|john deere|grainger|fastenal|carrier|trane|lennox|"
-    r"johnson controls|nvent|hubbell|aaon)\b",
+    r"johnson controls|nvent|hubbell|aaon|curtiss[- ]wright|instruments? corp(?:oration)?)\b",
     re.I,
 )
 # A quota-carrying seat that sells complex products. His sales years carry over even when the product is hardware.
@@ -1277,7 +1294,7 @@ def score(job):
         blockers.append("The title is a manager role.")
         return result(_LOW)
 
-    senior = bool(SENIOR_RE.search(title)) and not ENTRY_TITLE_RE.search(title)
+    senior = bool(SENIOR_RE.search(title)) and not entry_overrides_senior(title)
     if senior:
         blockers.append("The title is senior, lead, director, or a higher level than entry.")
         return result(_LOW)

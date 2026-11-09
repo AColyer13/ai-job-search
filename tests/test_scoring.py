@@ -455,6 +455,27 @@ class ReportedHighs(unittest.TestCase):
         self.assertFalse(scoring.territory_excludes_him("Sales Engineer (S TX, OK)"))
         self.assertFalse(scoring.territory_excludes_him("Sales Engineer (NE/SE)"))
 
+    # Found in the 2026-11-09 review of the daily list: these titles scored high.
+    def test_senior_title_with_level_one_is_still_senior(self):
+        # "Engineer I" used to count as entry level and skip the senior check (Saint-Gobain, 88).
+        self.assertEqual(grade("Senior Solutions Engineer I- Digital & Data"), "low")
+        self.assertEqual(grade("Senior Software Engineer I"), "low")
+        self.assertFalse(scoring.entry_overrides_senior("Lead Developer 1"))
+        self.assertTrue(scoring.entry_overrides_senior("Generalist Software Engineer (Junior - Mid level)"))
+        self.assertTrue(scoring.entry_overrides_senior("Software Engineer I"))
+
+    def test_pnw_and_california_abbreviations_are_territories(self):
+        self.assertTrue(scoring.territory_excludes_him("Security Solutions Engineer, PNW"))
+        self.assertTrue(scoring.territory_excludes_him("Sales Engineer - NorCal"))
+        self.assertTrue(scoring.territory_excludes_him("Solutions Engineer (SoCal)"))
+        self.assertFalse(scoring.territory_excludes_him("Solutions Engineer, Mid-Market - Central/Mountain/West Coast"))
+        self.assertEqual(grade("Security Solutions Engineer, PNW"), "low")
+
+    def test_bolting_and_instrument_makers_are_hardware(self):
+        self.assertEqual(grade("Bolting Solutions Sales Engineer", company="Curtiss-Wright"), "low")
+        self.assertEqual(grade("Fastener Sales Engineer"), "low")
+        self.assertEqual(grade("Digital Solutions Engineer", company="REOTEMP INSTRUMENT CORP"), "low")
+
 
 class RequiredDegreeWording(unittest.TestCase):
     def grade_with(self, line):
