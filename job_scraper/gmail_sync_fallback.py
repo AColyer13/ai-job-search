@@ -1,4 +1,4 @@
-"""Antigravity Gemini fallback for the 7:00 and 19:00 Gmail apply-log sync.
+"""Antigravity Gemini fallback for the 7:00, 12:00 and 19:00 Gmail apply-log sync.
 
 The sync itself is a Claude scheduled task. If Claude cannot reach Gmail or does
 not finish, it runs this. Antigravity has no Claude Gmail connector, so Gemini

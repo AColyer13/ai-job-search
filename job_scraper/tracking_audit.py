@@ -11,7 +11,7 @@ listener, which also sends this on Telegram with /audit) can see a lost applicat
   - a Chrome window has been "assisting" far longer than the wait
   - a log write failed and is still waiting to be retried
   - a job was handed back after a closed window or a timeout: Adam may have pressed Submit, so the
-    confirmation email is the proof (the 7:00 and 19:00 Gmail sync records it)
+    confirmation email is the proof (the 7:00, 12:00 and 19:00 Gmail sync records it)
 """
 import csv
 import io
